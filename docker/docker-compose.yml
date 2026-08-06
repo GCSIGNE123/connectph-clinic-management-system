@@ -1,0 +1,102 @@
+version: "3.9"
+
+# Local development stack for CONNECT.PH Clinic Platform.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up -d postgres redis   # infra only
+#   docker compose -f docker/docker-compose.yml up --build              # full stack
+#
+# Copy backend/.env.example -> backend/.env and frontend/.env.example ->
+# frontend/.env.local before running the backend/frontend services; this file
+# also sets sane defaults for the containerized services themselves.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: connectph-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: connectph
+      POSTGRES_PASSWORD: connectph_dev_password
+      POSTGRES_DB: connectph_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connectph -d connectph_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: connectph-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: connectph-backend
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://connectph:connectph_dev_password@postgres:5432/connectph_dev
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    volumes:
+      - ../backend:/app   # bind mount for live-reload in dev; remove for a prod-like image test
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+    container_name: connectph-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  redis_data:

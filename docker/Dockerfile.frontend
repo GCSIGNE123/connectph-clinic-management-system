@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# Dockerfile.frontend — multi-stage build for the Next.js 15 frontend,
+# using Next's "standalone" output for a minimal runtime image.
+#
+# Build context should be the `frontend/` directory, e.g.:
+#   docker build -f docker/Dockerfile.frontend -t connectph-frontend ./frontend
+#
+# Requires next.config.ts/js to set:  output: "standalone"
+# ---------------------------------------------------------------------------
+
+# ----------------------
+# Stage 1: dependencies
+# ----------------------
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# ----------------------
+# Stage 2: builder
+# ----------------------
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Public/build-time env vars can be passed with --build-arg and re-exported
+# here as ENV so Next.js inlines them into the client bundle at build time.
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN npm run build
+
+# ----------------------
+# Stage 3: runtime
+# ----------------------
+FROM node:20-alpine AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
+
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+
+# Standalone output bundles a minimal server + only the deps actually used
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget --quiet --tries=1 --spider "http://localhost:${PORT}/" || exit 1
+
+CMD ["node", "server.js"]

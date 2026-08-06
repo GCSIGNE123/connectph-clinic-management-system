@@ -1,0 +1,113 @@
+"""FastAPI application factory and entrypoint for CONNECT.PH Clinic Platform."""
+
+import logging
+import sys
+from collections.abc import Mapping
+
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.v1.router import api_router
+from app.core.config import settings
+from app.middleware.request_logging import RequestLoggingMiddleware
+from app.middleware.tenant_context import TenantContextMiddleware
+
+
+class JSONLogFormatter(logging.Formatter):
+    """Minimal structured (JSON-ish) log line formatter."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        extras: Mapping[str, object] = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key
+            not in (
+                "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+                "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+                "created", "msecs", "relativeCreated", "thread", "threadName",
+                "processName", "process", "message", "taskName",
+            )
+        }
+        payload.update(extras)
+        return str(payload)
+
+
+def setup_logging() -> None:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONLogFormatter())
+    root_logger = logging.getLogger()
+    root_logger.handlers = [handler]
+    root_logger.setLevel(logging.INFO if settings.ENV != "development" else logging.DEBUG)
+
+
+def create_app() -> FastAPI:
+    setup_logging()
+
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version="1.7.0-rc1",
+        description="Multi-tenant Medical Clinic Management SaaS - backend foundation.",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(TenantContextMiddleware)
+
+    # Standardized error envelope (Phase 16): every error response - whether
+    # raised as an HTTPException, a validation error, or an unhandled
+    # exception - is `{"detail": ..., "request_id": "<uuid>"}`. `detail` was
+    # already consistent (FastAPI's own default shape, and the only shape
+    # used anywhere in this codebase's ~40 route modules per a grep of
+    # `HTTPException(` call sites), so the actual gap closed here is adding
+    # `request_id` everywhere so a client-reported error can be matched to
+    # the exact server-side log line via the same id returned in the
+    # `X-Request-ID` response header. See docs/API.md for the full contract.
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "request_id": getattr(request.state, "request_id", None)},
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": jsonable_encoder(exc.errors()),
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logging.getLogger("app.error").exception(
+            "Unhandled exception", extra={"path": request.url.path, "request_id": request_id}
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error", "request_id": request_id},
+        )
+
+    app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+    return app
+
+
+app = create_app()

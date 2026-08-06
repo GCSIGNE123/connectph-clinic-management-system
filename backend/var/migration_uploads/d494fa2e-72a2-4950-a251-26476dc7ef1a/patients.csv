@@ -1,0 +1,4 @@
+id,FName,LName,DOB,Gender,CivilStatus,Mobile,Email
+1,TEST-IMPORT,PatientOne,1990-01-15,Male,Single,+639171234561,test1@example.com
+2,TEST-IMPORT,PatientTwo,1985-06-20,Female,Married,+639171234562,test2@example.com
+3,TEST-IMPORT,PatientBroken,,Male,Single,,bad-email

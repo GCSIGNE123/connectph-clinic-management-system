@@ -1,0 +1,38 @@
+# --- Local dev database runtime (portable Postgres binaries + live data dir) ---
+.devdb/
+
+# --- Session scratch space (not part of the project) ---
+.scratch/
+
+# --- Secrets / local env ---
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- Backend (Python) ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+venv/
+.venv/
+backend/backups/
+
+# --- Frontend (Node) ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Misc scratch ---
+*.log

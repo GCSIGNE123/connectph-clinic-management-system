@@ -1,0 +1,6 @@
+legacy_id,first_name,last_name,middle_name,birth_date,sex,contact_number,address,email
+LP-0001,Maria,Santos,Reyes,1985-03-12,Female,+639171112222,"12 Mabini St, QC",maria.santos@example.com
+LP-0002,Jose,Rizal,Protacio,1990-06-19,Male,+639182223333,"45 Bonifacio Ave, QC",jose.rizal@example.com
+LP-0003,Ana,Cruz,Lopez,1978-11-02,Female,+639193334444,"7 Luna St, QC",ana.cruz@example.com
+LP-0004,Pedro,Garcia,Ramos,2001-01-25,Male,+639204445555,"88 Aguinaldo Rd, QC",pedro.garcia@example.com
+LP-0005,Liza,Fernandez,Torres,1995-09-08,Female,+639215556666,"21 Del Pilar St, QC",liza.fernandez@example.com

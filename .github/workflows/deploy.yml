@@ -1,0 +1,91 @@
+name: Deploy
+
+# ---------------------------------------------------------------------------
+# SKELETON WORKFLOW — not yet active.
+#
+# This workflow documents the intended deploy flow once deploy secrets are
+# provisioned. Today, Vercel and Railway's own GitHub integrations handle
+# deploys automatically on push (see docs/DEPLOYMENT.md). This file is kept
+# as a scaffold for the day the team wants deploys fully driven from GitHub
+# Actions (e.g. to add pre-deploy DB migration steps, smoke tests, Slack
+# notifications, or manual approval gates).
+#
+# Required repository secrets before any of this can run for real:
+#   VERCEL_TOKEN        - Vercel personal/deploy token
+#   VERCEL_ORG_ID        - from `vercel link` / Vercel project settings
+#   VERCEL_PROJECT_ID     - from `vercel link` / Vercel project settings
+#   RAILWAY_TOKEN          - Railway project deploy token
+#
+# Until those secrets exist in the repo, the jobs below are left commented
+# out (aside from a harmless placeholder step) so this workflow can be
+# enabled/merged without accidentally failing CI on every push to main.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-frontend:
+    name: Deploy Frontend (Vercel)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Placeholder — deploy skeleton not yet active
+        run: |
+          echo "Deploy workflow is a skeleton. Configure VERCEL_TOKEN,"
+          echo "VERCEL_ORG_ID, and VERCEL_PROJECT_ID secrets, then uncomment"
+          echo "the steps below to enable real Vercel deploys from CI."
+
+      # - name: Install Vercel CLI
+      #   run: npm install --global vercel@latest
+      #
+      # - name: Pull Vercel environment info
+      #   working-directory: frontend
+      #   run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      #
+      # - name: Build project artifacts
+      #   working-directory: frontend
+      #   run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      #
+      # - name: Deploy to Vercel
+      #   working-directory: frontend
+      #   run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+  deploy-backend:
+    name: Deploy Backend (Railway)
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Placeholder — deploy skeleton not yet active
+        run: |
+          echo "Deploy workflow is a skeleton. Configure RAILWAY_TOKEN secret,"
+          echo "then uncomment the steps below to enable real Railway deploys"
+          echo "from CI. Railway's own GitHub integration may already handle"
+          echo "this automatically — check for duplicate deploys before"
+          echo "enabling both."
+
+      # - name: Install Railway CLI
+      #   run: npm install --global @railway/cli
+      #
+      # - name: Deploy to Railway
+      #   working-directory: backend
+      #   env:
+      #     RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      #   run: railway up --service backend --detach
+      #
+      # - name: Run post-deploy migrations
+      #   working-directory: backend
+      #   env:
+      #     RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      #   run: railway run --service backend alembic upgrade head
