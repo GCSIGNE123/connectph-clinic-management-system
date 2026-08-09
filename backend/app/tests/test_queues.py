@@ -269,6 +269,86 @@ async def test_queue_slip_payload(client: AsyncClient, make_clinic_with_owner) -
     assert slip["qr_token"]
 
 
+async def test_doctor_scoped_prefix_override_and_independent_sequencing(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): a doctor-
+    specific `QueueSetting` override (doctor_id set, no department_id)
+    resolves ahead of the clinic-wide default for that doctor's own queue
+    tickets, and each prefix's numbering stays independently sequenced -
+    Dr. B's tickets never perturb Dr. A's (or the clinic-wide "A" default's)
+    counter, mirroring the existing department-override behaviour one level
+    narrower."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)  # doctor here keeps the clinic-wide "A" default
+
+    doctor_b = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "Maria", "last_name": "Santos"})
+    ).json()
+
+    # Note: `QueueSetting` resolution requires an exact match on whichever
+    # branch_id/department_id the queue-creation call is itself scoped to
+    # (see `QueueSettingRepository.get_effective_for_doctor` -> `get_for_branch`),
+    # so a doctor override that should apply to tickets in this branch and
+    # department must be created with those same real ids, not NULL - NULL
+    # branch/department only match a resolve call that itself passes NULL
+    # (the true clinic-wide case).
+    override = await client.put(
+        "/api/v1/queue-settings",
+        headers=headers,
+        json={
+            "branch_id": deps["branch_id"],
+            "department_id": deps["department_id"],
+            "doctor_id": doctor_b["id"],
+            "queue_prefix": "B",
+            "max_daily_queue": 50,
+            "reset_time": "00:00",
+            "allow_walkins": True,
+            "allow_priority_lane": True,
+        },
+    )
+    assert override.status_code == 200, override.text
+    assert override.json()["queue_prefix"] == "B"
+
+    # The override upsert is keyed on the full branch/department/doctor
+    # scope (not just branch_id) - it must show up as its own row, distinct
+    # from any clinic-wide default row (there is none yet for a fresh
+    # clinic; the hardcoded "A" fallback applies until one is created).
+    listing = await client.get("/api/v1/queue-settings", headers=headers)
+    assert listing.status_code == 200
+    prefixes = {(s["department_id"], s["doctor_id"]): s["queue_prefix"] for s in listing.json()["items"]}
+    assert prefixes[(deps["department_id"], doctor_b["id"])] == "B"
+
+    def _patient_payload(first: str, last: str, mobile: str) -> dict:
+        return {
+            "first_name": first, "last_name": last, "birth_date": "1990-01-01",
+            "gender": "Male", "civil_status": "Single", "mobile_number": mobile,
+        }
+
+    async def _new_patient(first: str, last: str, mobile: str) -> str:
+        resp = await client.post("/api/v1/patients", headers=headers, json=_patient_payload(first, last, mobile))
+        return resp.json()["patient"]["id"]
+
+    p1 = await _new_patient("A", "One", "+639170000001")
+    p2 = await _new_patient("B", "One", "+639170000002")
+    p3 = await _new_patient("A", "Two", "+639170000003")
+    p4 = await _new_patient("B", "Two", "+639170000004")
+
+    qa1 = await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=p1))
+    qb1 = await client.post(
+        "/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=p2, doctor_id=doctor_b["id"])
+    )
+    qa2 = await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=p3))
+    qb2 = await client.post(
+        "/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=p4, doctor_id=doctor_b["id"])
+    )
+
+    assert qa1.json()["queue_number"] == "A001"
+    assert qb1.json()["queue_number"] == "B001"
+    assert qa2.json()["queue_number"] == "A002"
+    assert qb2.json()["queue_number"] == "B002"
+
+
 async def test_tenant_isolation(client: AsyncClient, make_clinic_with_owner) -> None:
     _clinic_a, _owner_a, headers_a = await _owner_headers(client, make_clinic_with_owner)
     deps_a = await _setup_queue_deps(client, headers_a)

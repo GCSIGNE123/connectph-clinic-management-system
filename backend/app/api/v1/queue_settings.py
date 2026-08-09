@@ -27,6 +27,17 @@ from app.services.queue_setting_service import QueueSettingService
 router = APIRouter(prefix="/queue-settings", tags=["queue-settings"])
 
 
+def _to_read(setting) -> QueueSettingRead:
+    read = QueueSettingRead.model_validate(setting)
+    read.department_name = setting.department.name if setting.department else None
+    read.doctor_name = (
+        " ".join(p for p in [setting.doctor.first_name, setting.doctor.last_name] if p)
+        if setting.doctor
+        else None
+    )
+    return read
+
+
 @router.get("", response_model=QueueSettingListResponse)
 async def list_queue_settings(
     clinic_id: UUID = Depends(require_clinic_context),
@@ -35,7 +46,7 @@ async def list_queue_settings(
 ) -> QueueSettingListResponse:
     service = QueueSettingService(db)
     items = await service.list_for_clinic(clinic_id)
-    return QueueSettingListResponse(items=[QueueSettingRead.model_validate(i) for i in items], total=len(items))
+    return QueueSettingListResponse(items=[_to_read(i) for i in items], total=len(items))
 
 
 @router.put("", response_model=QueueSettingRead)

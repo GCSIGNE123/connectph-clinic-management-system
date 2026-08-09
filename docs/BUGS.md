@@ -85,6 +85,8 @@ YYYY-MM-DD
 | BUG-016 | No dedicated clinic-side Audit Log list/filter page or endpoint for Owner/Administrator — only the Owner Dashboard's Real-time Activity Feed (unfiltered, not paginated/searchable) surfaces `audit_logs` data, and the only structured `audit-logs` API is SaaS-level (`platform-admin/audit-logs`, a different portal/tenant model entirely) | Low | Open | backend/frontend | unassigned |
 | BUG-017 | Sidebar shows every staff nav item (Users, Clinic Configuration section, Doctor Workspace, Laboratory, Billing, etc.) to every role regardless of actual access — only Analytics/TV Displays/Migration are role-gated | Medium | Open | frontend | unassigned |
 | BUG-028 | `PATCH /clinics/{clinic_id}` and `DELETE /clinics/{clinic_id}` had no role restriction — any authenticated user of any role (incl. Receptionist, Doctor) could rename or soft-delete the clinic | Critical | Fixed | backend | unassigned |
+| BUG-033 | The clinic-wide `QueueSetting` row saved from `/queue-settings` (branch_id always submitted as `null`) can never actually be selected by `_resolve_prefix`/`_resolve_max_daily_queue`, because resolution requires an EXACT `branch_id` match against the queue ticket's own (never-null) `branch_id`. The clinic-wide prefix currently "works" in production only by accident — because when no `QueueSetting` row matches, the code falls back to the hardcoded `DEFAULT_QUEUE_PREFIX = "A"`, which happens to equal what most clinics configure anyway. A clinic that changes its clinic-wide prefix or max-daily-queue via the Queue Settings page would find the change silently has zero effect on real tickets. Found while adding this session's per-doctor/department prefix overrides (which had to be built branch_id-aware to actually take effect, confirmed live via a real API+DB round trip) - not fixed inline since it's a pre-existing, unrelated defect, out of scope for the additive TV-display feature. | High | Open | backend | unassigned |
+| BUG-034 | Running `app/tests/test_queues.py` together with `test_tv_display.py`/`test_doctor_workspace.py` (or even `test_queues.py` alone in full) intermittently but reproducibly 429s 2 of its own tests (`test_doctor_scoped_prefix_override_and_independent_sequencing`, `test_tenant_isolation`) with `"Too many attempts. Please try again later."` — both tests pass individually every time. Root cause: `RATE_LIMIT_LOGIN_MAX_ATTEMPTS=10` per 60s (`core/config.py`) is a real, shared, non-test-mode-bypassed limiter, and `test_queues.py` alone calls `_login()` well past 10 times across its full suite; running it back-to-back with other login-heavy files within the same ~60s window exhausts the budget for whichever test happens to log in last. Not caused by, or specific to, the Multi-Department TV Queue Display feature — reproduced twice, both times against the pre-existing `_login`/`_owner_headers` test helper shared by every test in the file, unrelated to any of this feature's own code. A real test-infra gap (the rate limiter should be disabled or reset between tests in the test environment), not a product bug — logged rather than fixed inline per this feature's "no unrelated changes" scope. | Medium | Open | infra | unassigned |
 
 ## Resolved Bugs
 
@@ -867,6 +869,33 @@ Backend `python -c "import app.main"` and frontend `npx tsc --noEmit` both pass 
 2026-07-29 (code fix landed; live volume test still outstanding)
 
 ---
+
+### BUG-033: Clinic-wide `QueueSetting` row can never actually be selected because it's saved with `branch_id = null`, which never matches a real ticket's `branch_id`
+
+- **Reported by:** self-discovered while implementing Post-RC1 Multi-Department/Multi-Doctor TV Queue Display
+- **Date reported:** 2026-08-09
+- **Severity:** High
+- **Status:** Open
+- **Area:** backend
+
+**Description**
+`QueueSettingRepository.get_for_branch(clinic_id, branch_id, department_id, doctor_id)` filters on an EXACT match of all four columns, including `branch_id`. `Queue.branch_id` is a required, never-null column (see `models/queue.py`) - every real queue-creation call passes `payload.branch_id` as a real UUID, never `None`. But the existing "clinic-wide queue configuration" form on `/queue-settings` (`frontend/src/app/(dashboard)/queue-settings/page.tsx`) always submits `branch_id: null`. That means the saved row can only ever be found by a resolve call that itself passes `branch_id=None` - which never happens for a real ticket. `QueueService._resolve_prefix`/`_resolve_max_daily_queue` therefore always fall through to the hardcoded `DEFAULT_QUEUE_PREFIX = "A"` / `200` default instead of whatever the clinic actually configured on that page.
+
+**Why this went unnoticed:** most clinics' desired clinic-wide prefix is "A" anyway (the same as the hardcoded fallback), so behavior looks correct by coincidence. A clinic that changed the prefix or the max-daily-queue ceiling via this page would silently see zero effect on real tickets - the change would appear to save successfully (200 OK, row visible in `GET /queue-settings`) but never influence numbering.
+
+**How it was found:** while building this session's per-doctor/per-department prefix overrides, a first attempt at a test created an override row with `branch_id=null` and it never resolved for a real queue ticket - tracing `get_effective_for_doctor` -> `get_for_branch` showed the exact-match requirement, which then also applies to the pre-existing, already-shipped clinic-wide form. Confirmed by inspection of both the resolution chain and the frontend form's submitted payload; not separately reproduced against a live clinic-wide "change the prefix to something other than A" scenario (out of scope for this session - this is a pre-existing, unrelated defect logged here per this session's "don't fix unrelated bugs inline" instruction).
+
+**Expected behavior**
+Either the clinic-wide form should submit the clinic's actual (single, or currently-selected) branch id, or `get_for_branch`'s branch matching should treat a `NULL` stored `branch_id` as "any branch" (mirroring how `department_id`/`doctor_id` already work as "no override" sentinels) rather than as its own exact-match scope.
+
+**Suggested fix (not applied here)**
+Either (a) have the frontend form select/require a branch like this session's new per-department/per-doctor override form now does, or (b) change `get_for_branch`'s resolution to widen a `branch_id=NULL` row to "clinic default, any branch" - the latter is a more invasive query-semantics change (affects the existing partial-branch-scoping feature) and needs its own design pass, not a quick fix bundled into this feature's diff.
+
+**Resolution date**
+Not yet resolved.
+
+---
+
 
 ### BUG-030: Doctor's Assessment/Plan save (`PUT /consultations/{id}/soap`) silently destroyed the patient's recorded vitals and chief complaint
 

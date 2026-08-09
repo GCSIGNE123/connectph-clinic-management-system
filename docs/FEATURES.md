@@ -4,6 +4,26 @@ This document tracks what is actually implemented in the CONNECT.PH Clinic Platf
 
 ---
 
+## Built — Post-RC1: Multi-Department / Multi-Doctor TV Queue Display
+
+**Complete and live-verified, 2026-08-09.** Extends the existing TV Queue Display and queue-prefix configuration (see Phase 5 and Phase 13 below) to show multiple simultaneous doctors/departments at once, each with its own independent prefix and sequencing - built for the Canora Medical Clinic go-live under the same narrow freeze exception documented at the top of `RELEASE_NOTES.md`. Purely additive: no change to queue creation, calling/recall, or numbering logic, and single-doctor-clinic display behavior is unchanged (still renders the original clean flat single-queue layout, not a forced multi-column grid).
+
+**Per-doctor queue prefix** - `queue_settings` gained a nullable `doctor_id` column (migration `0025_queue_setting_doctor_prefix`), mirroring the pre-existing nullable `department_id` scope column. `QueueSettingRepository.get_effective_for_doctor` resolves doctor override -> department override -> branch/clinic default -> hardcoded `"A"`, exactly one level narrower than the existing department-override chain. `QueueService._resolve_prefix`/`_resolve_max_daily_queue` now accept the ticket's `doctor_id` and pass it through. Resolution requires an EXACT match on `branch_id` too (a pre-existing characteristic of the department-override chain, not new) - see BUG-033 in `docs/BUGS.md` for a related pre-existing defect this surfaced.
+
+**Admin UI** - `/queue-settings` gained a "Department & doctor prefix overrides" card: select a branch (auto-selected when the clinic has only one), a department and/or doctor, a prefix, and a daily cap; saves via the same `PUT /queue-settings` upsert endpoint, now keyed on the full `(branch_id, department_id, doctor_id)` scope instead of just `branch_id`. The `QueueSettingRead`/`QueueSettingCreate` schemas now expose `department_id`/`doctor_id` (and read-only `department_name`/`doctor_name`) - previously only the clinic-wide row was reachable via the API at all, despite the model already supporting department scoping since Phase 5.
+
+**TV display department context** - `TvDisplayNowServing`/`TvDisplayWaitingEntry` gained `department_id`/`department_name` fields (`_build_display_data` now eager-loads `Queue.department`), so a mixed multi-department/multi-doctor result set can be labeled by destination on the frontend - doctor name when assigned, department name otherwise (e.g. a Laboratory/Radiology department-only ticket with no doctor).
+
+**Frontend grouping** - `frontend/src/features/tv-display/lib/grouping.ts` (new, unit-tested) groups `now_serving`/`next_waiting` by destination (doctor if assigned, else department, else "General"). `TvDisplayScreen.tsx` renders one destination card per group when 2+ groups are active (Now Serving) and one labeled sub-list per group (Next in Queue) - when only one group is active (the ordinary single-doctor-clinic case), it renders the original flat grid/list with no group heading, unchanged.
+
+**Announcer fixes** - `frontend/src/lib/queue-announcer.ts` gained `enqueueAnnouncement()` + a small local speak-queue so multiple tickets called/recalled within the same fetch cycle are each announced in full, spoken one after another (previously the loop `break`d after the first changed entry - a real gap once multiple doctors/departments can be active simultaneously - and `announceQueueNumber`'s `.cancel()`-before-`.speak()` behavior would have clobbered overlapping announcements anyway). `buildAnnouncementText()` is now destination-aware: `"Now serving patient number {N}. Please proceed to Dr. {name}."` for a doctor-assigned ticket, `"...Please proceed to the {department}."` for a department-only ticket; existing single-announcement callers (Doctor Workspace Call/Recall, Reception) are unchanged.
+
+**Clinic-wide TV display** - confirmed live (not just by code inspection) that a `TvDisplayConfig` with `branch_id`/`department_id`/`doctor_id` all `NULL` already returns the full multi-department feed at the query layer - no new config concept was needed. `/tv` and `/tv/[slug]` (pre-existing routes) already serve this correctly; no new route was added.
+
+**Live-verified** (see `docs/TESTING.md`'s Post-RC1 Multi-Department/Multi-Doctor TV Queue Display section for the full evidence): real API calls against a running dev backend created independent A/B/L/R prefix sequences (A001, B001, L001, R001, then A002, B002, all correctly independently numbered), all four called simultaneously and shown together on a real browser-rendered `/tv/[slug]` page with correct per-destination labels, a recall genuinely re-stamped `called_at` and re-announced (including two simultaneous recalls both being spoken in full, not just the first), single-doctor-clinic scoping still renders the original flat layout, `npm run build` succeeded across all 50 routes, and the backend test suite (plus two new tests) passed against the disposable test database.
+
+---
+
 ## Built (Foundation Stage)
 
 ### Multi-tenant Authentication (Phase 2)

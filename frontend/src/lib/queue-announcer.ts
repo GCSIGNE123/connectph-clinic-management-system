@@ -50,9 +50,88 @@ export function saveQueueAnnouncerPrefs(prefs: QueueAnnouncerPrefs): void {
 }
 
 /** Builds the spoken announcement text - shared so Call and Recall always
- * use the identical phrasing for the same queue number. */
-export function buildAnnouncementText(queueNumber: string): string {
+ * use the identical phrasing for the same queue number.
+ *
+ * Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): destination-
+ * aware. When a doctor is assigned, names them ("please proceed to Dr. X");
+ * for a department-only ticket (e.g. Laboratory/Radiology, no doctor
+ * assigned), names the department instead ("please proceed to the
+ * Laboratory"). Callers that pass neither (all existing non-TV call sites -
+ * Doctor Workspace, Reception) get the original, unchanged phrasing, so
+ * behavior for every existing caller is identical to before this change. */
+export function buildAnnouncementText(
+  queueNumber: string,
+  destination?: { doctorName?: string | null; departmentName?: string | null }
+): string {
+  const base = `Now serving patient number ${queueNumber}.`;
+  if (destination?.doctorName) {
+    return `${base} Please proceed to Dr. ${destination.doctorName}.`;
+  }
+  if (destination?.departmentName) {
+    return `${base} Please proceed to the ${destination.departmentName}.`;
+  }
   return `Now serving patient number ${queueNumber}`;
+}
+
+// Post-RC1: a small local speak-queue so multiple simultaneous
+// announcements (e.g. Doctor A and the Laboratory both get called within
+// the same fetch cycle) are spoken one after another instead of the second
+// call cancelling the first mid-utterance (`speechSynthesis.cancel()`
+// clobbering, the original single-utterance behavior). `enqueueAnnouncement`
+// is additive - `announceQueueNumber` (used by Doctor Workspace/Reception,
+// which only ever announce one ticket per action) keeps its original
+// cancel-and-speak-immediately behavior unchanged.
+const speakQueue: string[] = [];
+let isSpeaking = false;
+
+function pumpSpeakQueue(prefs: QueueAnnouncerPrefs): void {
+  if (isSpeaking) return;
+  const next = speakQueue.shift();
+  if (next === undefined) return;
+  isSpeaking = true;
+  try {
+    const utterance = new SpeechSynthesisUtterance(next);
+    utterance.rate = prefs.rate;
+    utterance.volume = prefs.volume;
+    if (prefs.voiceURI) {
+      const voice = window.speechSynthesis.getVoices().find((v) => v.voiceURI === prefs.voiceURI);
+      if (voice) utterance.voice = voice;
+    }
+    utterance.onend = () => {
+      isSpeaking = false;
+      pumpSpeakQueue(prefs);
+    };
+    utterance.onerror = () => {
+      isSpeaking = false;
+      pumpSpeakQueue(prefs);
+    };
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    isSpeaking = false;
+  }
+}
+
+/**
+ * Enqueues a destination-aware announcement to be spoken after any
+ * currently-speaking/queued announcement finishes (no overlap, no
+ * clobbering - see file-level doc). Use this from the TV Display, where
+ * multiple simultaneous Now-Serving changes must each be heard in full.
+ */
+export function enqueueAnnouncement(
+  queueNumber: string | null | undefined,
+  destination?: { doctorName?: string | null; departmentName?: string | null },
+  prefsOverride?: QueueAnnouncerPrefs
+): void {
+  if (!queueNumber) return;
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  const prefs = prefsOverride ?? getQueueAnnouncerPrefs();
+  if (!prefs.enabled) return;
+  try {
+    speakQueue.push(buildAnnouncementText(queueNumber, destination));
+    pumpSpeakQueue(prefs);
+  } catch {
+    // Speech is a nice-to-have announcement, never let it break the display.
+  }
 }
 
 /**
@@ -60,7 +139,8 @@ export function buildAnnouncementText(queueNumber: string): string {
  * progress first (overlap prevention - see file-level doc). No-ops
  * silently if the browser lacks `speechSynthesis`, if announcements are
  * disabled in preferences, or if `queueNumber` is falsy (e.g. a ticket with
- * no assigned number yet).
+ * no assigned number yet). Kept for single-announcement callers (Doctor
+ * Workspace Call/Recall, Reception) - unchanged behavior.
  */
 export function announceQueueNumber(queueNumber: string | null | undefined, prefsOverride?: QueueAnnouncerPrefs): void {
   if (!queueNumber) return;

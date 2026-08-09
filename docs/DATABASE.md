@@ -501,12 +501,14 @@ Pure configuration — **no ticket-issuing/calling/serving logic**.
 | Column | Type | Notes |
 |---|---|---|
 | `branch_id` | UUID FK → `branches.id` ON DELETE CASCADE | Nullable — `NULL` = clinic-wide |
+| `department_id` | UUID FK → `departments.id` ON DELETE CASCADE | Nullable — see "`queue_settings.department_id`" below |
+| `doctor_id` | UUID FK → `doctors.id` ON DELETE CASCADE | Nullable — added Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display), migration `0025_queue_setting_doctor_prefix`; see below |
 | `queue_prefix` | VARCHAR(10) NOT NULL DEFAULT 'A' | |
 | `max_daily_queue` | INTEGER NOT NULL DEFAULT 200 | |
 | `reset_time` | TIME NOT NULL | |
 | `allow_walkins`, `allow_priority_lane` | BOOLEAN NOT NULL DEFAULT true | |
 
-**Indexes:** btree on `clinic_id`; unique on `(clinic_id, branch_id)`.
+**Indexes:** btree on `clinic_id`, `department_id`, `doctor_id`; unique on `(clinic_id, branch_id, department_id, doctor_id)` (widened from `(clinic_id, branch_id, department_id)` by migration `0025_queue_setting_doctor_prefix`).
 
 `priority_types`: `code` (unique per clinic), `label`, `enabled`. Default set (Senior Citizen, PWD, Pregnant, Emergency, VIP) optionally seeded via `POST /queue-settings/priority-types/seed-defaults`.
 
@@ -553,6 +555,11 @@ Migration `0005_reception_queue` adds five additive, nullable columns to `Legacy
 ### `queue_settings.department_id`
 
 Rather than adding a new queue-configuration table, Phase 4's `queue_settings` (clinic + nullable branch, unique per `(clinic_id, branch_id)`) gained a nullable `department_id` FK to `departments`, with the unique constraint widened to `(clinic_id, branch_id, department_id)`. This lets a clinic configure a clinic-wide prefix, override it per branch, and further override it per department (e.g. `"GM"` for General Medicine, `"DEN"` for Dental) — reusing all of Phase 4's existing prefix/cap/reset-time/walk-in/priority-lane fields instead of duplicating them in a parallel table. `QueueService._resolve_prefix` looks up the most specific matching row (department override, else branch, else clinic default `"A"`).
+
+### `queue_settings.doctor_id` (Post-RC1: Multi-Department/Multi-Doctor TV Queue Display)
+
+Migration `0025_queue_setting_doctor_prefix` adds a nullable `doctor_id` FK to `doctors`, one level narrower than `department_id` above, widening the unique constraint again to `(clinic_id, branch_id, department_id, doctor_id)`. This lets two doctors who share the same department get different queue prefixes (e.g. Dr. A → `"A"`, Dr. B → `"B"`, both in General Medicine). `QueueSettingRepository.get_effective_for_doctor` resolves doctor override → department override → branch/clinic default → hardcoded `"A"`, mirroring `get_effective_for_department`'s pattern one level deeper. Resolution requires an EXACT match on every non-null scope column of the query, including `branch_id` — a row saved with `branch_id = NULL` only resolves for a lookup that itself passes `branch_id = NULL`, which never happens for a real queue ticket (`Queue.branch_id` is NOT NULL). This is a pre-existing characteristic of the department-override chain (not new to this doctor-level addition) and is the root cause of BUG-033 (`docs/BUGS.md`) — the admin UI for both the department/doctor override form (`/queue-settings`) has been built branch_id-aware (selects/auto-selects a real branch) specifically to avoid hitting that same trap for the new doctor-scoped rows.
+
 
 ### `queues`
 
@@ -1082,6 +1089,9 @@ Two new tables, migration `0013_tv_queue_display` (descends linearly from `0012_
 Both tables get the full `LegacyMixin`/`TenantMixin`/`SoftDeleteMixin`/`TimestampMixin` stack per this project's standing convention, even though display-config/announcement rows are the least likely candidate yet for a legacy bulk import — kept for consistency rather than because a concrete migration use case exists; the columns are additive and nullable, so this costs nothing.
 
 **No new/extended tables for the actual queue snapshot** — `TvDisplayService._build_display_data` queries the existing `queues` table directly (same `ACTIVE_QUEUE_STATUSES` constant `QueueService`/`QueueRepository` already use), joins `patients`/`doctors`/`branches` for display fields, and does its own privacy-safe initials derivation server-side (`_initials()` — first letter of first name + first letter of last name, uppercased, never the full name). No new queue/visit columns were needed.
+
+**Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display)**: `_build_display_data` now also `selectinload`s `Queue.department` and the `TvDisplayNowServing`/`TvDisplayWaitingEntry` response schemas gained `department_id`/`department_name` (see `docs/API.md`) — no schema/table change, `Queue.department_id` already existed. Confirmed live that a `TvDisplayConfig` with `branch_id`/`department_id`/`doctor_id` all `NULL` already returns queues across the whole clinic (every scope filter in `_build_display_data` is conditionally appended only `if config.X is not None`) — this is what a genuinely clinic-wide, multi-department TV display uses; no new config concept or table was needed.
+
 
 **Known gap, documented rather than worked around silently**: neither `queues` nor `visits` has an FK to `consultation_rooms` (Phase 4's `ConsultationRoom` table is master data only, same gap noted in Phase 12's "Rooms In Use" section above). The TV display's `TvDisplayNowServing.room_name` is therefore always `null` for now rather than being inferred from, e.g., the doctor's most-recently-used room — a future phase that adds a real room assignment to the Queue/Visit/Consultation flow should wire this field up; the schema field and frontend already render it whenever it's populated.
 

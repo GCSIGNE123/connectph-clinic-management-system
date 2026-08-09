@@ -8,6 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class QueueSettingBase(BaseModel):
     branch_id: UUID | None = None
+    # Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): these two
+    # scope columns already existed on the `QueueSetting` model (department_id
+    # since Phase 5) but were never exposed on the API schema - only the
+    # clinic-wide (branch_id-only) row was reachable via `PUT /queue-settings`.
+    # Both are additive/optional; omitting them (the pre-existing behaviour)
+    # still upserts the clinic/branch-wide default row exactly as before.
+    department_id: UUID | None = None
+    doctor_id: UUID | None = None
     queue_prefix: str = Field(default="A", min_length=1, max_length=10)
     max_daily_queue: int = Field(default=200, ge=1, le=10000)
     reset_time: time
@@ -32,6 +40,8 @@ class QueueSettingRead(QueueSettingBase):
 
     id: UUID
     clinic_id: UUID
+    department_name: str | None = None
+    doctor_name: str | None = None
     created_at: datetime
     updated_at: datetime
 

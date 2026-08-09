@@ -73,6 +73,8 @@ export interface TvDisplayNowServing {
   queueNumber: string;
   patientInitials: string;
   doctorName: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
   roomName: string | null;
   status: string;
   calledAt: string | null;
@@ -83,6 +85,8 @@ export interface TvDisplayWaitingEntry {
   queueNumber: string;
   patientInitials: string;
   doctorName: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
   priority: string;
 }
 

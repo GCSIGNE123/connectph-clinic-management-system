@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Maximize, Minimize, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { useTvDisplayRealtime } from "@/features/tv-display/hooks/use-tv-display-realtime";
-import { announceQueueNumber } from "@/lib/queue-announcer";
+import { groupNowServing, groupWaiting } from "@/features/tv-display/lib/grouping";
+import { enqueueAnnouncement } from "@/lib/queue-announcer";
 
 /**
  * Shared TV Queue Display screen - extracted so both the slug-based
@@ -130,12 +131,20 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
     if (!data) return;
     const currentCalledAt = new Map(data.nowServing.map((n) => [n.queueId, n.calledAt]));
     if (soundEnabled) {
+      // Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): announce
+      // EVERY entry whose calledAt is new/changed this fetch cycle, not just
+      // the first one found - fixes the original single-doctor-era `break`
+      // silently dropping a second doctor/department's call that lands in
+      // the same poll window. `enqueueAnnouncement` sequences them (spoken
+      // one after another) rather than clobbering via `.cancel()`.
       for (const entry of data.nowServing) {
         const prev = prevCalledAtRef.current.get(entry.queueId);
         const isNewOrRecalled = !prevCalledAtRef.current.has(entry.queueId) || prev !== entry.calledAt;
         if (isNewOrRecalled) {
-          announceQueueNumber(entry.queueNumber);
-          break;
+          enqueueAnnouncement(entry.queueNumber, {
+            doctorName: entry.doctorName,
+            departmentName: entry.departmentName,
+          });
         }
       }
     }
@@ -175,6 +184,9 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFullscreen]);
+
+  const nowServingGroups = useMemo(() => groupNowServing(data?.nowServing ?? []), [data]);
+  const waitingGroups = useMemo(() => groupWaiting(data?.nextWaiting ?? []), [data]);
 
   const theme = data?.theme ?? "ClinicBranded";
   const fontSizeClass = FONT_SIZE_CLASS[data?.fontSize ?? "Large"] ?? FONT_SIZE_CLASS.Large;
@@ -262,24 +274,50 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
           </div>
         </header>
 
-        {/* Center: Now Serving */}
+        {/* Center: Now Serving. A single active destination (the original,
+            still-common single-doctor-clinic case) renders as one flat grid
+            with no group heading - unchanged from before this feature. Two
+            or more simultaneous destinations (e.g. Dr. A, Dr. B, Laboratory)
+            each get their own labeled card group so it's always clear which
+            number belongs where, without ever shrinking the queue-number
+            typography below the existing comfortable-viewing-distance size. */}
         <section className="flex flex-1 flex-col items-center justify-center gap-6 py-[2vw]">
           <p className="text-[clamp(1.1rem,1.5vw,2rem)] font-semibold uppercase tracking-widest text-white/60">
             Now Serving
           </p>
           {data && data.nowServing.length > 0 ? (
-            <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {data.nowServing.map((entry) => (
-                <div key={entry.queueId} className="rounded-2xl bg-white/10 p-[1.5vw] text-center shadow-xl backdrop-blur">
-                  <p className={`${fontSizeClass} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
-                  <p className="mt-2 text-[clamp(1rem,1.6vw,2rem)]">{entry.patientInitials}</p>
-                  <p className="mt-1 text-[clamp(0.8rem,1.1vw,1.5rem)] text-white/70">
-                    {entry.doctorName ? `Dr. ${entry.doctorName}` : ""}
-                    {entry.roomName ? ` · ${entry.roomName}` : ""}
-                  </p>
-                </div>
-              ))}
-            </div>
+            nowServingGroups.length <= 1 ? (
+              <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {data.nowServing.map((entry) => (
+                  <div key={entry.queueId} className="rounded-2xl bg-white/10 p-[1.5vw] text-center shadow-xl backdrop-blur">
+                    <p className={`${fontSizeClass} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
+                    <p className="mt-2 text-[clamp(1rem,1.6vw,2rem)]">{entry.patientInitials}</p>
+                    <p className="mt-1 text-[clamp(0.8rem,1.1vw,1.5rem)] text-white/70">
+                      {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}
+                      {entry.roomName ? ` · ${entry.roomName}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+                {nowServingGroups.map((group) => (
+                  <div key={group.key} className="rounded-2xl bg-white/10 p-[1.2vw] shadow-xl backdrop-blur">
+                    <p className="mb-2 text-center text-[clamp(0.9rem,1.1vw,1.4rem)] font-semibold uppercase tracking-wide text-white/70">
+                      {group.label}
+                    </p>
+                    <div className="flex flex-col items-center gap-3">
+                      {group.entries.map((entry) => (
+                        <div key={entry.queueId} className="w-full text-center">
+                          <p className={`${fontSizeClass} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
+                          <p className="text-[clamp(0.8rem,1.2vw,1.6rem)]">{entry.patientInitials}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-[clamp(1.3rem,2vw,3rem)] text-white/50">No one is currently being served</p>
           )}
@@ -291,14 +329,34 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
             Next in Queue
           </p>
           {data && data.nextWaiting.length > 0 ? (
-            <div className="flex flex-wrap gap-3">
-              {data.nextWaiting.map((entry) => (
-                <div key={entry.queueId} className="rounded-lg bg-white/5 px-5 py-3 text-center">
-                  <p className="text-[clamp(1.1rem,1.8vw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
-                  <p className="text-[clamp(0.7rem,0.9vw,1.2rem)] text-white/60">{entry.patientInitials}</p>
-                </div>
-              ))}
-            </div>
+            waitingGroups.length <= 1 ? (
+              <div className="flex flex-wrap gap-3">
+                {data.nextWaiting.map((entry) => (
+                  <div key={entry.queueId} className="rounded-lg bg-white/5 px-5 py-3 text-center">
+                    <p className="text-[clamp(1.1rem,1.8vw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
+                    <p className="text-[clamp(0.7rem,0.9vw,1.2rem)] text-white/60">{entry.patientInitials}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {waitingGroups.map((group) => (
+                  <div key={group.key}>
+                    <p className="mb-2 text-[clamp(0.8rem,1vw,1.2rem)] font-semibold uppercase tracking-wide text-white/50">
+                      {group.label}
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {group.entries.map((entry) => (
+                        <div key={entry.queueId} className="rounded-lg bg-white/5 px-5 py-3 text-center">
+                          <p className="text-[clamp(1.1rem,1.8vw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
+                          <p className="text-[clamp(0.7rem,0.9vw,1.2rem)] text-white/60">{entry.patientInitials}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-white/50">Queue is empty</p>
           )}

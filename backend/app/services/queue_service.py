@@ -38,6 +38,7 @@ from app.schemas.queue import (
 )
 from app.services.audit_service import AuditService
 from app.services.queue_number_generator import QueueNumberGenerator
+from app.services import sync_queue_service
 from app.services.visit_service import VisitService
 
 DEFAULT_QUEUE_PREFIX = "A"
@@ -174,18 +175,27 @@ class QueueService:
 
         return patient, department, doctor, service
 
-    async def _resolve_prefix(self, clinic_id: UUID, branch_id: UUID, department_id: UUID) -> str:
-        setting = await self.setting_repo.get_effective_for_department(clinic_id, branch_id, department_id)
+    async def _resolve_prefix(
+        self, clinic_id: UUID, branch_id: UUID, department_id: UUID, doctor_id: UUID | None = None
+    ) -> str:
+        # Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display):
+        # doctor_id is optional and additive - a ticket with no doctor
+        # assigned (e.g. Laboratory/Radiology department-only tickets)
+        # resolves exactly as before via the department/branch/clinic chain.
+        setting = await self.setting_repo.get_effective_for_doctor(clinic_id, branch_id, department_id, doctor_id)
         if setting is not None:
             return setting.queue_prefix
         return DEFAULT_QUEUE_PREFIX
 
-    async def _resolve_max_daily_queue(self, clinic_id: UUID, branch_id: UUID, department_id: UUID) -> int:
+    async def _resolve_max_daily_queue(
+        self, clinic_id: UUID, branch_id: UUID, department_id: UUID, doctor_id: UUID | None = None
+    ) -> int:
         # Item 13: per-prefix daily ceiling (default 200). Uses the same
-        # effective-setting resolution as `_resolve_prefix` (department
-        # override, else branch/clinic default) so the limit that applies is
-        # whichever `QueueSetting` row actually determined the prefix.
-        setting = await self.setting_repo.get_effective_for_department(clinic_id, branch_id, department_id)
+        # effective-setting resolution as `_resolve_prefix` (doctor override,
+        # else department override, else branch/clinic default) so the limit
+        # that applies is whichever `QueueSetting` row actually determined
+        # the prefix.
+        setting = await self.setting_repo.get_effective_for_doctor(clinic_id, branch_id, department_id, doctor_id)
         if setting is not None:
             return setting.max_daily_queue
         return 200
@@ -247,8 +257,11 @@ class QueueService:
                 detail="This patient already has an active queue ticket for this department today.",
             )
 
-        prefix = await self._resolve_prefix(clinic_id, payload.branch_id, payload.department_id)
-        max_daily_queue = await self._resolve_max_daily_queue(clinic_id, payload.branch_id, payload.department_id)
+        resolved_doctor_id = payload.doctor_id if payload.doctor_id is not None else visit.doctor_id
+        prefix = await self._resolve_prefix(clinic_id, payload.branch_id, payload.department_id, resolved_doctor_id)
+        max_daily_queue = await self._resolve_max_daily_queue(
+            clinic_id, payload.branch_id, payload.department_id, resolved_doctor_id
+        )
         queue_number = await self.number_generator.next_number(
             clinic_id, payload.branch_id, prefix, today, max_daily_queue=max_daily_queue
         )
@@ -258,7 +271,7 @@ class QueueService:
             branch_id=payload.branch_id,
             patient_id=payload.patient_id,
             department_id=payload.department_id,
-            doctor_id=payload.doctor_id if payload.doctor_id is not None else visit.doctor_id,
+            doctor_id=resolved_doctor_id,
             service_id=payload.service_id,
             queue_number=queue_number,
             queue_prefix=prefix,
@@ -301,6 +314,17 @@ class QueueService:
 
         detail = await self.get_detail(queue.id, clinic_id=clinic_id)
         await queue_connection_manager.broadcast(clinic_id, "queue.created", detail.model_dump(mode="json"))
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue.id, operation="create",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit.id, operation="update",
+            payload={"visit_id": str(visit.id), "queue_id": str(queue.id), "status": "Waiting"},
+            clinic_id=clinic_id,
+        )
         return detail
 
     async def create_queue(
@@ -363,8 +387,10 @@ class QueueService:
                 detail="This patient already has an active queue ticket for this department today.",
             )
 
-        prefix = await self._resolve_prefix(clinic_id, payload.branch_id, payload.department_id)
-        max_daily_queue = await self._resolve_max_daily_queue(clinic_id, payload.branch_id, payload.department_id)
+        prefix = await self._resolve_prefix(clinic_id, payload.branch_id, payload.department_id, payload.doctor_id)
+        max_daily_queue = await self._resolve_max_daily_queue(
+            clinic_id, payload.branch_id, payload.department_id, payload.doctor_id
+        )
         queue_number = await self.number_generator.next_number(
             clinic_id, payload.branch_id, prefix, today, max_daily_queue=max_daily_queue
         )
@@ -420,6 +446,15 @@ class QueueService:
 
         detail = await self.get_detail(queue.id, clinic_id=clinic_id)
         await queue_connection_manager.broadcast(clinic_id, "queue.created", detail.model_dump(mode="json"))
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue.id, operation="create",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit.id, operation="create",
+            payload={"visit_id": str(visit.id), "queue_id": str(queue.id)},
+            clinic_id=clinic_id,
+        )
         return detail
 
     async def search(self, *, clinic_id: UUID, params: QueueSearchParams) -> tuple[list[QueueListItem], int]:
@@ -460,6 +495,10 @@ class QueueService:
 
         detail = await self.get_detail(queue_id, clinic_id=clinic_id)
         await queue_connection_manager.broadcast(clinic_id, "queue.updated", detail.model_dump(mode="json"))
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue_id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
         return detail
 
     async def change_status(
@@ -500,6 +539,10 @@ class QueueService:
 
         detail = await self.get_detail(queue_id, clinic_id=clinic_id)
         await queue_connection_manager.broadcast(clinic_id, "queue.status_changed", detail.model_dump(mode="json"))
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue_id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
         return detail
 
     async def cancel(self, queue_id: UUID, *, clinic_id: UUID, actor: User, note: str | None = None) -> QueueDetail:

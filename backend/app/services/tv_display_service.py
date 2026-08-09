@@ -217,7 +217,12 @@ class TvDisplayService:
         stmt = (
             select(Queue)
             .where(*filters)
-            .options(selectinload(Queue.patient), selectinload(Queue.doctor), selectinload(Queue.branch))
+            .options(
+                selectinload(Queue.patient),
+                selectinload(Queue.doctor),
+                selectinload(Queue.branch),
+                selectinload(Queue.department),
+            )
             .order_by(Queue.called_at.asc().nulls_last(), Queue.created_at.asc())
         )
         rows = (await self.session.execute(stmt)).scalars().all()
@@ -237,6 +242,8 @@ class TvDisplayService:
                 queue_number=q.queue_number,
                 patient_initials=_initials(q.patient.first_name, q.patient.last_name) if q.patient else "??",
                 doctor_name=doctor_name(q),
+                department_id=q.department_id,
+                department_name=q.department.name if q.department else None,
                 # ConsultationRoom has no FK link from Queue/Visit yet (see
                 # docs/DATABASE.md's Phase 13 gap note) - omitted rather than
                 # guessed at.
@@ -252,6 +259,8 @@ class TvDisplayService:
                 queue_number=q.queue_number,
                 patient_initials=_initials(q.patient.first_name, q.patient.last_name) if q.patient else "??",
                 doctor_name=doctor_name(q),
+                department_id=q.department_id,
+                department_name=q.department.name if q.department else None,
                 priority=q.priority.value,
             )
             for q in waiting_rows[: config.queue_size]

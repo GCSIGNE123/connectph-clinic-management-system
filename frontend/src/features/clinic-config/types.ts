@@ -109,6 +109,13 @@ export interface QueueSettingItem {
   id: string;
   clinic_id: string;
   branch_id?: string | null;
+  // Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): additive
+  // scope columns, mirroring branch_id above - both null means the
+  // clinic/branch-wide default row.
+  department_id?: string | null;
+  doctor_id?: string | null;
+  department_name?: string | null;
+  doctor_name?: string | null;
   queue_prefix: string;
   max_daily_queue: number;
   reset_time: string;

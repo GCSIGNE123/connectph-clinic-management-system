@@ -42,9 +42,20 @@ class QueueSettingService:
         return setting
 
     async def upsert(self, payload: QueueSettingCreate, *, clinic_id: UUID, actor: User) -> QueueSetting:
-        existing = await self.repo.get_for_branch(clinic_id, payload.branch_id)
+        # Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): the
+        # upsert key is now the full (branch_id, department_id, doctor_id)
+        # scope, not just branch_id - so setting a doctor-specific prefix
+        # creates/updates that doctor's own row without clobbering the
+        # department or clinic-wide default row. Existing callers that never
+        # send department_id/doctor_id (both default None) still upsert the
+        # clinic/branch-wide row exactly as before.
+        existing = await self.repo.get_for_branch(
+            clinic_id, payload.branch_id, payload.department_id, payload.doctor_id
+        )
         if existing is not None:
-            existing = await self.repo.update(existing, **payload.model_dump(exclude={"branch_id"}))
+            existing = await self.repo.update(
+                existing, **payload.model_dump(exclude={"branch_id", "department_id", "doctor_id"})
+            )
             action = "queue_setting.updated"
             result = existing
         else:

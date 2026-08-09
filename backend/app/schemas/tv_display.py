@@ -112,6 +112,13 @@ class TvDisplayNowServing(BaseModel):
     queue_number: str
     patient_initials: str
     doctor_name: str | None
+    # Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): department
+    # context, additive alongside the existing doctor_name. Lets the
+    # frontend group/label a mixed multi-department/multi-doctor result set
+    # by destination - doctor name when assigned, else department name
+    # (e.g. a Laboratory/Radiology department-only ticket with no doctor).
+    department_id: UUID | None = None
+    department_name: str | None = None
     room_name: str | None
     status: str
     called_at: datetime | None
@@ -122,6 +129,8 @@ class TvDisplayWaitingEntry(BaseModel):
     queue_number: str
     patient_initials: str
     doctor_name: str | None
+    department_id: UUID | None = None
+    department_name: str | None = None
     priority: str
 
 

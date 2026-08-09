@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.queue_setting import PriorityType, QueueSetting
 from app.repositories.base import BaseRepository
@@ -14,12 +15,17 @@ class QueueSettingRepository(BaseRepository[QueueSetting]):
         super().__init__(session, model=QueueSetting)
 
     async def get_for_branch(
-        self, clinic_id: UUID, branch_id: UUID | None, department_id: UUID | None = None
+        self,
+        clinic_id: UUID,
+        branch_id: UUID | None,
+        department_id: UUID | None = None,
+        doctor_id: UUID | None = None,
     ) -> QueueSetting | None:
         stmt = select(QueueSetting).where(
             QueueSetting.clinic_id == clinic_id,
             QueueSetting.branch_id == branch_id,
             QueueSetting.department_id == department_id,
+            QueueSetting.doctor_id == doctor_id,
             QueueSetting.is_deleted.is_(False),
         )
         result = await self.session.execute(stmt)
@@ -35,9 +41,31 @@ class QueueSettingRepository(BaseRepository[QueueSetting]):
                 return specific
         return await self.get_for_branch(clinic_id, branch_id, None)
 
+    async def get_effective_for_doctor(
+        self,
+        clinic_id: UUID,
+        branch_id: UUID | None,
+        department_id: UUID | None,
+        doctor_id: UUID | None,
+    ) -> QueueSetting | None:
+        """Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display):
+        resolution chain extended one level narrower than
+        `get_effective_for_department` - doctor-specific override first (a
+        row with this exact doctor_id AND this department_id/branch_id),
+        else the department override, else the branch/clinic default.
+        Mirrors the exact same "narrowest scope wins" pattern, just one
+        level deeper."""
+        if doctor_id is not None:
+            specific = await self.get_for_branch(clinic_id, branch_id, department_id, doctor_id)
+            if specific is not None:
+                return specific
+        return await self.get_effective_for_department(clinic_id, branch_id, department_id)
+
     async def list_for_clinic(self, clinic_id: UUID) -> list[QueueSetting]:
-        stmt = select(QueueSetting).where(
-            QueueSetting.clinic_id == clinic_id, QueueSetting.is_deleted.is_(False)
+        stmt = (
+            select(QueueSetting)
+            .where(QueueSetting.clinic_id == clinic_id, QueueSetting.is_deleted.is_(False))
+            .options(selectinload(QueueSetting.department), selectinload(QueueSetting.doctor))
         )
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows)

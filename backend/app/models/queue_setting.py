@@ -19,7 +19,8 @@ class QueueSetting(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
     __tablename__ = "queue_settings"
     __table_args__ = (
         UniqueConstraint(
-            "clinic_id", "branch_id", "department_id", name="uq_queue_setting_clinic_branch_department"
+            "clinic_id", "branch_id", "department_id", "doctor_id",
+            name="uq_queue_setting_clinic_branch_department_doctor",
         ),
     )
 
@@ -35,6 +36,16 @@ class QueueSetting(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
     department_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("departments.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): nullable
+    # doctor scope, mirroring department_id above. NULL = the department (or
+    # branch/clinic) default applies; a row with doctor_id set overrides the
+    # prefix for that specific doctor only (e.g. Dr. A -> "A", Dr. B -> "B",
+    # even when both sit in the same department). Resolution order lives in
+    # `QueueSettingRepository.get_effective_for_doctor`: doctor override,
+    # else department override, else branch/clinic default.
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("doctors.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     queue_prefix: Mapped[str] = mapped_column(String(10), nullable=False, default="A", server_default="A")
     max_daily_queue: Mapped[int] = mapped_column(Integer, nullable=False, default=200, server_default="200")
     reset_time: Mapped[str] = mapped_column(Time, nullable=False)
@@ -42,6 +53,8 @@ class QueueSetting(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
     allow_priority_lane: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     branch: Mapped["Branch | None"] = relationship()
+    department: Mapped["Department | None"] = relationship()
+    doctor: Mapped["Doctor | None"] = relationship()
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<QueueSetting id={self.id} prefix={self.queue_prefix!r}>"

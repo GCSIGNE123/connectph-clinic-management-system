@@ -581,8 +581,8 @@ Same CRUD shape as Departments (`q`, `department_id`, `status` filters), plus `P
 
 Pure configuration — no ticket-issuing/calling/serving endpoints exist.
 
-- `GET /queue-settings` — all queue-setting rows for the clinic (clinic-wide + any per-branch overrides).
-- `PUT /queue-settings` — create-or-update the row for the given `branch_id` (`null` = clinic-wide).
+- `GET /queue-settings` — all queue-setting rows for the clinic (clinic-wide + any per-branch/department/doctor overrides). Each row now also includes read-only `department_name`/`doctor_name` (resolved server-side) alongside the existing `department_id`/`doctor_id`.
+- `PUT /queue-settings` — create-or-update the row for the given `(branch_id, department_id, doctor_id)` scope (all `null` = clinic-wide). Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): `department_id`/`doctor_id` were added to the request body (`QueueSettingCreate`) — previously only `branch_id` was accepted, so a department/doctor-scoped row could not be created through the API at all despite the model already supporting it. **Note**: resolution (`QueueService._resolve_prefix`) requires an exact `branch_id` match against the ticket's own `branch_id`, which is never `null` — a row saved with `branch_id: null` only ever resolves for a clinic-wide lookup that itself passes `branch_id=null`, which doesn't happen for a real queue ticket (see BUG-033 in `docs/BUGS.md`). Set a real `branch_id` on any override you want to actually take effect.
 - `PATCH /queue-settings/{id}` — partial update of an existing row.
 - `GET /queue-settings/priority-types`, `POST /queue-settings/priority-types`, `PUT /queue-settings/priority-types/{id}`, `DELETE /queue-settings/priority-types/{id}`.
 - `POST /queue-settings/priority-types/seed-defaults` — seeds Senior/PWD/Pregnant/Emergency/VIP, skipping codes that already exist.
@@ -854,6 +854,8 @@ Two distinct security models on this feature's endpoints:
 | `GET` | `/public/tv-display/{public_slug}` | **None** | Now Serving + Next `queue_size` Waiting (`ACTIVE_QUEUE_STATUSES` only — Completed/Cancelled/Skipped/NoShow never appear) + active announcements + clinic/branch name + display settings. Unknown/private/inactive slug → `404`, never a `500` or another clinic's data. |
 
 Every config/announcement create/update/delete writes an `audit_logs` entry (`tv_display.config_created`/`config_updated`/`config_deleted`/`announcement_created`/`announcement_updated`/`announcement_deleted`).
+
+**Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display)**: `TvDisplayNowServing` and `TvDisplayWaitingEntry` (both `GET /public/tv-display/{public_slug}` and `GET /tv-displays/{id}/preview` share the same shape) each gained two additive fields — `department_id: UUID | null` and `department_name: string | null` — alongside the existing `doctor_name`. No existing field was removed or renamed. A config with `branch_id`/`department_id`/`doctor_id` all `null` (create one via `POST /tv-displays` with no scope fields) returns the full multi-department feed for the clinic — confirmed live: calling four different-prefix tickets (a Doctor A ticket, a Doctor B ticket, a Laboratory ticket, a Radiology ticket) simultaneously all appeared together in one `now_serving` array, each correctly labeled via `doctor_name` (when assigned) or `department_name` (department-only tickets, e.g. Laboratory/Radiology).
 
 ---
 
