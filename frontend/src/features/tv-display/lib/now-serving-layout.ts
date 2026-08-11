@@ -21,6 +21,21 @@ export interface NowServingLayout {
   gridClassName: string;
   cardClassName: string;
   numberSizeClassName: string;
+  /** Patient-initials line. Post-RC1 (overflow fix #2): previously a single
+   * fixed size shared by every tier - fine at 1-4 tickets, but at 5+ it
+   * kept every card's second line the same height regardless of how many
+   * rows had to fit in the section's bounded height, contributing to the
+   * grid genuinely overflowing (not just visually tight) at realistic
+   * multi-department ticket counts (verified live: 8 simultaneous tickets
+   * at 1600x900 measured 444px of required grid height against only 336px
+   * available). Now tier-aware like `numberSizeClassName`. */
+  initialsSizeClassName: string;
+  /** Doctor-name/department/room line - same tier-aware fix as above. */
+  detailSizeClassName: string;
+  /** Vertical gap above the initials/detail lines - also tightened at
+   * higher tiers so line-spacing doesn't eat back the savings from
+   * shrinking the text itself. */
+  lineSpacingClassName: string;
 }
 
 // Used from 5 tickets up, where the admin-configured font size
@@ -34,8 +49,14 @@ export interface NowServingLayout {
 // `FONT_SIZE_CLASS` comment: Now Serving lives in a halved-width column
 // (Post-RC1 50/50 Queue + Information Panel layout), so sizing must track
 // that column's real width, not the full viewport's.
-const MODERATE_NUMBER_SIZE = "text-5xl md:text-6xl lg:[font-size:clamp(2.2rem,8.4cqw,5rem)]";
-const COMPACT_NUMBER_SIZE = "text-4xl md:text-5xl lg:[font-size:clamp(1.8rem,7cqw,4rem)]";
+const MODERATE_NUMBER_SIZE = "text-4xl md:text-5xl lg:[font-size:clamp(1.8rem,6.3cqw,3.75rem)]";
+const COMPACT_NUMBER_SIZE = "text-3xl md:text-4xl lg:[font-size:clamp(1.4rem,5cqw,2.75rem)]";
+
+const MODERATE_INITIALS_SIZE = "text-[clamp(0.85rem,3.4cqw,1.4rem)]";
+const COMPACT_INITIALS_SIZE = "text-[clamp(0.75rem,2.6cqw,1.1rem)]";
+
+const MODERATE_DETAIL_SIZE = "text-[clamp(0.7rem,2.2cqw,1.05rem)]";
+const COMPACT_DETAIL_SIZE = "text-[clamp(0.65rem,1.8cqw,0.85rem)]";
 
 export function getNowServingLayout(count: number, baseNumberSizeClassName: string): NowServingLayout {
   if (count <= 1) {
@@ -43,6 +64,9 @@ export function getNowServingLayout(count: number, baseNumberSizeClassName: stri
       gridClassName: "flex w-full justify-center",
       cardClassName: "w-full max-w-2xl p-[1.5cqw]",
       numberSizeClassName: baseNumberSizeClassName,
+      initialsSizeClassName: "text-[clamp(1rem,4.5cqw,2rem)]",
+      detailSizeClassName: "text-[clamp(0.8rem,3cqw,1.5rem)]",
+      lineSpacingClassName: "mt-2",
     };
   }
   if (count <= 4) {
@@ -50,24 +74,35 @@ export function getNowServingLayout(count: number, baseNumberSizeClassName: stri
       gridClassName: "grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3",
       cardClassName: "p-[1.5cqw]",
       numberSizeClassName: baseNumberSizeClassName,
+      initialsSizeClassName: "text-[clamp(1rem,4.5cqw,2rem)]",
+      detailSizeClassName: "text-[clamp(0.8rem,3cqw,1.5rem)]",
+      lineSpacingClassName: "mt-2",
     };
   }
   if (count <= 8) {
     return {
-      gridClassName: "grid w-full grid-cols-2 gap-3 lg:grid-cols-4",
-      cardClassName: "p-[0.5cqw]",
+      gridClassName: "grid w-full grid-cols-2 gap-2 lg:grid-cols-4",
+      cardClassName: "p-[0.4cqw]",
       numberSizeClassName: MODERATE_NUMBER_SIZE,
+      initialsSizeClassName: MODERATE_INITIALS_SIZE,
+      detailSizeClassName: MODERATE_DETAIL_SIZE,
+      lineSpacingClassName: "mt-1",
     };
   }
   // 9+ simultaneous tickets: denser grid (up to 6 columns), smaller padding,
   // and a capped queue-number size so more rows fit within the section's
   // bounded height without needing to scroll in realistic clinic scenarios.
   // The grid wrapper itself is still given `overflow-y-auto` by the caller
-  // as a safety net for pathological ticket counts beyond what any
-  // reasonable clinic would have simultaneously active.
+  // as a last-resort safety net for pathological ticket counts beyond what
+  // any real clinic would have simultaneously active - it should not
+  // normally engage at realistic counts now that every tier's sizing is
+  // actually budgeted to fit rather than just "smaller than the last tier".
   return {
-    gridClassName: "grid w-full grid-cols-3 gap-3 lg:grid-cols-4 2xl:grid-cols-6",
-    cardClassName: "p-[0.6cqw]",
+    gridClassName: "grid w-full grid-cols-3 gap-2 lg:grid-cols-4 2xl:grid-cols-6",
+    cardClassName: "p-[0.35cqw]",
     numberSizeClassName: COMPACT_NUMBER_SIZE,
+    initialsSizeClassName: COMPACT_INITIALS_SIZE,
+    detailSizeClassName: COMPACT_DETAIL_SIZE,
+    lineSpacingClassName: "mt-0.5",
   };
 }

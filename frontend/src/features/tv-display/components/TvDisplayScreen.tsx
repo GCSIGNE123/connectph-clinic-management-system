@@ -362,8 +362,8 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
                       className={`rounded-2xl bg-white/10 text-center shadow-xl backdrop-blur ${layout.cardClassName}`}
                     >
                       <p className={`${layout.numberSizeClassName} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
-                      <p className="mt-2 text-[clamp(1rem,4.5cqw,2rem)]">{entry.patientInitials}</p>
-                      <p className="mt-1 text-[clamp(0.8rem,3cqw,1.5rem)] text-white/70">
+                      <p className={`${layout.lineSpacingClassName} ${layout.initialsSizeClassName}`}>{entry.patientInitials}</p>
+                      <p className={`${layout.lineSpacingClassName} ${layout.detailSizeClassName} text-white/70`}>
                         {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}
                         {entry.roomName ? ` · ${entry.roomName}` : ""}
                       </p>

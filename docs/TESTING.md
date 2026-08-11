@@ -1631,6 +1631,25 @@ Verified live on 2026-08-11 against a real running dev backend (port 8010) and f
 
 **Summary: all 11 scenarios PASS** — admin CRUD works and is role-gated identically to the rest of the TV Display feature, the queue half (multi-doctor/multi-department/one-card-per-ticket) is provably unchanged, the new info panel correctly handles empty/populated/active-filtered/ordered states and rotates each item for its own configured duration, real photo upload/serving/removal works end-to-end (not a stub, verified by actually fetching the served bytes back), one real layout bug introduced by this feature itself (viewport-relative sizing not accounting for the new halved column) was found via DOM measurement and fixed before sign-off, zero regressions in the existing test suite, and production build succeeds across all 52 routes.
 
+## Post-RC1: TV Display "Now Serving" cropping fix (5+ simultaneous tickets)
+
+Reported: Now Serving cards cropped/clipped. Reproduced live (not just from the report) before fixing.
+
+| # | Step | Result | Evidence |
+|---|---|---|---|
+| 1 | Reproduce the bug with real data | **PASS (bug confirmed)** | Created 8 real queue tickets across 8 distinct destinations (3 doctor-scoped, 5 department-only) via the live API, called all 8 simultaneously, loaded the public TV display at 1600x900. Screenshot showed the second row of cards visibly cut off; DOM measurement confirmed it precisely: `.grid` `scrollHeight` 444px vs `clientHeight` 336px (108px of genuine, non-scrollable overflow). |
+| 2 | Root-cause the overflow | **PASS** | Only `numberSizeClassName` (the queue-number text) was tier-aware across `now-serving-layout.ts`'s density tiers; the patient-initials and doctor/department+room lines used the same fixed size regardless of ticket count, so they didn't shrink to compensate as more rows had to fit. |
+| 3 | Fix and re-verify at the exact reproduction (8 tickets, 1600x900) | **PASS** | After extending `NowServingLayout` with tier-aware `initialsSizeClassName`/`detailSizeClassName`/`lineSpacingClassName` and tightening the 5-8/9+ tier sizes: `.grid` `scrollHeight` and `clientHeight` both `273px` - zero overflow, comfortable margin under the 336px budget. |
+| 4 | Re-verify at 1920x1080 | **PASS** | Same 8-ticket scenario re-checked at 1920x1080 - no overflow, all cards fully visible. |
+| 5 | Verify the denser 9+ tier too | **PASS** | Added 2 more destinations (10 simultaneous tickets total) - compact tier engaged (`2xl:grid-cols-6`), `scrollHeight === clientHeight` (223px), no clipping. |
+| 6 | Confirm the 1-4 ticket tier is unaffected | **PASS** | Screenshotted a single-ticket display (`Dr Dela Cruz only` config) - renders pixel-identical to before the fix (still the large, centered, admin-configured-font-size card; that tier's sizing wasn't touched). |
+| 7 | Automated tests | **PASS** | `now-serving-layout.test.ts` - added a new test asserting the initials/detail sizes and line spacing actually differ across tiers (previously nothing asserted this, which is exactly how the bug went unnoticed). Full `tv-display` suite: 36/36 pass (30 pre-existing + 6 new). |
+| 8 | Production build | **PASS** | `npm run build` - compiled successfully across all routes. |
+
+Test queue data (the 10 tickets created to reproduce/verify this) was cancelled via the API afterward to leave the demo clinic's queue state clean.
+
+**Summary: all 8 steps PASS** - the bug was reproduced with real data (not just inferred from the report), root-caused to a gap in tier-aware sizing, fixed by extending that same tiering pattern to every line in a card, and re-verified at the exact reproduction plus adjacent tiers/resolutions with zero regressions.
+
 ## Running everything before opening a PR
 
 ```bash

@@ -4,6 +4,18 @@ This document tracks what is actually implemented in the CONNECT.PH Clinic Platf
 
 ---
 
+## Fixed — Post-RC1: TV Display "Now Serving" cropping at 5+ simultaneous tickets
+
+**2026-08-11.** Reported: Now Serving cards were cropped/clipped on the TV Display. Reproduced live by creating 8 real, simultaneous "Called" tickets across 8 distinct destinations at 1600x900 — the grid's actual required height (444px) exceeded the space the flex layout had available (336px), and the existing `overflow-y-auto` "safety net" silently clipped the overflow rather than visibly scrolling (there's no way to scroll a TV, so overflow there just looks like cropping).
+
+Root cause: only the queue-number text (`numberSizeClassName`) was tier-aware in `now-serving-layout.ts`'s density tiers (5-8 tickets / 9+ tickets) — the patient-initials and doctor/department+room lines stayed a single fixed size at every density, so they kept consuming the same vertical space regardless of how many rows had to fit.
+
+**Fix** (`frontend/src/features/tv-display/lib/now-serving-layout.ts`, `TvDisplayScreen.tsx`): extended `NowServingLayout` with tier-aware `initialsSizeClassName`, `detailSizeClassName`, and `lineSpacingClassName`, and tightened the 5-8/9+ tier number sizes, padding, and grid gaps so each tier's total content is actually budgeted to fit its available space rather than relying on scroll to hide the overflow.
+
+**Live-verified**: re-measured the same reproduction (8 tickets, 1600x900) after the fix — zero overflow (`scrollHeight === clientHeight`, 273px content in a now-336px-available budget). Also verified at 10 tickets (9+ compact tier) and confirmed the 1-4 ticket tier renders pixel-identical to before. All 36 `tv-display` tests pass (6 new, covering the new tier-aware fields). Production build succeeds.
+
+---
+
 ## Built — Post-RC1: TV Display 50/50 Queue + Information/Advertisement Panel
 
 **Complete and live-verified, 2026-08-11.** Splits the TV Display into two equal vertical halves: the LEFT half is the existing Queue Display (Now Serving + Next in Queue) with its multi-doctor/multi-department/one-card-per-ticket behavior completely unchanged; the RIGHT half is a new admin-configurable Information/Advertisement Panel that auto-rotates through clinic content (service pricing, doctor information, health tips, preventive reminders, announcements, promotions, motivational messages). No queue creation, numbering, prefix, calling/recall, or announcement business logic was touched.
