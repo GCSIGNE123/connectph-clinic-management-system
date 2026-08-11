@@ -2,6 +2,14 @@ export type TvTheme = "Light" | "Dark" | "ClinicBranded";
 export type TvFontSize = "Small" | "Medium" | "Large" | "ExtraLarge";
 export type TvAnimationSpeed = "None" | "Slow" | "Normal" | "Fast";
 export type TvAnnouncementType = "Welcome" | "HealthTip" | "Promotion" | "Emergency";
+export type TvInfoContentType =
+  | "ServicePricing"
+  | "DoctorInfo"
+  | "HealthTip"
+  | "PreventiveReminder"
+  | "Announcement"
+  | "Promotion"
+  | "Motivational";
 
 export interface TvDisplayConfig {
   id: string;
@@ -90,6 +98,31 @@ export interface TvDisplayWaitingEntry {
   priority: string;
 }
 
+export interface TvInfoContentItem {
+  id: string;
+  title: string;
+  body: string;
+  contentType: TvInfoContentType;
+  durationSeconds: number;
+  displayOrder: number;
+  isActive: boolean;
+  imageUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTvInfoContentInput {
+  title: string;
+  body: string;
+  contentType?: TvInfoContentType;
+  durationSeconds?: number;
+  displayOrder?: number;
+  isActive?: boolean;
+  imageUrl?: string | null;
+}
+
+export type UpdateTvInfoContentInput = Partial<CreateTvInfoContentInput>;
+
 export interface TvDisplayData {
   displayName: string;
   clinicName: string;
@@ -105,6 +138,7 @@ export interface TvDisplayData {
   nowServing: TvDisplayNowServing[];
   nextWaiting: TvDisplayWaitingEntry[];
   announcements: TvAnnouncement[];
+  infoContent: TvInfoContentItem[];
   serverTime: string;
   wsChannelClinicId: string;
   wsAuthSlug: string | null;

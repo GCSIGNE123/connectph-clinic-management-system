@@ -20,6 +20,7 @@ __pycache__/
 venv/
 .venv/
 backend/backups/
+backend/var/
 
 # --- Frontend (Node) ---
 node_modules/

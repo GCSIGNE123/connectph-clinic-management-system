@@ -143,6 +143,7 @@ export default function QueueSettingsPage() {
     department_id: "",
     doctor_id: "",
     queue_prefix: "",
+    room_label: "",
     max_daily_queue: 200,
   });
   useEffect(() => {
@@ -172,6 +173,7 @@ export default function QueueSettingsPage() {
         department_id: overrideForm.department_id || null,
         doctor_id: overrideForm.doctor_id || null,
         queue_prefix: overrideForm.queue_prefix,
+        room_label: overrideForm.room_label || null,
         max_daily_queue: Number(overrideForm.max_daily_queue),
         reset_time: `${clinicWide?.reset_time?.slice(0, 5) ?? "00:00"}:00`,
         allow_walkins: clinicWide?.allow_walkins ?? true,
@@ -180,7 +182,7 @@ export default function QueueSettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["queue-settings"] });
-      setOverrideForm((f) => ({ ...f, department_id: "", doctor_id: "", queue_prefix: "", max_daily_queue: 200 }));
+      setOverrideForm((f) => ({ ...f, department_id: "", doctor_id: "", queue_prefix: "", room_label: "", max_daily_queue: 200 }));
       toast({ title: "Prefix override saved", variant: "success" });
     },
     onError: (err) => toast({ title: "Save failed", description: (err as Error).message, variant: "error" }),
@@ -300,8 +302,14 @@ export default function QueueSettingsPage() {
                     ) : null}
                   </div>
                   <div className="text-muted-foreground">
-                    Prefix <span className="font-mono font-semibold text-foreground">{s.queue_prefix}</span> · max{" "}
-                    {s.max_daily_queue}/day
+                    Prefix <span className="font-mono font-semibold text-foreground">{s.queue_prefix}</span>
+                    {s.room_label ? (
+                      <>
+                        {" "}
+                        · Room <span className="font-semibold text-foreground">{s.room_label}</span>
+                      </>
+                    ) : null}{" "}
+                    · max {s.max_daily_queue}/day
                   </div>
                 </div>
               ))}
@@ -310,7 +318,7 @@ export default function QueueSettingsPage() {
             <p className="text-sm text-muted-foreground">No overrides configured yet - every ticket uses the clinic-wide prefix above.</p>
           )}
           {canManage ? (
-            <div className="grid gap-3 rounded-md border border-dashed border-border p-3 sm:grid-cols-5 sm:items-end">
+            <div className="grid gap-3 rounded-md border border-dashed border-border p-3 sm:grid-cols-3 lg:grid-cols-6 sm:items-end">
               {branches.length > 1 ? (
                 <div className="space-y-1.5">
                   <Label htmlFor="override_branch">Branch</Label>
@@ -367,6 +375,15 @@ export default function QueueSettingsPage() {
                   value={overrideForm.queue_prefix}
                   onChange={(e) => setOverrideForm((f) => ({ ...f, queue_prefix: e.target.value.toUpperCase() }))}
                   placeholder="e.g. B or L"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="override_room">Room (optional)</Label>
+                <Input
+                  id="override_room"
+                  value={overrideForm.room_label}
+                  onChange={(e) => setOverrideForm((f) => ({ ...f, room_label: e.target.value }))}
+                  placeholder="e.g. Room 101"
                 />
               </div>
               <div className="space-y-1.5">

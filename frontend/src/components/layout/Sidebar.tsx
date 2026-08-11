@@ -115,7 +115,11 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
   // every /tv-displays* mutation and read for other roles.
   const canSeeTvDisplays = Boolean(currentUser && ANALYTICS_ROLES.has(currentUser.role ?? ""));
   const configNavItems = canSeeTvDisplays
-    ? [...CONFIG_NAV_ITEMS, { label: "TV Displays", href: "/tv-displays", icon: Monitor }]
+    ? [
+        ...CONFIG_NAV_ITEMS,
+        { label: "TV Displays", href: "/tv-displays", icon: Monitor },
+        { label: "TV Info Panel", href: "/tv-info-content", icon: Monitor },
+      ]
     : CONFIG_NAV_ITEMS;
   // Phase 14: Legacy Migration Wizard is Owner/Administrator only, the
   // same strictest gate as Analytics/TV Displays - bulk-importing real

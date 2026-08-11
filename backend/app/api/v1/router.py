@@ -98,6 +98,7 @@ api_router.include_router(analytics.router)
 # Phase 13: Live TV Queue Display
 api_router.include_router(tv_display.router)
 api_router.include_router(tv_display.announcements_router)
+api_router.include_router(tv_display.info_content_router)
 api_router.include_router(tv_display.public_router)
 
 # Phase 14: Legacy Migration Wizard

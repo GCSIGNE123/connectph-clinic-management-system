@@ -3,12 +3,14 @@
 import logging
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -106,6 +108,24 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+    # Post-RC1 (50/50 Queue + Information/Advertisement Panel): serves the
+    # real, locally-stored TV Info Panel images written by
+    # `POST /tv-info-content/{id}/image` (see `app/api/v1/tv_display.py`'s
+    # module docstring) - deliberately not a presigned-URL stub like every
+    # other upload flow in this app, since the TV Display must keep working
+    # fully offline. Unauthenticated by design, same as the public TV
+    # display endpoint itself: these are clinic-facing marketing/info
+    # images meant to be shown on an unauthenticated public TV, never
+    # sensitive data. Mounted at app-creation time (not lazily) so the
+    # directory always exists before the first request.
+    tv_info_content_media_root = Path(__file__).resolve().parent.parent / "var" / "tv_info_content_images"
+    tv_info_content_media_root.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/media/tv-info-content",
+        StaticFiles(directory=tv_info_content_media_root),
+        name="tv-info-content-media",
+    )
 
     return app
 

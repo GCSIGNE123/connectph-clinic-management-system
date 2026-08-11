@@ -5,7 +5,9 @@ import { tvDisplayApi } from "@/features/tv-display/api/tv-display-api";
 import type {
   CreateAnnouncementInput,
   CreateTvDisplayInput,
+  CreateTvInfoContentInput,
   UpdateTvDisplayInput,
+  UpdateTvInfoContentInput,
 } from "@/features/tv-display/types";
 import { useToast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api-client";
@@ -20,6 +22,7 @@ export const tvDisplayKeys = {
   detail: (id: string) => ["tv-displays", "detail", id] as const,
   announcements: (id: string) => ["tv-displays", "announcements", id] as const,
   preview: (id: string) => ["tv-displays", "preview", id] as const,
+  infoContent: () => ["tv-displays", "info-content"] as const,
 };
 
 export function useTvDisplays() {
@@ -125,6 +128,86 @@ export function useDeleteAnnouncement(configId: string) {
     },
     onError: (error) => {
       toast({ title: "Could not delete announcement", description: errorMessage(error, "Please try again."), variant: "error" });
+    },
+  });
+}
+
+export function useInfoContent() {
+  return useQuery({ queryKey: tvDisplayKeys.infoContent(), queryFn: () => tvDisplayApi.listInfoContent() });
+}
+
+export function useCreateInfoContent() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (input: CreateTvInfoContentInput) => tvDisplayApi.createInfoContent(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tvDisplayKeys.infoContent() });
+      toast({ title: "Information content added", variant: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Could not add content", description: errorMessage(error, "Please try again."), variant: "error" });
+    },
+  });
+}
+
+export function useUpdateInfoContent() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateTvInfoContentInput }) =>
+      tvDisplayApi.updateInfoContent(id, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tvDisplayKeys.infoContent() });
+      toast({ title: "Content updated", variant: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Could not update content", description: errorMessage(error, "Please try again."), variant: "error" });
+    },
+  });
+}
+
+export function useDeleteInfoContent() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (id: string) => tvDisplayApi.deleteInfoContent(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tvDisplayKeys.infoContent() });
+      toast({ title: "Content deleted", variant: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Could not delete content", description: errorMessage(error, "Please try again."), variant: "error" });
+    },
+  });
+}
+
+export function useUploadInfoContentImage() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) => tvDisplayApi.uploadInfoContentImage(id, file),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tvDisplayKeys.infoContent() });
+      toast({ title: "Photo uploaded", variant: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Could not upload photo", description: error instanceof Error ? error.message : "Please try again.", variant: "error" });
+    },
+  });
+}
+
+export function useDeleteInfoContentImage() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (id: string) => tvDisplayApi.deleteInfoContentImage(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tvDisplayKeys.infoContent() });
+      toast({ title: "Photo removed", variant: "success" });
+    },
+    onError: (error) => {
+      toast({ title: "Could not remove photo", description: errorMessage(error, "Please try again."), variant: "error" });
     },
   });
 }

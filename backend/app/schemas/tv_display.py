@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.tv_announcement import TvAnnouncementType
 from app.models.tv_display_config import TvDisplayAnimationSpeed, TvDisplayFontSize, TvDisplayTheme
+from app.models.tv_info_content import DEFAULT_DURATION_SECONDS, TvInfoContentType
 
 
 class TvDisplayConfigCreate(BaseModel):
@@ -107,6 +108,41 @@ class TvAnnouncementRead(BaseModel):
     created_at: datetime
 
 
+class TvInfoContentCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1)
+    content_type: TvInfoContentType = TvInfoContentType.ANNOUNCEMENT
+    duration_seconds: int = Field(default=DEFAULT_DURATION_SECONDS, ge=3, le=120)
+    display_order: int = 0
+    is_active: bool = True
+    image_url: str | None = Field(default=None, max_length=500)
+
+
+class TvInfoContentUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    body: str | None = Field(default=None, min_length=1)
+    content_type: TvInfoContentType | None = None
+    duration_seconds: int | None = Field(default=None, ge=3, le=120)
+    display_order: int | None = None
+    is_active: bool | None = None
+    image_url: str | None = Field(default=None, max_length=500)
+
+
+class TvInfoContentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str
+    body: str
+    content_type: TvInfoContentType
+    duration_seconds: int
+    display_order: int
+    is_active: bool
+    image_url: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class TvDisplayNowServing(BaseModel):
     queue_id: UUID
     queue_number: str
@@ -152,6 +188,7 @@ class TvDisplayData(BaseModel):
     now_serving: list[TvDisplayNowServing]
     next_waiting: list[TvDisplayWaitingEntry]
     announcements: list[TvAnnouncementRead]
+    info_content: list[TvInfoContentRead]
     server_time: datetime
     ws_channel_clinic_id: UUID
     ws_auth_slug: str | None

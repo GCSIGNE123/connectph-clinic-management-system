@@ -285,3 +285,158 @@ async def test_tenant_isolation_public_slug_never_leaks_across_clinics(client: A
     # Clinic B's owner cannot fetch clinic A's config by id either.
     cross = await client.get(f"/api/v1/tv-displays/{config_a['id']}", headers=headers_b)
     assert cross.status_code == 404
+
+
+# ---- Post-RC1: 50/50 Information/Advertisement Panel ----------------------
+
+
+async def test_info_content_create_list_update_delete_owner_admin_only(
+    client: AsyncClient, make_clinic_with_owner, db_session
+):
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+
+    create_resp = await client.post(
+        "/api/v1/tv-info-content", headers=owner_headers,
+        json={"title": "Flu Shots Available", "body": "Ask our staff about seasonal flu vaccination.", "content_type": "Promotion", "duration_seconds": 8, "display_order": 1},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    content = create_resp.json()
+    assert content["title"] == "Flu Shots Available"
+    assert content["duration_seconds"] == 8
+    assert content["is_active"] is True
+
+    list_resp = await client.get("/api/v1/tv-info-content", headers=owner_headers)
+    assert list_resp.status_code == 200
+    assert len(list_resp.json()) == 1
+
+    update_resp = await client.patch(
+        f"/api/v1/tv-info-content/{content['id']}", headers=owner_headers, json={"is_active": False}
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["is_active"] is False
+
+    del_resp = await client.delete(f"/api/v1/tv-info-content/{content['id']}", headers=owner_headers)
+    assert del_resp.status_code == 204
+    list_after = await client.get("/api/v1/tv-info-content", headers=owner_headers)
+    assert list_after.json() == []
+
+    # Other roles get 403 creating.
+    recep_email, _u = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Receptionist")
+    recep_token = await _login(client, recep_email, "TestPass123!")
+    recep_headers = {"Authorization": f"Bearer {recep_token}"}
+    forbidden = await client.post(
+        "/api/v1/tv-info-content", headers=recep_headers, json={"title": "X", "body": "Y"}
+    )
+    assert forbidden.status_code == 403
+    # But viewer-tier roles can still read.
+    readable = await client.get("/api/v1/tv-info-content", headers=recep_headers)
+    assert readable.status_code == 200
+
+
+async def test_public_display_data_includes_only_active_info_content_ordered(
+    client: AsyncClient, make_clinic_with_owner
+):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"branch_id": deps["branch_id"], "display_name": "Info Panel TV", "is_public": True},
+        )
+    ).json()
+    slug = config["public_slug"]
+
+    await client.post(
+        "/api/v1/tv-info-content", headers=owner_headers,
+        json={"title": "Second", "body": "b", "display_order": 2},
+    )
+    await client.post(
+        "/api/v1/tv-info-content", headers=owner_headers,
+        json={"title": "First", "body": "a", "display_order": 1},
+    )
+    inactive = (
+        await client.post(
+            "/api/v1/tv-info-content", headers=owner_headers,
+            json={"title": "Hidden", "body": "c", "display_order": 0, "is_active": False},
+        )
+    ).json()
+    assert inactive["is_active"] is False
+
+    resp = await client.get(f"/api/v1/public/tv-display/{slug}")
+    assert resp.status_code == 200
+    titles = [c["title"] for c in resp.json()["info_content"]]
+    assert titles == ["First", "Second"]
+
+
+async def test_public_display_data_empty_info_panel_when_no_active_content(
+    client: AsyncClient, make_clinic_with_owner
+):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"branch_id": deps["branch_id"], "display_name": "Empty Info TV", "is_public": True},
+        )
+    ).json()
+    resp = await client.get(f"/api/v1/public/tv-display/{config['public_slug']}")
+    assert resp.status_code == 200
+    assert resp.json()["info_content"] == []
+
+
+async def test_info_content_image_upload_validation_and_delete(
+    client: AsyncClient, make_clinic_with_owner, db_session
+):
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    content = (
+        await client.post(
+            "/api/v1/tv-info-content", headers=owner_headers,
+            json={"title": "Annual Check-up Package", "body": "Bundled rate this month."},
+        )
+    ).json()
+    assert content["image_url"] is None
+
+    # Disallowed extension is rejected before anything is written.
+    bad_ext = await client.post(
+        f"/api/v1/tv-info-content/{content['id']}/image", headers=owner_headers,
+        files={"file": ("malware.exe", b"not-an-image", "application/octet-stream")},
+    )
+    assert bad_ext.status_code == 400
+
+    # A real (tiny, valid) PNG upload succeeds and sets image_url to a
+    # locally-served path.
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108020000009077"
+        "53de0000000c4944415478da6360000002000155a8f3580000000049454e44ae426082"
+    )
+    upload = await client.post(
+        f"/api/v1/tv-info-content/{content['id']}/image", headers=owner_headers,
+        files={"file": ("photo.png", png_bytes, "image/png")},
+    )
+    assert upload.status_code == 200, upload.text
+    updated = upload.json()
+    assert updated["image_url"] is not None
+    assert updated["image_url"].startswith("/media/tv-info-content/")
+
+    # The uploaded file is actually retrievable via the static mount, with
+    # zero auth (same security model as the public TV display itself).
+    fetched = await client.get(updated["image_url"])
+    assert fetched.status_code == 200
+    assert fetched.content == png_bytes
+
+    # Removing the photo clears image_url and the file 404s afterward.
+    removed = await client.delete(f"/api/v1/tv-info-content/{content['id']}/image", headers=owner_headers)
+    assert removed.status_code == 200
+    assert removed.json()["image_url"] is None
+    gone = await client.get(updated["image_url"])
+    assert gone.status_code == 404
+
+    # Other roles get 403 uploading.
+    recep_email, _u = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Receptionist")
+    recep_token = await _login(client, recep_email, "TestPass123!")
+    recep_headers = {"Authorization": f"Bearer {recep_token}"}
+    forbidden = await client.post(
+        f"/api/v1/tv-info-content/{content['id']}/image", headers=recep_headers,
+        files={"file": ("photo.png", png_bytes, "image/png")},
+    )
+    assert forbidden.status_code == 403

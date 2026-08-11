@@ -4,8 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Maximize, Minimize, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { useTvDisplayRealtime } from "@/features/tv-display/hooks/use-tv-display-realtime";
-import { groupNowServing, groupWaiting } from "@/features/tv-display/lib/grouping";
+import { InformationPanel } from "@/features/tv-display/components/InformationPanel";
+import { groupWaiting } from "@/features/tv-display/lib/grouping";
+import { getNowServingLayout } from "@/features/tv-display/lib/now-serving-layout";
+import { splitPrimaryNowServing } from "@/features/tv-display/lib/now-serving-primary";
 import { enqueueAnnouncement } from "@/lib/queue-announcer";
+import type { TvDisplayWaitingEntry } from "@/features/tv-display/types";
 
 /**
  * Shared TV Queue Display screen - extracted so both the slug-based
@@ -24,14 +28,33 @@ import { enqueueAnnouncement } from "@/lib/queue-announcer";
  *   feature-detected so unsupported browsers neither crash nor warn.
  */
 
+// Post-RC1 (50/50 Queue + Information/Advertisement Panel): these were
+// originally sized in `vw` (viewport width) units, which was correct when
+// Now Serving had the full screen width to itself. Now that it lives in a
+// `w-1/2` column alongside the new Information Panel, `vw` no longer tracks
+// its actual available width - a 3-column grid of `6vw` text still assumes
+// 100% of the screen's width, overflowing its now-halved container. `cqw`
+// (container query width, relative to the nearest `[container-type:inline-size]`
+// ancestor - see the `.now-serving-container` wrapper below) fixes this by
+// scaling off the column's real width instead of the viewport's.
 const FONT_SIZE_CLASS: Record<string, string> = {
-  Small: "text-4xl md:text-5xl lg:[font-size:clamp(2rem,4vw,4.5rem)]",
-  Medium: "text-5xl md:text-6xl lg:[font-size:clamp(2.5rem,5vw,5.5rem)]",
-  Large: "text-6xl md:text-7xl lg:[font-size:clamp(3rem,6vw,7rem)]",
-  ExtraLarge: "text-7xl md:text-8xl lg:[font-size:clamp(3.5rem,7.5vw,9rem)]",
+  Small: "text-4xl md:text-5xl lg:[font-size:clamp(2rem,8cqw,4.5rem)]",
+  Medium: "text-5xl md:text-6xl lg:[font-size:clamp(2.5rem,10cqw,5.5rem)]",
+  Large: "text-6xl md:text-7xl lg:[font-size:clamp(3rem,12cqw,7rem)]",
+  ExtraLarge: "text-7xl md:text-8xl lg:[font-size:clamp(3.5rem,15cqw,9rem)]",
 };
 
 const CURSOR_IDLE_MS = 3000;
+
+// How many upcoming numbers to show per destination in "Next in Queue".
+// Capped (rather than showing everyone waiting) so each group reliably
+// reads as one compact line instead of wrapping into two - a full waiting
+// list isn't the point of this section, a quick "who's coming up" glance
+// is. Deliberately kept low enough to fit one line even in the narrowest
+// (4-column) group layout; `flex-wrap` (not `nowrap`) is still used as a
+// visible fallback rather than an invisible clip if a screen is ever too
+// narrow for even this many.
+const NEXT_IN_QUEUE_PER_GROUP = 4;
 
 function useClock() {
   // Starts `null` (not `new Date()`) so the server-rendered markup and the
@@ -144,6 +167,7 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
           enqueueAnnouncement(entry.queueNumber, {
             doctorName: entry.doctorName,
             departmentName: entry.departmentName,
+            roomName: entry.roomName,
           });
         }
       }
@@ -185,8 +209,29 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFullscreen]);
 
-  const nowServingGroups = useMemo(() => groupNowServing(data?.nowServing ?? []), [data]);
-  const waitingGroups = useMemo(() => groupWaiting(data?.nextWaiting ?? []), [data]);
+  // Post-RC1 (single-active-ticket display rule): a doctor/department only
+  // ever gets ONE Now Serving card, even if the backend has more than one
+  // Called/Serving ticket for that same destination simultaneously - the
+  // rest are folded into "Next in Queue" instead (shown first within their
+  // group, ahead of tickets that haven't been called at all yet). This does
+  // NOT affect the announcer, which still reacts to the full unfiltered
+  // `data.nowServing` below - a demoted ticket was still really called.
+  const { primary: primaryNowServing, overflow: overflowNowServing } = useMemo(
+    () => splitPrimaryNowServing(data?.nowServing ?? []),
+    [data]
+  );
+  const waitingGroups = useMemo(() => {
+    const overflowAsWaiting: TvDisplayWaitingEntry[] = overflowNowServing.map((entry) => ({
+      queueId: entry.queueId,
+      queueNumber: entry.queueNumber,
+      patientInitials: entry.patientInitials,
+      doctorName: entry.doctorName,
+      departmentId: entry.departmentId,
+      departmentName: entry.departmentName,
+      priority: "Normal",
+    }));
+    return groupWaiting([...overflowAsWaiting, ...(data?.nextWaiting ?? [])]);
+  }, [overflowNowServing, data]);
 
   const theme = data?.theme ?? "ClinicBranded";
   const fontSizeClass = FONT_SIZE_CLASS[data?.fontSize ?? "Large"] ?? FONT_SIZE_CLASS.Large;
@@ -274,82 +319,98 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
           </div>
         </header>
 
-        {/* Center: Now Serving. A single active destination (the original,
-            still-common single-doctor-clinic case) renders as one flat grid
-            with no group heading - unchanged from before this feature. Two
-            or more simultaneous destinations (e.g. Dr. A, Dr. B, Laboratory)
-            each get their own labeled card group so it's always clear which
-            number belongs where, without ever shrinking the queue-number
-            typography below the existing comfortable-viewing-distance size. */}
-        <section className="flex flex-1 flex-col items-center justify-center gap-6 py-[2vw]">
-          <p className="text-[clamp(1.1rem,1.5vw,2rem)] font-semibold uppercase tracking-widest text-white/60">
+        {/* Post-RC1 (50/50 Queue + Information/Advertisement Panel): the
+            body splits into two equal-width halves - LEFT keeps the entire
+            existing queue display (Now Serving + Next in Queue) completely
+            unchanged, RIGHT is the new admin-configurable rotating info/ad
+            panel. `min-h-0` on both the row and the left column preserves
+            the exact same flexbox discipline already required for Now
+            Serving/Next in Queue not to get cropped (see that section's own
+            comment below) - now also needed one level up so the halved
+            width doesn't reintroduce the same overflow bug. */}
+        <div className="flex min-h-0 flex-1 gap-[1.5vw]">
+        <div className="now-serving-container flex min-h-0 w-1/2 flex-col [container-type:inline-size]">
+        {/* Center: Now Serving. Post-RC1 layout correction: every currently-
+            serving ticket is ALWAYS its own individual card - one card, one
+            ticket, one destination - never grouped into a stacked per-doctor/
+            per-department column. A single active ticket renders as one
+            large centered card; more tickets flow into a responsive grid
+            that gets progressively denser as more are simultaneously active
+            (see `getNowServingLayout`), so "Next in Queue" below never gets
+            pushed off-screen. `min-h-0` is required here: a `flex-1` child
+            otherwise refuses to shrink below its own content's height
+            (flexbox's `min-height: auto` default), which was the actual bug
+            - the section just grew to fit every card, silently pushing Next
+            in Queue past the viewport where the page's deliberate
+            `overflow-hidden` (nothing should ever require scrolling on a TV
+            kiosk) clipped it out of view entirely. `overflow-y-auto` on the
+            grid itself is a last-resort safety net for ticket counts beyond
+            what any real clinic would realistically have simultaneously
+            active - it does not kick in at normal counts. */}
+        <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-[1.2cqw]">
+          <p className="text-[clamp(1.1rem,4cqw,2rem)] font-semibold uppercase tracking-widest text-white/60">
             Now Serving
           </p>
-          {data && data.nowServing.length > 0 ? (
-            nowServingGroups.length <= 1 ? (
-              <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {data.nowServing.map((entry) => (
-                  <div key={entry.queueId} className="rounded-2xl bg-white/10 p-[1.5vw] text-center shadow-xl backdrop-blur">
-                    <p className={`${fontSizeClass} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
-                    <p className="mt-2 text-[clamp(1rem,1.6vw,2rem)]">{entry.patientInitials}</p>
-                    <p className="mt-1 text-[clamp(0.8rem,1.1vw,1.5rem)] text-white/70">
-                      {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}
-                      {entry.roomName ? ` · ${entry.roomName}` : ""}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
-                {nowServingGroups.map((group) => (
-                  <div key={group.key} className="rounded-2xl bg-white/10 p-[1.2vw] shadow-xl backdrop-blur">
-                    <p className="mb-2 text-center text-[clamp(0.9rem,1.1vw,1.4rem)] font-semibold uppercase tracking-wide text-white/70">
-                      {group.label}
-                    </p>
-                    <div className="flex flex-col items-center gap-3">
-                      {group.entries.map((entry) => (
-                        <div key={entry.queueId} className="w-full text-center">
-                          <p className={`${fontSizeClass} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
-                          <p className="text-[clamp(0.8rem,1.2vw,1.6rem)]">{entry.patientInitials}</p>
-                        </div>
-                      ))}
+          {data && primaryNowServing.length > 0 ? (
+            (() => {
+              const layout = getNowServingLayout(primaryNowServing.length, fontSizeClass);
+              return (
+                <div className={`min-h-0 overflow-y-auto ${layout.gridClassName}`}>
+                  {primaryNowServing.map((entry) => (
+                    <div
+                      key={entry.queueId}
+                      className={`rounded-2xl bg-white/10 text-center shadow-xl backdrop-blur ${layout.cardClassName}`}
+                    >
+                      <p className={`${layout.numberSizeClassName} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
+                      <p className="mt-2 text-[clamp(1rem,4.5cqw,2rem)]">{entry.patientInitials}</p>
+                      <p className="mt-1 text-[clamp(0.8rem,3cqw,1.5rem)] text-white/70">
+                        {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}
+                        {entry.roomName ? ` · ${entry.roomName}` : ""}
+                      </p>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )
+                  ))}
+                </div>
+              );
+            })()
           ) : (
-            <p className="text-[clamp(1.3rem,2vw,3rem)] text-white/50">No one is currently being served</p>
+            <p className="text-[clamp(1.3rem,5cqw,3rem)] text-white/50">No one is currently being served</p>
           )}
         </section>
 
-        {/* Next Queue */}
-        <section className="border-t border-white/10 pt-[1.5vw]">
-          <p className="mb-3 text-[clamp(1rem,1.3vw,1.8rem)] font-semibold uppercase tracking-widest text-white/60">
+        {/* Next Queue - `shrink-0`: must never be compressed away by its
+            flex sibling above, regardless of how many Now Serving cards
+            there are. Each group's upcoming numbers are capped to
+            `NEXT_IN_QUEUE_PER_GROUP` and shown WITHOUT the patient-initials
+            subtitle (per explicit feedback) so they read as one compact
+            single line instead of wrapping into two - this also keeps this
+            section's natural height small and predictable regardless of how
+            many tickets are actually waiting, which is what was starving
+            "Now Serving" of its flex space and making its cards look
+            cropped/scrolled. */}
+        <section className="shrink-0 border-t border-white/10 pt-[1.5cqw]">
+          <p className="mb-3 text-[clamp(1rem,3.2cqw,1.8rem)] font-semibold uppercase tracking-widest text-white/60">
             Next in Queue
           </p>
-          {data && data.nextWaiting.length > 0 ? (
+          {data && waitingGroups.some((g) => g.entries.length > 0) ? (
             waitingGroups.length <= 1 ? (
               <div className="flex flex-wrap gap-3">
-                {data.nextWaiting.map((entry) => (
+                {(waitingGroups[0]?.entries ?? []).slice(0, NEXT_IN_QUEUE_PER_GROUP).map((entry) => (
                   <div key={entry.queueId} className="rounded-lg bg-white/5 px-5 py-3 text-center">
-                    <p className="text-[clamp(1.1rem,1.8vw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
-                    <p className="text-[clamp(0.7rem,0.9vw,1.2rem)] text-white/60">{entry.patientInitials}</p>
+                    <p className="text-[clamp(1.1rem,4.4cqw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 {waitingGroups.map((group) => (
                   <div key={group.key}>
-                    <p className="mb-2 text-[clamp(0.8rem,1vw,1.2rem)] font-semibold uppercase tracking-wide text-white/50">
+                    <p className="mb-2 text-[clamp(0.8rem,2.4cqw,1.2rem)] font-semibold uppercase tracking-wide text-white/50">
                       {group.label}
                     </p>
                     <div className="flex flex-wrap gap-3">
-                      {group.entries.map((entry) => (
+                      {group.entries.slice(0, NEXT_IN_QUEUE_PER_GROUP).map((entry) => (
                         <div key={entry.queueId} className="rounded-lg bg-white/5 px-5 py-3 text-center">
-                          <p className="text-[clamp(1.1rem,1.8vw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
-                          <p className="text-[clamp(0.7rem,0.9vw,1.2rem)] text-white/60">{entry.patientInitials}</p>
+                          <p className="text-[clamp(1.1rem,4.4cqw,2.2rem)] font-bold tabular-nums">{entry.queueNumber}</p>
                         </div>
                       ))}
                     </div>
@@ -361,6 +422,12 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
             <p className="text-white/50">Queue is empty</p>
           )}
         </section>
+        </div>
+
+        <div className="w-1/2 [container-type:inline-size]">
+          <InformationPanel items={data?.infoContent ?? []} />
+        </div>
+        </div>
 
         {/* Bottom: announcement ticker */}
         {data && data.announcements.length > 0 ? (

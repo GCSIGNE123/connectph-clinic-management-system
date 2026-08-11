@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tv_announcement import TvAnnouncement
 from app.models.tv_display_config import TvDisplayConfig
+from app.models.tv_info_content import TvInfoContent
 from app.repositories.base import BaseRepository
 
 
@@ -92,3 +93,31 @@ class TvAnnouncementRepository(BaseRepository[TvAnnouncement]):
             a for a in announcements
             if (a.starts_at is None or a.starts_at <= today) and (a.ends_at is None or a.ends_at >= today)
         ]
+
+
+class TvInfoContentRepository(BaseRepository[TvInfoContent]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, model=TvInfoContent)
+
+    async def get_by_id_and_clinic(self, id_: UUID, clinic_id: UUID) -> TvInfoContent | None:
+        stmt = select(TvInfoContent).where(
+            TvInfoContent.id == id_, TvInfoContent.clinic_id == clinic_id, TvInfoContent.is_deleted.is_(False)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_for_clinic(self, clinic_id: UUID) -> list[TvInfoContent]:
+        stmt = select(TvInfoContent).where(
+            TvInfoContent.clinic_id == clinic_id, TvInfoContent.is_deleted.is_(False)
+        ).order_by(TvInfoContent.display_order.asc())
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_active_for_clinic(self, clinic_id: UUID) -> list[TvInfoContent]:
+        stmt = select(TvInfoContent).where(
+            TvInfoContent.clinic_id == clinic_id,
+            TvInfoContent.is_deleted.is_(False),
+            TvInfoContent.is_active.is_(True),
+        ).order_by(TvInfoContent.display_order.asc())
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

@@ -116,6 +116,11 @@ export interface QueueSettingItem {
   doctor_id?: string | null;
   department_name?: string | null;
   doctor_name?: string | null;
+  // Post-RC1 (room-based TV announcements): optional human-readable room
+  // label for this same scope (e.g. "Room 101") - when set, the TV Display
+  // and spoken announcement say the room instead of the doctor/department
+  // name.
+  room_label?: string | null;
   queue_prefix: string;
   max_daily_queue: number;
   reset_time: string;

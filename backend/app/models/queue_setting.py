@@ -46,6 +46,15 @@ class QueueSetting(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
     doctor_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("doctors.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Post-RC1 (room-based announcements): optional human-readable room
+    # label for this destination (e.g. "Room 101"), scoped by the same
+    # doctor/department/branch override chain as `queue_prefix`. When set,
+    # the TV Display and the spoken announcement say the room instead of
+    # the doctor/department name - see `TvDisplayService._build_display_data`
+    # and `queue-announcer.ts::buildAnnouncementText`. NULL (the default for
+    # every existing clinic/row) falls back to the pre-existing doctor/
+    # department-name announcement, so no existing behavior changes.
+    room_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
     queue_prefix: Mapped[str] = mapped_column(String(10), nullable=False, default="A", server_default="A")
     max_daily_queue: Mapped[int] = mapped_column(Integer, nullable=False, default=200, server_default="200")
     reset_time: Mapped[str] = mapped_column(Time, nullable=False)

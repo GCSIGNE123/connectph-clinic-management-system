@@ -99,6 +99,7 @@ from app.models.tv_display_config import (
     TvDisplayFontSize,
     TvDisplayTheme,
 )
+from app.models.tv_info_content import DEFAULT_DURATION_SECONDS, TvInfoContent, TvInfoContentType
 from app.models.user import User, UserStatus
 from app.models.visit import (
     Visit,
@@ -215,6 +216,9 @@ __all__ = [
     "TvDisplayConfig",
     "TvDisplayFontSize",
     "TvDisplayTheme",
+    "TvInfoContent",
+    "TvInfoContentType",
+    "DEFAULT_DURATION_SECONDS",
     "User",
     "UserStatus",
     "Visit",

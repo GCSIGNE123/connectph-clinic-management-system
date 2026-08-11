@@ -18,11 +18,28 @@ Two distinct security models on this one router:
   number + patient initials + doctor name + room + clinic/branch name +
   announcements - never full patient names, contact info, or medical data
   (see docs/API.md for the explicit callout).
+
+`POST /tv-info-content/{content_id}/image` is, like `migration.py`'s
+`/batches/{id}/upload`, one of the few endpoints in this codebase that
+actually relays real file bytes rather than minting a presigned-URL stub
+(see `app/core/upload_validation.py`'s docstring for why every other
+upload flow is a stub) - appropriate here because the TV Display has a
+hard "no cloud dependency, works fully offline" requirement, so a
+Supabase-presigned-URL flow would not work for it anyway. Files are
+written to local disk under `var/tv_info_content_images/` (same
+`var/`-relative-to-backend-root convention as `migration.py`'s
+`UPLOAD_ROOT`) and served back out via a `StaticFiles` mount at
+`/media/tv-info-content` (see `app/main.py`) - unauthenticated, same as
+the public TV display endpoint itself, since these are clinic-facing
+marketing/informational images meant to be shown on an unauthenticated
+public TV, never sensitive data.
 """
 
+import uuid
+from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import (
@@ -32,6 +49,7 @@ from app.core.dependencies import (
     require_config_manage_role,
     require_config_view_role,
 )
+from app.core.upload_validation import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE_BYTES
 from app.schemas.tv_display import (
     TvAnnouncementCreate,
     TvAnnouncementRead,
@@ -40,10 +58,19 @@ from app.schemas.tv_display import (
     TvDisplayConfigRead,
     TvDisplayConfigUpdate,
     TvDisplayData,
+    TvInfoContentCreate,
+    TvInfoContentRead,
+    TvInfoContentUpdate,
 )
 from app.services.tv_display_service import TvDisplayService
 
 router = APIRouter(prefix="/tv-displays", tags=["tv-display"])
+info_content_router = APIRouter(prefix="/tv-info-content", tags=["tv-display"])
+
+# Mirrors migration.py's UPLOAD_ROOT convention: parents[3] from
+# app/api/v1/tv_display.py resolves to the backend project root.
+TV_INFO_CONTENT_UPLOAD_ROOT = Path(__file__).resolve().parents[3] / "var" / "tv_info_content_images"
+TV_INFO_CONTENT_MEDIA_URL_PREFIX = "/media/tv-info-content"
 public_router = APIRouter(tags=["tv-display-public"])
 
 
@@ -160,6 +187,108 @@ async def delete_announcement(
 ) -> None:
     service = TvDisplayService(db)
     await service.delete_announcement(current_user.clinic_id, announcement_id, current_user.id)
+
+
+@info_content_router.post("", response_model=TvInfoContentRead, status_code=status.HTTP_201_CREATED)
+async def create_info_content(
+    payload: TvInfoContentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_manage_role),
+) -> TvInfoContentRead:
+    service = TvDisplayService(db)
+    content = await service.create_info_content(current_user.clinic_id, payload, current_user.id)
+    return TvInfoContentRead.model_validate(content)
+
+
+@info_content_router.get("", response_model=list[TvInfoContentRead])
+async def list_info_content(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_view_role),
+) -> list[TvInfoContentRead]:
+    service = TvDisplayService(db)
+    content = await service.list_info_content(current_user.clinic_id)
+    return [TvInfoContentRead.model_validate(c) for c in content]
+
+
+@info_content_router.patch("/{content_id}", response_model=TvInfoContentRead)
+async def update_info_content(
+    content_id: UUID,
+    payload: TvInfoContentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_manage_role),
+) -> TvInfoContentRead:
+    service = TvDisplayService(db)
+    content = await service.update_info_content(current_user.clinic_id, content_id, payload, current_user.id)
+    return TvInfoContentRead.model_validate(content)
+
+
+@info_content_router.delete("/{content_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_info_content(
+    content_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_manage_role),
+) -> None:
+    service = TvDisplayService(db)
+    await service.delete_info_content(current_user.clinic_id, content_id, current_user.id)
+
+
+@info_content_router.post("/{content_id}/image", response_model=TvInfoContentRead)
+async def upload_info_content_image(
+    content_id: UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_manage_role),
+) -> TvInfoContentRead:
+    service = TvDisplayService(db)
+    await service.get_info_content_or_404(current_user.clinic_id, content_id)
+
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type '{ext or '(none)'}' is not allowed. Allowed types: {', '.join(sorted(IMAGE_EXTENSIONS))}.",
+        )
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File is too large. Maximum allowed size is {MAX_IMAGE_SIZE_BYTES // (1024 * 1024)} MB.",
+        )
+    if len(content_bytes) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+
+    clinic_dir = TV_INFO_CONTENT_UPLOAD_ROOT / str(current_user.clinic_id)
+    clinic_dir.mkdir(parents=True, exist_ok=True)
+    # Remove any previously-uploaded image for this item first, in case a
+    # re-upload changes extension (e.g. .png -> .jpg) - otherwise the old
+    # file would linger as an orphan alongside the new one.
+    for existing in clinic_dir.glob(f"{content_id}-*"):
+        existing.unlink(missing_ok=True)
+    # Random suffix, not just `{content_id}{ext}`, so a stale cached copy of
+    # the previous image (same URL) isn't served to an already-open kiosk
+    # tab that hasn't re-fetched `TvDisplayData` yet.
+    filename = f"{content_id}-{uuid.uuid4().hex[:8]}{ext}"
+    (clinic_dir / filename).write_bytes(content_bytes)
+
+    image_url = f"{TV_INFO_CONTENT_MEDIA_URL_PREFIX}/{current_user.clinic_id}/{filename}"
+    content = await service.set_info_content_image(current_user.clinic_id, content_id, image_url, current_user.id)
+    return TvInfoContentRead.model_validate(content)
+
+
+@info_content_router.delete("/{content_id}/image", response_model=TvInfoContentRead)
+async def delete_info_content_image(
+    content_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_config_manage_role),
+) -> TvInfoContentRead:
+    service = TvDisplayService(db)
+    existing = await service.get_info_content_or_404(current_user.clinic_id, content_id)
+    if existing.image_url and existing.image_url.startswith(TV_INFO_CONTENT_MEDIA_URL_PREFIX):
+        clinic_dir = TV_INFO_CONTENT_UPLOAD_ROOT / str(current_user.clinic_id)
+        for existing_file in clinic_dir.glob(f"{content_id}-*"):
+            existing_file.unlink(missing_ok=True)
+    content = await service.set_info_content_image(current_user.clinic_id, content_id, None, current_user.id)
+    return TvInfoContentRead.model_validate(content)
 
 
 @public_router.get("/public/tv-display/{public_slug}", response_model=TvDisplayData)

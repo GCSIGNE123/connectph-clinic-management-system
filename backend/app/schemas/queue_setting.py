@@ -17,6 +17,13 @@ class QueueSettingBase(BaseModel):
     department_id: UUID | None = None
     doctor_id: UUID | None = None
     queue_prefix: str = Field(default="A", min_length=1, max_length=10)
+    # Post-RC1 (room-based TV announcements): optional human-readable room
+    # label (e.g. "Room 101") for this same doctor/department/branch scope.
+    # When set, the TV Display and spoken announcement say the room instead
+    # of the doctor/department name. NULL (omitted) keeps the pre-existing
+    # doctor/department-name announcement - no behavior change for any
+    # clinic that doesn't configure one.
+    room_label: str | None = Field(default=None, max_length=50)
     max_daily_queue: int = Field(default=200, ge=1, le=10000)
     reset_time: time
     allow_walkins: bool = True
@@ -29,6 +36,7 @@ class QueueSettingCreate(QueueSettingBase):
 
 class QueueSettingUpdate(BaseModel):
     queue_prefix: str | None = Field(default=None, min_length=1, max_length=10)
+    room_label: str | None = Field(default=None, max_length=50)
     max_daily_queue: int | None = Field(default=None, ge=1, le=10000)
     reset_time: time | None = None
     allow_walkins: bool | None = None

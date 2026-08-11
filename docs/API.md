@@ -857,6 +857,21 @@ Every config/announcement create/update/delete writes an `audit_logs` entry (`tv
 
 **Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display)**: `TvDisplayNowServing` and `TvDisplayWaitingEntry` (both `GET /public/tv-display/{public_slug}` and `GET /tv-displays/{id}/preview` share the same shape) each gained two additive fields — `department_id: UUID | null` and `department_name: string | null` — alongside the existing `doctor_name`. No existing field was removed or renamed. A config with `branch_id`/`department_id`/`doctor_id` all `null` (create one via `POST /tv-displays` with no scope fields) returns the full multi-department feed for the clinic — confirmed live: calling four different-prefix tickets (a Doctor A ticket, a Doctor B ticket, a Laboratory ticket, a Radiology ticket) simultaneously all appeared together in one `now_serving` array, each correctly labeled via `doctor_name` (when assigned) or `department_name` (department-only tickets, e.g. Laboratory/Radiology).
 
+### Post-RC1: 50/50 Queue + Information/Advertisement Panel
+
+New, clinic-wide (not per-display) `/tv-info-content` endpoints, feeding the right half of the redesigned TV Display. Uses the exact same two role gates as the rest of this feature: `require_config_manage_role` (Owner/Administrator) for writes, `require_config_view_role` (broad clinic roles) for reads.
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| `POST` | `/tv-info-content` | Owner/Administrator | Create a content item — `title`, `body`, `content_type` (`ServicePricing`/`DoctorInfo`/`HealthTip`/`PreventiveReminder`/`Announcement`/`Promotion`/`Motivational`), `duration_seconds` (3–120, default 10), `display_order`, `is_active`, optional `image_url`. |
+| `GET` | `/tv-info-content` | Any clinic role | List all of the clinic's content items (active and inactive), ordered by `display_order`. |
+| `PATCH` | `/tv-info-content/{id}` | Owner/Administrator | Partial update, any field. |
+| `DELETE` | `/tv-info-content/{id}` | Owner/Administrator | Soft-delete. |
+| `POST` | `/tv-info-content/{id}/image` | Owner/Administrator | Multipart image upload (`file` field) — one of the few endpoints in this codebase that relays real file bytes rather than minting a presigned-URL stub (see `docs/DATABASE.md`). Validates extension (`.jpg`/`.jpeg`/`.png`/`.webp`) and size (5 MB max) against the actual uploaded bytes, writes to local disk, sets `image_url` to a relative path served back via a `StaticFiles` mount at `/media/tv-info-content/{clinic_id}/{file}` (**unauthenticated**, same security posture as the public TV display itself — see below), and returns the updated item. Re-uploading replaces the previous file. |
+| `DELETE` | `/tv-info-content/{id}/image` | Owner/Administrator | Deletes the stored file (if any) and clears `image_url` back to `null`. |
+
+`TvDisplayData` (both the public snapshot and the authenticated preview) gained one additive field: `info_content: TvInfoContentRead[]` — active-only, ordered by `display_order`. An empty array (no active content, or none configured) is a valid, expected response — the frontend's Information Panel renders a "No information to display" state rather than erroring. `image_url` on each item is a **relative** path (e.g. `/media/tv-info-content/{clinic_id}/{file}`), not an absolute URL — the backend has no configured public base URL, so the frontend resolves it against the API origin at render time (`resolveTvMediaUrl()` in `frontend/src/features/tv-display/api/tv-display-api.ts`). Every content/image create/update/delete writes an `audit_logs` entry (`tv_display.info_content_created`/`info_content_updated`/`info_content_deleted`/`info_content_image_updated`).
+
 ---
 
 ## Legacy Migration Wizard (Phase 14)

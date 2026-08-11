@@ -53,17 +53,23 @@ export function saveQueueAnnouncerPrefs(prefs: QueueAnnouncerPrefs): void {
  * use the identical phrasing for the same queue number.
  *
  * Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): destination-
- * aware. When a doctor is assigned, names them ("please proceed to Dr. X");
- * for a department-only ticket (e.g. Laboratory/Radiology, no doctor
- * assigned), names the department instead ("please proceed to the
- * Laboratory"). Callers that pass neither (all existing non-TV call sites -
- * Doctor Workspace, Reception) get the original, unchanged phrasing, so
- * behavior for every existing caller is identical to before this change. */
+ * aware. When a room label is configured for this destination (e.g. "Room
+ * 101" - see `queue_settings.room_label`, set via the `/queue-settings`
+ * admin page), it takes priority over naming the doctor/department at all
+ * ("please proceed to Room 101" instead of "...to Dr. X"). Without a room,
+ * falls back to naming the doctor if assigned, else the department (e.g.
+ * Laboratory/Radiology, no doctor assigned). Callers that pass none of the
+ * three (all existing non-TV call sites - Doctor Workspace, Reception) get
+ * the original, unchanged phrasing, so behavior for every existing caller
+ * is identical to before this change. */
 export function buildAnnouncementText(
   queueNumber: string,
-  destination?: { doctorName?: string | null; departmentName?: string | null }
+  destination?: { doctorName?: string | null; departmentName?: string | null; roomName?: string | null }
 ): string {
   const base = `Now serving patient number ${queueNumber}.`;
+  if (destination?.roomName) {
+    return `${base} Please proceed to ${destination.roomName}.`;
+  }
   if (destination?.doctorName) {
     return `${base} Please proceed to Dr. ${destination.doctorName}.`;
   }
@@ -119,7 +125,7 @@ function pumpSpeakQueue(prefs: QueueAnnouncerPrefs): void {
  */
 export function enqueueAnnouncement(
   queueNumber: string | null | undefined,
-  destination?: { doctorName?: string | null; departmentName?: string | null },
+  destination?: { doctorName?: string | null; departmentName?: string | null; roomName?: string | null },
   prefsOverride?: QueueAnnouncerPrefs
 ): void {
   if (!queueNumber) return;

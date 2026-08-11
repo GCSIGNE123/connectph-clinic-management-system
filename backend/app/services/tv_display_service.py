@@ -19,9 +19,16 @@ from sqlalchemy.orm import selectinload
 
 from app.models.clinic import Clinic
 from app.models.queue import ACTIVE_QUEUE_STATUSES, Queue, QueueStatus
+from app.models.queue_setting import QueueSetting
 from app.models.tv_announcement import TvAnnouncement
 from app.models.tv_display_config import TvDisplayConfig, generate_public_slug
-from app.repositories.tv_display_repository import TvAnnouncementRepository, TvDisplayConfigRepository
+from app.models.tv_info_content import TvInfoContent
+from app.repositories.queue_setting_repository import QueueSettingRepository
+from app.repositories.tv_display_repository import (
+    TvAnnouncementRepository,
+    TvDisplayConfigRepository,
+    TvInfoContentRepository,
+)
 from app.schemas.tv_display import (
     TvAnnouncementCreate,
     TvAnnouncementRead,
@@ -31,8 +38,44 @@ from app.schemas.tv_display import (
     TvDisplayData,
     TvDisplayNowServing,
     TvDisplayWaitingEntry,
+    TvInfoContentCreate,
+    TvInfoContentRead,
+    TvInfoContentUpdate,
 )
 from app.services.audit_service import AuditService
+
+
+def _resolve_room_label(
+    settings: list[QueueSetting], *, branch_id: UUID | None, department_id: UUID | None, doctor_id: UUID | None
+) -> str | None:
+    """Post-RC1 (room-based TV announcements): in-memory re-implementation of
+    `QueueSettingRepository.get_effective_for_doctor`'s exact "narrowest
+    scope wins" resolution (doctor override -> department override ->
+    branch/clinic default), operating over an already-fetched settings list
+    instead of issuing a query per ticket. The winning row's `room_label` is
+    used as-is (including `None` if that specific row never had one
+    configured) - deliberately NOT cascading further up the chain looking
+    for an ancestor row's room_label, since prefix and room are configured
+    together on the same override row in the admin UI; a row that exists
+    for prefix purposes but leaves room blank means "no room for this
+    destination", not "inherit the parent's room"."""
+
+    def find(b: UUID | None, d: UUID | None, doc: UUID | None) -> QueueSetting | None:
+        for s in settings:
+            if s.branch_id == b and s.department_id == d and s.doctor_id == doc:
+                return s
+        return None
+
+    if doctor_id is not None:
+        row = find(branch_id, department_id, doctor_id)
+        if row is not None:
+            return row.room_label
+    if department_id is not None:
+        row = find(branch_id, department_id, None)
+        if row is not None:
+            return row.room_label
+    row = find(branch_id, None, None)
+    return row.room_label if row is not None else None
 
 
 def _initials(first_name: str, last_name: str) -> str:
@@ -50,6 +93,8 @@ class TvDisplayService:
         self.session = session
         self.config_repo = TvDisplayConfigRepository(session)
         self.announcement_repo = TvAnnouncementRepository(session)
+        self.info_content_repo = TvInfoContentRepository(session)
+        self.queue_setting_repo = QueueSettingRepository(session)
         self.audit = AuditService(session)
 
     # ---- Config CRUD -----------------------------------------------------
@@ -193,6 +238,79 @@ class TvDisplayService:
         )
         await self.session.commit()
 
+    # ---- Info Content CRUD (Post-RC1: 50/50 Information/Advertisement Panel) --
+
+    async def create_info_content(
+        self, clinic_id: UUID, data: TvInfoContentCreate, actor_id: UUID
+    ) -> TvInfoContent:
+        content = await self.info_content_repo.create(
+            clinic_id=clinic_id,
+            title=data.title,
+            body=data.body,
+            content_type=data.content_type,
+            duration_seconds=data.duration_seconds,
+            display_order=data.display_order,
+            is_active=data.is_active,
+            image_url=data.image_url,
+            created_by=actor_id,
+        )
+        await self.audit.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="tv_display.info_content_created",
+            entity_type="tv_info_content", entity_id=str(content.id),
+            metadata={"content_type": content.content_type.value},
+        )
+        await self.session.commit()
+        return content
+
+    async def list_info_content(self, clinic_id: UUID) -> list[TvInfoContent]:
+        return await self.info_content_repo.list_for_clinic(clinic_id)
+
+    async def get_info_content_or_404(self, clinic_id: UUID, content_id: UUID) -> TvInfoContent:
+        content = await self.info_content_repo.get_by_id_and_clinic(content_id, clinic_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Information content not found")
+        return content
+
+    async def update_info_content(
+        self, clinic_id: UUID, content_id: UUID, data: TvInfoContentUpdate, actor_id: UUID
+    ) -> TvInfoContent:
+        content = await self.info_content_repo.get_by_id_and_clinic(content_id, clinic_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Information content not found")
+        updates = data.model_dump(exclude_unset=True)
+        content = await self.info_content_repo.update(content, **updates)
+        await self.audit.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="tv_display.info_content_updated",
+            entity_type="tv_info_content", entity_id=str(content.id), metadata={"fields": list(updates.keys())},
+        )
+        await self.session.commit()
+        return content
+
+    async def set_info_content_image(
+        self, clinic_id: UUID, content_id: UUID, image_url: str | None, actor_id: UUID
+    ) -> TvInfoContent:
+        content = await self.info_content_repo.get_by_id_and_clinic(content_id, clinic_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Information content not found")
+        content = await self.info_content_repo.update(content, image_url=image_url)
+        await self.audit.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="tv_display.info_content_image_updated",
+            entity_type="tv_info_content", entity_id=str(content.id),
+        )
+        await self.session.commit()
+        return content
+
+    async def delete_info_content(self, clinic_id: UUID, content_id: UUID, actor_id: UUID) -> None:
+        content = await self.info_content_repo.get_by_id_and_clinic(content_id, clinic_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Information content not found")
+        await self.info_content_repo.delete(content, soft=True)
+        await self.audit.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="tv_display.info_content_deleted",
+            entity_type="tv_info_content", entity_id=str(content.id),
+        )
+        await self.session.commit()
+
     # ---- Display data snapshot --------------------------------------------
 
     async def _build_display_data(self, config: TvDisplayConfig) -> TvDisplayData:
@@ -236,6 +354,20 @@ class TvDisplayService:
             parts = [q.doctor.first_name, q.doctor.last_name]
             return " ".join(p for p in parts if p)
 
+        # Post-RC1 (room-based TV announcements): fetched once per snapshot
+        # build (not per ticket) and resolved in-memory - see
+        # `_resolve_room_label`'s docstring. `ConsultationRoom` (Phase 4
+        # master data) still has no FK link from Queue/Visit - this is a
+        # deliberately separate, simpler "room label" carried on the same
+        # QueueSetting override row already used for prefixes, not a new
+        # link to that table.
+        all_queue_settings = await self.queue_setting_repo.list_for_clinic(config.clinic_id)
+
+        def room_name(q: Queue) -> str | None:
+            return _resolve_room_label(
+                all_queue_settings, branch_id=q.branch_id, department_id=q.department_id, doctor_id=q.doctor_id
+            )
+
         now_serving = [
             TvDisplayNowServing(
                 queue_id=q.id,
@@ -244,10 +376,7 @@ class TvDisplayService:
                 doctor_name=doctor_name(q),
                 department_id=q.department_id,
                 department_name=q.department.name if q.department else None,
-                # ConsultationRoom has no FK link from Queue/Visit yet (see
-                # docs/DATABASE.md's Phase 13 gap note) - omitted rather than
-                # guessed at.
-                room_name=None,
+                room_name=room_name(q),
                 status=q.status.value,
                 called_at=q.called_at,
             )
@@ -269,6 +398,7 @@ class TvDisplayService:
         announcements = await self.announcement_repo.list_active_for_display(
             config.clinic_id, config.id, today
         )
+        info_content = await self.info_content_repo.list_active_for_clinic(config.clinic_id)
 
         branch_name = None
         if config.branch_id is not None:
@@ -294,6 +424,7 @@ class TvDisplayService:
             now_serving=now_serving,
             next_waiting=next_waiting,
             announcements=[TvAnnouncementRead.model_validate(a) for a in announcements],
+            info_content=[TvInfoContentRead.model_validate(c) for c in info_content],
             server_time=datetime.now(UTC),
             ws_channel_clinic_id=config.clinic_id,
             ws_auth_slug=config.public_slug if config.is_public else None,
