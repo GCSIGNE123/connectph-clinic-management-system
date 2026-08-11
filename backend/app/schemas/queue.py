@@ -117,6 +117,13 @@ class QueueListItem(BaseModel):
     # from this slim projection since nothing on the Queue screen needed it
     # before this phase.
     visit_id: UUID | None = None
+    # Whether this ticket's linked visit already has every required vitals
+    # field recorded - reuses the exact same required-fields/completeness
+    # rule already enforced at print time (`QueueService.get_slip`), so the
+    # Reception Queue's "Enter Vitals" button can be colored as a status
+    # indicator (taken vs. not yet taken) without a separate vitals-status
+    # concept. False when the ticket has no linked visit at all.
+    vitals_taken: bool = False
 
 
 class QueueDetail(QueueRead):

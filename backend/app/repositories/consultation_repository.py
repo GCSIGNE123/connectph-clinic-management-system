@@ -29,6 +29,27 @@ class ConsultationRepository:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
+    async def get_latest_for_visits(self, visit_ids: list[UUID], clinic_id: UUID) -> dict[UUID, Consultation]:
+        """Batched form of `get_latest_for_visit` - one query for a whole
+        page of queue tickets (e.g. the Reception Queue table's "is vitals
+        taken" indicator) instead of one query per row. Returns only the
+        latest (most recently created) consultation per visit_id, matching
+        `get_latest_for_visit`'s own "latest wins" semantics."""
+        if not visit_ids:
+            return {}
+        stmt = (
+            select(Consultation)
+            .where(Consultation.visit_id.in_(visit_ids), Consultation.clinic_id == clinic_id, Consultation.is_deleted.is_(False))
+            .options(selectinload(Consultation.soap_note))
+            .order_by(Consultation.visit_id, Consultation.created_at.desc())
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        latest_by_visit: dict[UUID, Consultation] = {}
+        for row in rows:
+            if row.visit_id not in latest_by_visit:
+                latest_by_visit[row.visit_id] = row
+        return latest_by_visit
+
     async def get_by_id(self, consultation_id: UUID, clinic_id: UUID) -> Consultation | None:
         stmt = (
             select(Consultation)

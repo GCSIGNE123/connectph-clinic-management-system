@@ -184,7 +184,16 @@ export function QueueTable({
                   </Button>
                 ) : null}
                 {onEnterVitals && item.visitId && !["Completed", "Cancelled"].includes(item.status) ? (
-                  <Button size="sm" variant="outline" onClick={() => onEnterVitals(item)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={
+                      item.vitalsTaken
+                        ? "border-green-300 bg-green-100 text-green-800 hover:bg-green-200 dark:border-green-800 dark:bg-green-900/40 dark:text-green-300 dark:hover:bg-green-900/60"
+                        : "border-red-300 bg-red-100 text-red-800 hover:bg-red-200 dark:border-red-800 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-900/60"
+                    }
+                    onClick={() => onEnterVitals(item)}
+                  >
                     Enter Vitals
                   </Button>
                 ) : null}

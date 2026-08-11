@@ -24,6 +24,7 @@ function buildQueue(overrides: Partial<QueueListItem> = {}): QueueListItem {
     createdAt: new Date().toISOString(),
     calledAt: null,
     visitId: null,
+    vitalsTaken: false,
     ...overrides,
   };
 }
@@ -127,5 +128,27 @@ describe("QueueTable", () => {
       />
     );
     expect(screen.queryByRole("button", { name: "Call" })).not.toBeInTheDocument();
+  });
+
+  it("colors the Enter Vitals button green when vitals are taken and red when they are not", () => {
+    const items = [
+      buildQueue({ id: "1", visitId: "visit-1", vitalsTaken: true }),
+      buildQueue({ id: "2", queueNumber: "A002", visitId: "visit-2", vitalsTaken: false }),
+    ];
+    render(
+      <QueueTable
+        items={items}
+        isLoading={false}
+        canManage
+        onView={noop}
+        onCancel={noop}
+        onReprint={noop}
+        onEnterVitals={noop}
+      />
+    );
+    const buttons = screen.getAllByRole("button", { name: "Enter Vitals" });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].className).toMatch(/bg-green-100/);
+    expect(buttons[1].className).toMatch(/bg-red-100/);
   });
 });

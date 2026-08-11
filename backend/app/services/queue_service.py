@@ -88,7 +88,7 @@ def _full_name(entity) -> str:
     return " ".join(p for p in parts if p)
 
 
-def _to_list_item(q: Queue) -> QueueListItem:
+def _to_list_item(q: Queue, *, vitals_taken: bool) -> QueueListItem:
     return QueueListItem(
         id=q.id,
         queue_number=q.queue_number,
@@ -109,6 +109,7 @@ def _to_list_item(q: Queue) -> QueueListItem:
         created_at=q.created_at,
         called_at=q.called_at,
         visit_id=q.visit_id,
+        vitals_taken=vitals_taken,
     )
 
 
@@ -202,16 +203,20 @@ class QueueService:
             return setting.max_daily_queue
         return 200
 
+    async def _required_vitals_fields(self, clinic_id: UUID) -> dict[str, str]:
+        required = dict(REQUIRED_VITALS_FIELDS)
+        clinic = await self.session.get(Clinic, clinic_id)
+        if clinic is not None and clinic.require_head_circumference:
+            required["head_circumference_cm"] = "Head Circumference"
+        return required
+
     async def _missing_required_vitals(self, visit_id: UUID, *, clinic_id: UUID) -> list[str]:
         """Phase 21: returns the human-readable labels of any required
         vitals fields absent from the draft visit's SoapNote. Real backend
         enforcement (defense in depth) for the "vitals must exist before a
         Consultation/Follow-up Queue ticket is created" rule - not merely a
         disabled frontend button."""
-        required = dict(REQUIRED_VITALS_FIELDS)
-        clinic = await self.session.get(Clinic, clinic_id)
-        if clinic is not None and clinic.require_head_circumference:
-            required["head_circumference_cm"] = "Head Circumference"
+        required = await self._required_vitals_fields(clinic_id)
 
         consultation = await self.consultation_repo.get_latest_for_visit(visit_id, clinic_id)
         if consultation is None:
@@ -463,7 +468,29 @@ class QueueService:
 
     async def search(self, *, clinic_id: UUID, params: QueueSearchParams) -> tuple[list[QueueListItem], int]:
         rows, total = await self.repo.search(clinic_id, params)
-        return [_to_list_item(q) for q in rows], total
+
+        # Reception Queue "Enter Vitals" button color: batched (one query
+        # for the whole page, not one per row - see
+        # `ConsultationRepository.get_latest_for_visits`) computation of
+        # whether each ticket's linked visit already has all required
+        # vitals recorded, reusing the exact same required-fields set/
+        # completeness rule already enforced at print time
+        # (`get_slip`/`_missing_required_vitals`) - no new "vitals status"
+        # concept introduced.
+        visit_ids = [q.visit_id for q in rows if q.visit_id is not None]
+        required_fields = await self._required_vitals_fields(clinic_id)
+        latest_by_visit = await self.consultation_repo.get_latest_for_visits(visit_ids, clinic_id)
+
+        def vitals_taken_for(q: Queue) -> bool:
+            if q.visit_id is None:
+                return False
+            consultation = latest_by_visit.get(q.visit_id)
+            soap = getattr(consultation, "soap_note", None) if consultation else None
+            if soap is None:
+                return False
+            return all(getattr(soap, field, None) not in (None, "") for field in required_fields)
+
+        return [_to_list_item(q, vitals_taken=vitals_taken_for(q)) for q in rows], total
 
     async def get_detail(self, queue_id: UUID, *, clinic_id: UUID) -> QueueDetail:
         queue = await self.repo.get_with_relations(queue_id, clinic_id)

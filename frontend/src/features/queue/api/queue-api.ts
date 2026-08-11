@@ -40,6 +40,7 @@ interface RawQueueListItem {
   created_at: string;
   called_at: string | null;
   visit_id: string | null;
+  vitals_taken: boolean;
 }
 
 interface RawQueueDetail extends RawQueueListItem {
@@ -104,6 +105,7 @@ function toQueueListItem(raw: RawQueueListItem): QueueListItem {
     createdAt: raw.created_at,
     calledAt: raw.called_at,
     visitId: raw.visit_id ?? null,
+    vitalsTaken: raw.vitals_taken,
   };
 }
 

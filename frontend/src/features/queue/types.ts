@@ -105,6 +105,11 @@ export interface QueueListItem {
    * Reception can open `/visits/{id}/consultation/open-for-reception` to
    * enter Subjective/Objective/vitals directly from the Queue screen. */
   visitId: string | null;
+  /** Whether this ticket's linked visit already has every required vitals
+   * field recorded - drives the "Enter Vitals" button's color on the
+   * Reception Queue table (taken vs. not yet taken). False when there's no
+   * linked visit at all. */
+  vitalsTaken: boolean;
 }
 
 export interface QueueDetail extends QueueListItem {

@@ -324,6 +324,27 @@ async def test_list_and_filter_queues(client: AsyncClient, make_clinic_with_owne
     assert body["items"][0]["queue_number"] == "A001"
 
 
+async def test_list_queues_reports_vitals_taken_per_ticket(client: AsyncClient, make_clinic_with_owner) -> None:
+    """The Reception Queue list exposes `vitals_taken` per ticket (drives
+    the "Enter Vitals" button's color) - false before vitals are entered,
+    true immediately after, computed from the same required-fields rule
+    already enforced at print time. No visit at all -> false, not an error."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    before = await client.get("/api/v1/queues", headers=headers)
+    assert before.status_code == 200
+    item_before = next(i for i in before.json()["items"] if i["id"] == created["id"])
+    assert item_before["vitals_taken"] is False
+
+    await _enter_vitals(client, headers, created["visit_id"])
+
+    after = await client.get("/api/v1/queues", headers=headers)
+    item_after = next(i for i in after.json()["items"] if i["id"] == created["id"])
+    assert item_after["vitals_taken"] is True
+
+
 async def test_patient_yakap_flag_defaults_false_and_persists(client: AsyncClient, make_clinic_with_owner) -> None:
     """Phase 2.7: `Patient.is_yakap_beneficiary` defaults False for existing-
     style patient creation, and a patient explicitly marked YAKAP persists
