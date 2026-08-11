@@ -1,13 +1,14 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { queueApi } from "@/features/queue/api/queue-api";
 import { queueKeys } from "@/features/queue/hooks/use-queues";
-import { QUEUE_PRIORITY_LABELS } from "@/features/queue/types";
+import { QUEUE_PRIORITY_LABELS, type QueueSlip } from "@/features/queue/types";
 import { ApiError } from "@/lib/api-client";
 
 export interface QueueSlipDialogProps {
@@ -39,6 +40,61 @@ function SlipField({ label, value }: { label: string; value: string }) {
         {value}
       </span>
     </p>
+  );
+}
+
+/** The ticket content itself, shared between the on-screen preview inside
+ * the dialog and the print-only portal below - the two must always render
+ * identically, so there is exactly one place that lays out the ticket. */
+function SlipContent({ slip }: { slip: QueueSlip }) {
+  return (
+    <>
+      <p className="truncate text-base font-bold uppercase">{slip.clinicName}</p>
+      <p className="truncate text-sm">{slip.branchName}</p>
+      <p className="py-1 text-6xl font-extrabold tracking-wide">{slip.queueNumber}</p>
+      <p className="text-sm font-semibold uppercase tracking-wide">{QUEUE_PRIORITY_LABELS[slip.priority]}</p>
+      <div className="border-t border-dashed border-border" />
+      <div className="space-y-1.5 pt-2 text-left text-sm">
+        <SlipField label="Patient" value={slip.patientName} />
+        <SlipField label="Department" value={slip.departmentName} />
+        <SlipField label="Doctor" value={slip.doctorName ?? "Unassigned"} />
+        <p>
+          <span className="text-muted-foreground">Date: </span>
+          {formatSlipDateTime(slip.createdAt)}
+        </p>
+      </div>
+      {/* Feature 2: a small, secondary confirmation line - deliberately
+          not styled to compete with the large queue number above it. */}
+      {slip.vitalsTaken ? <p className="pt-1 text-xs font-semibold tracking-wide text-muted-foreground">VITALS TAKEN</p> : null}
+      <p className="pt-2 text-sm font-medium">Thank you!</p>
+    </>
+  );
+}
+
+/** Print-only copy of the ticket, portaled directly onto `document.body`
+ * (a sibling of the app root, not nested inside the dialog's DOM subtree).
+ *
+ * This replaces an earlier `visibility: hidden` + `position: fixed` +
+ * "collapse body to height:0" hack. That approach left the ticket out of
+ * normal document flow at print time, so the browser's print engine had no
+ * in-flow content to measure the page against - `@page { size: 80mm auto }`
+ * then had nothing reliable to size itself to, and on real thermal hardware
+ * the printer fell back to a full default-length page (e.g. A4/Letter-ish),
+ * feeding a long blank strip below the short ticket before cutting.
+ *
+ * Portaling a plain, normal-flow (non-fixed) element to `document.body`
+ * fixes that: `@media print` hides every other top-level `body` child and
+ * leaves this one visible, so the browser's flow height for the printed
+ * page is exactly this element's own height - `size: 80mm auto` then sizes
+ * the page to the ticket's real content height, with no manual collapsing
+ * or fixed positioning required. */
+function QueueSlipPrintPortal({ slip }: { slip: QueueSlip }) {
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div id="queue-slip-print-root" className="text-center">
+      <SlipContent slip={slip} />
+    </div>,
+    document.body
   );
 }
 
@@ -99,25 +155,8 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
         ) : isLoading || !slip ? (
           <Skeleton className="h-64 w-full" />
         ) : (
-          <div id="queue-slip-printable" className="space-y-2 rounded-md border border-border p-4 text-center">
-            <p className="truncate text-base font-bold uppercase">{slip.clinicName}</p>
-            <p className="truncate text-sm">{slip.branchName}</p>
-            <p className="py-1 text-6xl font-extrabold tracking-wide">{slip.queueNumber}</p>
-            <p className="text-sm font-semibold uppercase tracking-wide">{QUEUE_PRIORITY_LABELS[slip.priority]}</p>
-            <div className="border-t border-dashed border-border" />
-            <div className="space-y-1.5 pt-2 text-left text-sm">
-              <SlipField label="Patient" value={slip.patientName} />
-              <SlipField label="Department" value={slip.departmentName} />
-              <SlipField label="Doctor" value={slip.doctorName ?? "Unassigned"} />
-              <p>
-                <span className="text-muted-foreground">Date: </span>
-                {formatSlipDateTime(slip.createdAt)}
-              </p>
-            </div>
-            {/* Feature 2: a small, secondary confirmation line - deliberately
-                not styled to compete with the large queue number above it. */}
-            {slip.vitalsTaken ? <p className="pt-1 text-xs font-semibold tracking-wide text-muted-foreground">VITALS TAKEN</p> : null}
-            <p className="pt-2 text-sm font-medium">Thank you!</p>
+          <div className="space-y-2 rounded-md border border-border p-4 text-center">
+            <SlipContent slip={slip} />
           </div>
         )}
 
@@ -164,38 +203,31 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
           size: 80mm auto;
           margin: 0;
         }
+        /* Invisible on screen - only ever shown under @media print below.
+           \`display: none\` (not visibility) so it never occupies on-screen
+           layout space or gets included in the app's normal scroll flow. */
+        #queue-slip-print-root {
+          display: none;
+        }
         @media print {
-          /* The dialog/app shell behind the ticket is hidden via the
-             visibility property (not display: none) so hiding it doesn't
-             also hide the printable ticket nested inside the same DOM
-             subtree - but visibility: hidden still reserves layout space,
-             so the full (very tall) app shell would otherwise still
-             determine the page's content height under an auto-height
-             @page, producing extra blank pages below the ticket.
-             Collapsing the body element itself to zero height with
-             overflow hidden fixes that: the ticket, positioned fixed
-             (viewport-relative, not clipped by an ancestor's overflow),
-             still renders correctly on top. */
           html,
           body {
             margin: 0 !important;
             padding: 0 !important;
           }
-          body {
-            height: 0 !important;
-            overflow: hidden !important;
+          /* \`#queue-slip-print-root\` is a direct child of \`body\` (portaled
+             there via \`createPortal\`, a sibling of the app root - see
+             \`QueueSlipPrintPortal\`'s doc comment for why). Hiding every
+             OTHER direct child of \`body\` with \`display: none\` removes them
+             from the flow entirely, so the only in-flow content left to
+             measure the printed page against is the ticket itself - no
+             \`visibility\` + fixed-position + zero-height-body workaround
+             needed. */
+          body > *:not(#queue-slip-print-root) {
+            display: none !important;
           }
-          body * {
-            visibility: hidden;
-          }
-          #queue-slip-printable,
-          #queue-slip-printable * {
-            visibility: visible;
-          }
-          #queue-slip-printable {
-            position: fixed;
-            top: 0;
-            left: 0;
+          #queue-slip-print-root {
+            display: block !important;
             /* Matches the @page width exactly; the printer's own
                unprintable edge margin is accounted for with inner padding
                (below) rather than an @page margin (which must stay 0 -
@@ -205,13 +237,13 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
             margin: 0;
             padding: 3mm;
             box-sizing: border-box;
-            border: none;
-            box-shadow: none;
             background: #fff;
             color: #000;
           }
         }
       `}</style>
+
+      {slip ? <QueueSlipPrintPortal slip={slip} /> : null}
     </Dialog>
   );
 }
