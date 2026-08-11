@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_WINDOW_SECONDS: int = 60
     RATE_LIMIT_FORGOT_PASSWORD_MAX_ATTEMPTS: int = 5
     RATE_LIMIT_FORGOT_PASSWORD_WINDOW_SECONDS: int = 300
+    # Post-RC1 (short TV display URL): the public TV endpoint now also
+    # accepts a short, admin-chosen `short_code` alias (e.g. "canora")
+    # alongside the existing 192-bit `public_slug` - see
+    # `models/tv_display_config.py`'s docstring. A short code is inherently
+    # far more guessable than the slug, so this throttles the endpoint per
+    # client IP to blunt brute-force enumeration. Generous enough that a
+    # real TV's 30s poll + WebSocket-reconnect-with-backoff never trips it.
+    RATE_LIMIT_TV_PUBLIC_MAX_ATTEMPTS: int = 60
+    RATE_LIMIT_TV_PUBLIC_WINDOW_SECONDS: int = 60
 
     # --- Redis ---
     REDIS_URL: str = "redis://localhost:6379/0"

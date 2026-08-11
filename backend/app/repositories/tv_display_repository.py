@@ -38,6 +38,27 @@ class TvDisplayConfigRepository(BaseRepository[TvDisplayConfig]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_short_code(self, short_code: str) -> TvDisplayConfig | None:
+        """Post-RC1 (short TV display URL): same access-control filters as
+        `get_by_public_slug` - `short_code` is an alternate lookup key onto
+        the exact same row, not a separate/weaker credential. Callers
+        should try `get_by_public_slug` first and only fall back to this
+        when that returns `None` (see `TvDisplayService.get_public_display_data`),
+        since a real `public_slug` will never collide with a short code."""
+        stmt = select(TvDisplayConfig).where(
+            TvDisplayConfig.short_code == short_code,
+            TvDisplayConfig.is_deleted.is_(False),
+            TvDisplayConfig.is_public.is_(True),
+            TvDisplayConfig.is_active.is_(True),
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def short_code_exists(self, short_code: str) -> bool:
+        stmt = select(TvDisplayConfig.id).where(TvDisplayConfig.short_code == short_code)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
     async def list_by_clinic(self, clinic_id: UUID, *, limit: int = 100, offset: int = 0) -> list[TvDisplayConfig]:
         stmt = (
             select(TvDisplayConfig)

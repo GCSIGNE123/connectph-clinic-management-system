@@ -48,6 +48,10 @@ export function TvDisplayList({ displays, isLoading, onEdit, onDelete, onManageA
           display.isPublic && display.publicSlug && typeof window !== "undefined"
             ? `${window.location.origin}/tv/${display.publicSlug}`
             : null;
+        const shortUrl =
+          display.isPublic && display.shortCode && typeof window !== "undefined"
+            ? `${window.location.origin}/tv/${display.shortCode}`
+            : null;
         return (
           <div key={display.id} className="flex flex-col gap-2 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-1">
@@ -74,6 +78,26 @@ export function TvDisplayList({ displays, isLoading, onEdit, onDelete, onManageA
                     <Copy className="h-3.5 w-3.5" />
                   </button>
                   <a href={publicUrl} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="Open public display">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              ) : null}
+              {shortUrl ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">Short:</span>
+                  <code className="truncate rounded bg-muted px-1.5 py-0.5">{shortUrl}</code>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(shortUrl);
+                      toast({ title: "Short URL copied", variant: "success" });
+                    }}
+                    aria-label="Copy short URL"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                  <a href={shortUrl} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="Open display via short URL">
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 </div>

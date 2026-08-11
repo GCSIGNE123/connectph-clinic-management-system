@@ -36,6 +36,7 @@ function toConfig(raw: any): TvDisplayConfig {
     displayName: raw.display_name,
     isPublic: raw.is_public,
     publicSlug: raw.public_slug,
+    shortCode: raw.short_code,
     theme: raw.theme,
     fontSize: raw.font_size,
     animationSpeed: raw.animation_speed,
@@ -129,6 +130,7 @@ function toCreatePayload(input: CreateTvDisplayInput) {
     doctor_id: input.doctorId || null,
     display_name: input.displayName,
     is_public: input.isPublic,
+    short_code: input.shortCode || null,
     theme: input.theme,
     font_size: input.fontSize,
     animation_speed: input.animationSpeed,
@@ -149,6 +151,7 @@ function toUpdatePayload(input: UpdateTvDisplayInput) {
   if (input.doctorId !== undefined) payload.doctor_id = input.doctorId || null;
   if (input.displayName !== undefined) payload.display_name = input.displayName;
   if (input.isPublic !== undefined) payload.is_public = input.isPublic;
+  if (input.shortCode !== undefined) payload.short_code = input.shortCode || null;
   if (input.theme !== undefined) payload.theme = input.theme;
   if (input.fontSize !== undefined) payload.font_size = input.fontSize;
   if (input.animationSpeed !== undefined) payload.animation_speed = input.animationSpeed;

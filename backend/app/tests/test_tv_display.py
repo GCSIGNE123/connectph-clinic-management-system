@@ -440,3 +440,125 @@ async def test_info_content_image_upload_validation_and_delete(
         files={"file": ("photo.png", png_bytes, "image/png")},
     )
     assert forbidden.status_code == 403
+
+
+# ---- Post-RC1: short TV display URL (short_code alias) --------------------
+
+
+async def test_short_code_set_at_creation_and_resolves_the_same_display(client: AsyncClient, make_clinic_with_owner):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    code = f"canora-{uuid.uuid4().hex[:8]}"
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"display_name": "Lobby TV", "is_public": True, "short_code": code},
+        )
+    ).json()
+    assert config["short_code"] == code
+    assert config["public_slug"]
+
+    # Both the long public_slug and the short short_code resolve the exact
+    # same display - same clinic/branch/theme etc, not just "some" 200.
+    by_slug = await client.get(f"/api/v1/public/tv-display/{config['public_slug']}")
+    by_code = await client.get(f"/api/v1/public/tv-display/{code}")
+    assert by_slug.status_code == 200
+    assert by_code.status_code == 200
+    assert by_slug.json()["display_name"] == by_code.json()["display_name"] == "Lobby TV"
+    # The short-code response still carries the REAL public_slug as
+    # ws_auth_slug - the WebSocket auth path never accepts the short code
+    # itself, only ever the true high-entropy slug (see
+    # `use-tv-display-realtime.ts::resolveWsToken` on the frontend side).
+    assert by_code.json()["ws_auth_slug"] == config["public_slug"]
+
+
+async def test_short_code_is_case_insensitive(client: AsyncClient, make_clinic_with_owner):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    code = f"canora-{uuid.uuid4().hex[:8]}"
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"display_name": "Lobby TV", "is_public": True, "short_code": code.upper()},
+        )
+    ).json()
+    # Normalized to lowercase server-side.
+    assert config["short_code"] == code
+
+    resp = await client.get(f"/api/v1/public/tv-display/{code}")
+    assert resp.status_code == 200
+
+
+async def test_short_code_uniqueness_enforced_across_displays(client: AsyncClient, make_clinic_with_owner):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    code = f"canora-{uuid.uuid4().hex[:8]}"
+    other_code = f"other-{uuid.uuid4().hex[:8]}"
+    await client.post(
+        "/api/v1/tv-displays", headers=owner_headers,
+        json={"display_name": "Lobby TV", "is_public": True, "short_code": code},
+    )
+    dupe = await client.post(
+        "/api/v1/tv-displays", headers=owner_headers,
+        json={"display_name": "Second TV", "is_public": True, "short_code": code},
+    )
+    assert dupe.status_code == 409
+
+    # Also enforced on update.
+    second = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"display_name": "Second TV", "is_public": True, "short_code": other_code},
+        )
+    ).json()
+    update_dupe = await client.patch(
+        f"/api/v1/tv-displays/{second['id']}", headers=owner_headers, json={"short_code": code}
+    )
+    assert update_dupe.status_code == 409
+
+    # Re-saving a display's own current code is not a conflict.
+    noop_update = await client.patch(
+        f"/api/v1/tv-displays/{second['id']}", headers=owner_headers, json={"short_code": other_code}
+    )
+    assert noop_update.status_code == 200
+
+
+async def test_unknown_short_code_returns_404_not_leaked_data(client: AsyncClient):
+    resp = await client.get("/api/v1/public/tv-display/no-such-code")
+    assert resp.status_code == 404
+
+
+async def test_short_code_respects_is_public_and_is_active_like_public_slug(
+    client: AsyncClient, make_clinic_with_owner
+):
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    code = f"canora-{uuid.uuid4().hex[:8]}"
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"display_name": "Lobby TV", "is_public": True, "short_code": code},
+        )
+    ).json()
+    resp = await client.get(f"/api/v1/public/tv-display/{code}")
+    assert resp.status_code == 200
+
+    # Disabling the display (is_active=false) stops the short code from
+    # resolving too - same access-control filters as public_slug, not a
+    # separate/weaker gate.
+    await client.patch(f"/api/v1/tv-displays/{config['id']}", headers=owner_headers, json={"is_active": False})
+    resp_after = await client.get(f"/api/v1/public/tv-display/{code}")
+    assert resp_after.status_code == 404
+
+
+async def test_long_public_slug_url_still_works_after_short_code_feature_added(
+    client: AsyncClient, make_clinic_with_owner
+):
+    """Backward-compat: a display with no short_code at all still resolves
+    via its long public_slug exactly as before this feature."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers, json={"display_name": "No Code TV", "is_public": True}
+        )
+    ).json()
+    assert config["short_code"] is None
+    resp = await client.get(f"/api/v1/public/tv-display/{config['public_slug']}")
+    assert resp.status_code == 200
+    assert resp.json()["display_name"] == "No Code TV"

@@ -43,6 +43,7 @@ export function TvDisplayFormDialog({ open, onOpenChange, initial, onSubmit, isS
         doctorId: initial.doctorId ?? undefined,
         displayName: initial.displayName,
         isPublic: initial.isPublic,
+        shortCode: initial.shortCode ?? undefined,
         theme: initial.theme,
         fontSize: initial.fontSize,
         animationSpeed: initial.animationSpeed,
@@ -196,6 +197,33 @@ export function TvDisplayFormDialog({ open, onOpenChange, initial, onSubmit, isS
                 {typeof window !== "undefined" ? window.location.origin : ""}/tv/{initial.publicSlug}
               </code>
             </p>
+          ) : null}
+
+          {form.isPublic ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="short_code">Short URL code (optional)</Label>
+              <Input
+                id="short_code"
+                value={form.shortCode ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, shortCode: e.target.value }))}
+                placeholder="canora"
+                maxLength={32}
+              />
+              <p className="text-xs text-muted-foreground">
+                A short, easy-to-type alias for the same display - useful for entering the URL on a Smart TV
+                remote. Letters, numbers, and hyphens only (e.g. &quot;canora&quot;). Leave blank to use only
+                the long URL above.
+                {form.shortCode ? (
+                  <>
+                    {" "}
+                    Short URL:{" "}
+                    <code className="font-mono">
+                      {typeof window !== "undefined" ? window.location.origin : ""}/tv/{form.shortCode}
+                    </code>
+                  </>
+                ) : null}
+              </p>
+            </div>
           ) : null}
 
           <div className="flex items-center gap-2">

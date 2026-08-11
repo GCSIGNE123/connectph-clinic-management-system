@@ -23,6 +23,19 @@ function wsUrl(clinicId: string, publicSlug: string): string {
   return `${wsBase}/api/v1/ws/queues/${clinicId}?token=${encodeURIComponent(publicSlug)}`;
 }
 
+/** Post-RC1 (short TV display URL): `identifier` (the hook's own
+ * parameter, i.e. whatever the browser's URL contained - the real
+ * `public_slug`, OR the new short `short_code` alias) is only ever used
+ * for the REST fetch. The WebSocket connection deliberately always uses
+ * `wsAuthSlug` from the snapshot response instead - the row's real,
+ * high-entropy `public_slug` - never the raw `identifier`. This keeps
+ * `ws_queues.py`'s WS auth path completely untouched by the short-code
+ * feature: it still only ever accepts the true 192-bit slug, exactly as
+ * before, regardless of which URL got the browser here. */
+export function resolveWsToken(identifier: string, wsAuthSlug: string | null): string {
+  return wsAuthSlug ?? identifier;
+}
+
 /**
  * Subscribes to the existing `/ws/queues/{clinicId}` channel (Phase 5/7's
  * realtime architecture, unchanged) for a public TV display, and re-fetches
@@ -63,16 +76,18 @@ export function useTvDisplayRealtime(publicSlug: string, pollIntervalSeconds: nu
   useEffect(() => {
     cancelledRef.current = false;
 
-    // Resolve the clinic id from the first successful snapshot fetch, then
-    // open the WS. If the initial fetch fails (bad slug, backend down),
-    // we still retry via the poll fallback below.
+    // Resolve the clinic id AND the real WS token from the first
+    // successful snapshot fetch, then open the WS. If the initial fetch
+    // fails (bad slug/code, backend down), we still retry via the poll
+    // fallback below.
     let clinicId: string | null = null;
+    let wsToken: string | null = null;
 
     const connect = () => {
-      if (cancelledRef.current || !clinicId) return;
+      if (cancelledRef.current || !clinicId || !wsToken) return;
       let socket: WebSocket;
       try {
-        socket = new WebSocket(wsUrl(clinicId, publicSlug));
+        socket = new WebSocket(wsUrl(clinicId, wsToken));
       } catch {
         setConnection((s) => onClose(s));
         scheduleReconnect();
@@ -109,6 +124,7 @@ export function useTvDisplayRealtime(publicSlug: string, pollIntervalSeconds: nu
       const snapshot = await refetch();
       if (snapshot) {
         clinicId = snapshot.wsChannelClinicId;
+        wsToken = resolveWsToken(publicSlug, snapshot.wsAuthSlug);
         connect();
       } else {
         scheduleReconnect();

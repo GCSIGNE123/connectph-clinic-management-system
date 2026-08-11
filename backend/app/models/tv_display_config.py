@@ -81,6 +81,22 @@ class TvDisplayConfig(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
 
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     public_slug: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    # Post-RC1 (short TV display URL): optional, admin-chosen, short
+    # human-typeable alias for the *same* public_slug row - e.g. "canora"
+    # so a Smart TV remote can enter `/tv/canora` instead of the 32-char
+    # `public_slug`. Deliberately NOT a replacement credential: it resolves
+    # to the same TvDisplayConfig via the same is_public/is_active/
+    # is_deleted filters as public_slug, and the response still carries the
+    # real public_slug for the WebSocket handshake - see
+    # `TvDisplayConfigRepository.get_by_short_code` and
+    # `TvDisplayService.get_public_display_data`'s docstrings for the full
+    # security-tradeoff rationale (short codes are inherently more
+    # guessable than a 192-bit slug; mitigated by this being an explicit
+    # admin opt-in, same posture as `is_public` itself, plus rate-limiting
+    # on the public lookup endpoint). Unlike `public_slug`, never
+    # auto-generated - blank/NULL means "no short alias configured", the
+    # long `public_slug` URL keeps working unconditionally either way.
+    short_code: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
 
     theme: Mapped[TvDisplayTheme] = mapped_column(
         SAEnum(TvDisplayTheme, name="tv_display_theme", values_callable=_enum_values),

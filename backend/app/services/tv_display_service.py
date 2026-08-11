@@ -110,6 +110,12 @@ class TvDisplayService:
             while await self.config_repo.slug_exists(public_slug):
                 public_slug = generate_public_slug()
 
+        if data.short_code is not None and await self.config_repo.short_code_exists(data.short_code):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Short code '{data.short_code}' is already in use by another display.",
+            )
+
         config = await self.config_repo.create(
             clinic_id=clinic_id,
             branch_id=data.branch_id,
@@ -118,6 +124,7 @@ class TvDisplayService:
             display_name=data.display_name,
             is_public=data.is_public,
             public_slug=public_slug,
+            short_code=data.short_code,
             theme=data.theme,
             font_size=data.font_size,
             animation_speed=data.animation_speed,
@@ -160,6 +167,20 @@ class TvDisplayService:
             while await self.config_repo.slug_exists(new_slug):
                 new_slug = generate_public_slug()
             updates["public_slug"] = new_slug
+
+        # Post-RC1 (short TV display URL): reject a short_code already
+        # claimed by a different display; a no-op re-save of this same
+        # display's own current code is fine.
+        new_short_code = updates.get("short_code")
+        if (
+            new_short_code is not None
+            and new_short_code != config.short_code
+            and await self.config_repo.short_code_exists(new_short_code)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Short code '{new_short_code}' is already in use by another display.",
+            )
         # Toggling is_public off: keep the slug on file (so re-enabling
         # doesn't change the URL clinics may have printed/posted) but it
         # stops resolving publicly - `get_by_public_slug` filters on
@@ -430,13 +451,27 @@ class TvDisplayService:
             ws_auth_slug=config.public_slug if config.is_public else None,
         )
 
-    async def get_public_display_data(self, public_slug: str) -> TvDisplayData:
+    async def get_public_display_data(self, identifier: str) -> TvDisplayData:
         """No-auth-required. `TvDisplayConfigRepository.get_by_public_slug`
         already filters to `is_public=True, is_active=True, is_deleted=False`
         so an unknown/disabled/private slug returns 404 here, never a 500 or
         another clinic's data - the slug itself resolves exactly one clinic's
-        scope, there is no way to widen it from the request."""
-        config = await self.config_repo.get_by_public_slug(public_slug)
+        scope, there is no way to widen it from the request.
+
+        Post-RC1 (short TV display URL): `identifier` may also be a
+        `short_code` (e.g. "canora") - tried only as a fallback after a
+        `public_slug` match fails, since a real 32-char `public_slug` will
+        never collide with a short code. This does not change what the
+        caller ends up with: `_build_display_data` still returns the exact
+        same `TvDisplayData` shape, still carrying the row's real
+        `public_slug` as `ws_auth_slug` for the WebSocket handshake - the
+        short code is purely an additional lookup key onto the identical
+        row and access-control filters, never a separate/weaker credential.
+        See `models/tv_display_config.py`'s docstring for the full
+        security-tradeoff rationale of adding this second lookup path."""
+        config = await self.config_repo.get_by_public_slug(identifier)
+        if config is None:
+            config = await self.config_repo.get_by_short_code(identifier)
         if config is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TV display not found")
         return await self._build_display_data(config)

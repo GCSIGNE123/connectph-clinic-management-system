@@ -4,6 +4,20 @@ This document tracks what is actually implemented in the CONNECT.PH Clinic Platf
 
 ---
 
+## Built — Post-RC1: Short TV Display URL
+
+**2026-08-11.** The TV Display's public URL (`/tv/<public_slug>`, a 32-character random token) is impractical to type on a Smart TV remote. Added an optional, admin-chosen short alias — e.g. `/tv/canora` — that resolves to the exact same display, without weakening the existing unauthenticated-access model.
+
+**Backend** - `tv_display_configs` gained a nullable, unique `short_code` (migration `0028_tv_display_short_code`), settable via the existing `POST`/`PATCH /tv-displays` endpoints (2-32 chars, lowercase letters/digits/hyphens, normalized server-side, `409` on a duplicate). `GET /public/tv-display/{public_slug}` now tries a `public_slug` match first and falls back to `short_code` on a miss — same `is_public`/`is_active`/`is_deleted` filters either way, so the short code is an additional lookup key onto the same row and access-control gate, never a separate or weaker one. The long `public_slug` URL is completely unaffected; every existing display keeps working exactly as before.
+
+**Security tradeoff, disclosed and mitigated, not silent**: a short code is inherently more guessable than the 192-bit `public_slug`. Mitigated by (a) being a deliberate per-display admin opt-in (never auto-generated), and (b) the public endpoint now being rate-limited per client IP (`rate_limit_tv_public`, 60 requests/60s default) to blunt brute-force enumeration. The WebSocket auth path (`ws_queues.py`) was **not modified at all** - it still only ever accepts the real `public_slug`, never a short code; the frontend (`use-tv-display-realtime.ts::resolveWsToken`) always uses the *resolved* `ws_auth_slug` from the snapshot response (the row's real slug) for the WS connection, never the raw string typed into the browser's URL bar - so reaching a display via `/tv/canora` results in byte-identical WS behavior to reaching it via the long slug. See `docs/DATABASE.md`'s section on this column for the full rationale, including why this tradeoff was accepted given the primary deployment target (single-clinic, LAN-only, non-sensitive data already documented as safe to expose unauthenticated).
+
+**Admin UI** - `/tv-displays`' create/edit dialog gained an optional "Short URL code" field (shown once "Public mode" is enabled), with a live preview of the resulting short URL; the display list shows both the long and short URL (when configured) with copy/open actions for each.
+
+**Live-verified**: set `short_code: "canora"` on a real display via the admin UI, confirmed `/tv/canora` renders the identical clinic TV display (same queue data, same rotating info panel) as the long-slug URL; confirmed a real queue ticket called via the API appeared live on the short-URL display; confirmed the API response's `ws_auth_slug` is always the real 32-character slug even when resolved via the short code; confirmed an unknown short code returns the same "Display not available" 404 page as an unknown slug, leaking nothing; confirmed the long-slug URL for the same display still works unchanged. Backend: 17/17 `test_tv_display.py` tests pass (6 new). Frontend: 39/39 `tv-display` tests pass (3 new, covering the WS-token-resolution logic). Production build succeeds.
+
+---
+
 ## Fixed — Post-RC1: TV Display "Now Serving" cropping at 5+ simultaneous tickets
 
 **2026-08-11.** Reported: Now Serving cards were cropped/clipped on the TV Display. Reproduced live by creating 8 real, simultaneous "Called" tickets across 8 distinct destinations at 1600x900 — the grid's actual required height (444px) exceeded the space the flex layout had available (336px), and the existing `overflow-y-auto` "safety net" silently clipped the overflow rather than visibly scrolling (there's no way to scroll a TV, so overflow there just looks like cropping).

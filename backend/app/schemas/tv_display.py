@@ -4,11 +4,24 @@ display payload."""
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.tv_announcement import TvAnnouncementType
 from app.models.tv_display_config import TvDisplayAnimationSpeed, TvDisplayFontSize, TvDisplayTheme
 from app.models.tv_info_content import DEFAULT_DURATION_SECONDS, TvInfoContentType
+
+
+SHORT_CODE_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$"
+
+
+def _normalize_short_code(value: str | None) -> str | None:
+    """Lowercased, trimmed - so the admin form and the public URL are
+    case-insensitive-equivalent (`/tv/Canora` and `/tv/canora` both work),
+    and so uniqueness checks can't be bypassed by casing alone."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
 
 
 class TvDisplayConfigCreate(BaseModel):
@@ -17,6 +30,11 @@ class TvDisplayConfigCreate(BaseModel):
     doctor_id: UUID | None = None
     display_name: str = Field(min_length=1, max_length=150)
     is_public: bool = False
+    # Post-RC1 (short TV display URL): optional admin-chosen alias, e.g.
+    # "canora" - see `models/tv_display_config.py`'s docstring for the
+    # security-tradeoff rationale. `None`/omitted = no short URL, the long
+    # `public_slug` URL is unaffected either way.
+    short_code: str | None = Field(default=None, min_length=2, max_length=32, pattern=SHORT_CODE_PATTERN)
     theme: TvDisplayTheme = TvDisplayTheme.CLINIC_BRANDED
     font_size: TvDisplayFontSize = TvDisplayFontSize.LARGE
     animation_speed: TvDisplayAnimationSpeed = TvDisplayAnimationSpeed.NORMAL
@@ -29,6 +47,11 @@ class TvDisplayConfigCreate(BaseModel):
     tts_template: str | None = Field(default=None, max_length=500)
     is_active: bool = True
 
+    @field_validator("short_code", mode="before")
+    @classmethod
+    def _lowercase_short_code(cls, value: str | None) -> str | None:
+        return _normalize_short_code(value)
+
 
 class TvDisplayConfigUpdate(BaseModel):
     branch_id: UUID | None = None
@@ -36,6 +59,7 @@ class TvDisplayConfigUpdate(BaseModel):
     doctor_id: UUID | None = None
     display_name: str | None = Field(default=None, min_length=1, max_length=150)
     is_public: bool | None = None
+    short_code: str | None = Field(default=None, min_length=2, max_length=32, pattern=SHORT_CODE_PATTERN)
     theme: TvDisplayTheme | None = None
     font_size: TvDisplayFontSize | None = None
     animation_speed: TvDisplayAnimationSpeed | None = None
@@ -47,6 +71,11 @@ class TvDisplayConfigUpdate(BaseModel):
     tts_enabled: bool | None = None
     tts_template: str | None = Field(default=None, max_length=500)
     is_active: bool | None = None
+
+    @field_validator("short_code", mode="before")
+    @classmethod
+    def _lowercase_short_code(cls, value: str | None) -> str | None:
+        return _normalize_short_code(value)
 
 
 class TvDisplayConfigRead(BaseModel):
@@ -60,6 +89,7 @@ class TvDisplayConfigRead(BaseModel):
     display_name: str
     is_public: bool
     public_slug: str | None
+    short_code: str | None
     theme: TvDisplayTheme
     font_size: TvDisplayFontSize
     animation_speed: TvDisplayAnimationSpeed

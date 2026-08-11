@@ -20,6 +20,12 @@ export interface TvDisplayConfig {
   displayName: string;
   isPublic: boolean;
   publicSlug: string | null;
+  /** Post-RC1 (short TV display URL): optional admin-chosen short alias
+   * for this display's public URL, e.g. "canora" - so a Smart TV remote
+   * can type `/tv/canora` instead of the long `publicSlug`. `null` = no
+   * short URL configured; the long `publicSlug` URL always keeps working
+   * either way. */
+  shortCode: string | null;
   theme: TvTheme;
   fontSize: TvFontSize;
   animationSpeed: TvAnimationSpeed;
@@ -41,6 +47,7 @@ export interface CreateTvDisplayInput {
   doctorId?: string | null;
   displayName: string;
   isPublic: boolean;
+  shortCode?: string | null;
   theme?: TvTheme;
   fontSize?: TvFontSize;
   animationSpeed?: TvAnimationSpeed;

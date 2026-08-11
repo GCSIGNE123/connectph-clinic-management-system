@@ -49,6 +49,7 @@ from app.core.dependencies import (
     require_config_manage_role,
     require_config_view_role,
 )
+from app.core.rate_limit import rate_limit_tv_public
 from app.core.upload_validation import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE_BYTES
 from app.schemas.tv_display import (
     TvAnnouncementCreate,
@@ -291,9 +292,20 @@ async def delete_info_content_image(
     return TvInfoContentRead.model_validate(content)
 
 
-@public_router.get("/public/tv-display/{public_slug}", response_model=TvDisplayData)
+@public_router.get(
+    "/public/tv-display/{public_slug}",
+    response_model=TvDisplayData,
+    dependencies=[Depends(rate_limit_tv_public)],
+)
 async def public_tv_display(public_slug: str, db: AsyncSession = Depends(get_db)) -> TvDisplayData:
     """No authentication of any kind - not even an optional bearer token is
-    read here. See module docstring for the full security-model rationale."""
+    read here. See module docstring for the full security-model rationale.
+
+    `public_slug` here doubles as the path param for the newer, optional
+    short `short_code` alias (e.g. `/public/tv-display/canora`) - see
+    `TvDisplayService.get_public_display_data`'s docstring for how the two
+    are resolved. Per-IP rate-limited (`rate_limit_tv_public`) specifically
+    because of that: a short code is far more guessable than the original
+    192-bit slug, so this throttles brute-force enumeration attempts."""
     service = TvDisplayService(db)
     return await service.get_public_display_data(public_slug)

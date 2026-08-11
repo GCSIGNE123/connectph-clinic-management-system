@@ -102,3 +102,17 @@ async def rate_limit_forgot_password(request: Request) -> None:
         max_attempts=settings.RATE_LIMIT_FORGOT_PASSWORD_MAX_ATTEMPTS,
         window_seconds=settings.RATE_LIMIT_FORGOT_PASSWORD_WINDOW_SECONDS,
     )
+
+
+async def rate_limit_tv_public(request: Request) -> None:
+    """Post-RC1 (short TV display URL): the public TV endpoint now accepts
+    a short, guessable `short_code` alongside the existing high-entropy
+    `public_slug` - see `models/tv_display_config.py`'s docstring. This
+    throttles per-IP lookups to blunt brute-force enumeration of short
+    codes without affecting a real TV's normal poll/reconnect traffic."""
+    await check_rate_limit(
+        bucket="tv-public",
+        identifier=client_identifier(request),
+        max_attempts=settings.RATE_LIMIT_TV_PUBLIC_MAX_ATTEMPTS,
+        window_seconds=settings.RATE_LIMIT_TV_PUBLIC_WINDOW_SECONDS,
+    )
