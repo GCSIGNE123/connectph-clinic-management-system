@@ -13,6 +13,7 @@ function nowServing(overrides: Partial<TvDisplayNowServing>): TvDisplayNowServin
     roomName: null,
     status: "Called",
     calledAt: "2026-08-09T00:00:00Z",
+    visitClassification: "Regular",
     ...overrides,
   };
 }
@@ -26,6 +27,7 @@ function waiting(overrides: Partial<TvDisplayWaitingEntry>): TvDisplayWaitingEnt
     departmentId: null,
     departmentName: null,
     priority: "Normal",
+    visitClassification: "Regular",
     ...overrides,
   };
 }

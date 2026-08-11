@@ -48,6 +48,8 @@ class QueueRepository(BaseRepository[Queue]):
             filters.append(Queue.status == params.status)
         if params.priority is not None:
             filters.append(Queue.priority == params.priority)
+        if params.visit_classification is not None:
+            filters.append(Queue.visit_classification == params.visit_classification)
         if params.queue_date is not None:
             filters.append(Queue.queue_date == params.queue_date)
         return filters

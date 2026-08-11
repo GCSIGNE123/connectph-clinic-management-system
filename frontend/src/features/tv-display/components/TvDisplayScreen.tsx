@@ -229,6 +229,7 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
       departmentId: entry.departmentId,
       departmentName: entry.departmentName,
       priority: "Normal",
+      visitClassification: entry.visitClassification,
     }));
     return groupWaiting([...overflowAsWaiting, ...(data?.nextWaiting ?? [])]);
   }, [overflowNowServing, data]);
@@ -362,6 +363,17 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
                       className={`rounded-2xl bg-white/10 text-center shadow-xl backdrop-blur ${layout.cardClassName}`}
                     >
                       <p className={`${layout.numberSizeClassName} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
+                      {/* Phase 2.7 (YAKAP Patient Classification): safe to
+                          show publicly - queue number, classification,
+                          doctor/department/room only. Never the patient's
+                          name; `patientInitials` below remains the only
+                          patient-identifying field on this public screen,
+                          unchanged from the pre-existing design. */}
+                      <p
+                        className={`${layout.lineSpacingClassName} ${layout.initialsSizeClassName} font-semibold uppercase tracking-wide text-white/80`}
+                      >
+                        {entry.visitClassification === "Yakap" ? "YAKAP" : "Regular"}
+                      </p>
                       <p className={`${layout.lineSpacingClassName} ${layout.initialsSizeClassName}`}>{entry.patientInitials}</p>
                       <p className={`${layout.lineSpacingClassName} ${layout.detailSizeClassName} text-white/70`}>
                         {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}

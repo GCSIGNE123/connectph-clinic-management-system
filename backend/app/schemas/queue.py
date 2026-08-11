@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.queue import QueuePriority, QueueStatus
+from app.models.queue import QueuePriority, QueueStatus, VisitClassification
 
 
 class QueueCreate(BaseModel):
@@ -22,6 +22,12 @@ class QueueCreate(BaseModel):
     # `services/queue_service.py::create_queue`. Omitted (None), every
     # existing caller/behavior is completely unchanged.
     visit_id: UUID | None = None
+    # Phase 2.7 (YAKAP Patient Classification): the PER-ENCOUNTER
+    # classification for this ticket - defaults to Regular. The frontend
+    # pre-fills this from the selected patient's `is_yakap_beneficiary` flag
+    # but the receptionist may override it per encounter; not a queue
+    # prefix, does not affect queue_number/queue_prefix generation at all.
+    visit_classification: VisitClassification = VisitClassification.REGULAR
 
 
 class QueueUpdate(BaseModel):
@@ -33,6 +39,7 @@ class QueueUpdate(BaseModel):
     service_id: UUID | None = None
     priority: QueuePriority | None = None
     notes: str | None = Field(default=None, max_length=1000)
+    visit_classification: VisitClassification | None = None
 
 
 class QueueStatusUpdate(BaseModel):
@@ -70,6 +77,7 @@ class QueueRead(BaseModel):
     queue_date: date
     priority: QueuePriority
     status: QueueStatus
+    visit_classification: VisitClassification
     notes: str | None = None
     called_at: datetime | None = None
     serving_started_at: datetime | None = None
@@ -90,6 +98,7 @@ class QueueListItem(BaseModel):
     queue_date: date
     priority: QueuePriority
     status: QueueStatus
+    visit_classification: VisitClassification
     branch_id: UUID
     department_id: UUID
     department_name: str | None = None
@@ -135,6 +144,7 @@ class QueueSearchParams(BaseModel):
     doctor_id: UUID | None = None
     status: QueueStatus | None = None
     priority: QueuePriority | None = None
+    visit_classification: VisitClassification | None = None
     queue_date: date | None = None
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)

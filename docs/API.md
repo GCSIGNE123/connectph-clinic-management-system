@@ -1165,6 +1165,22 @@ All four are gated the same as the existing `/doctor-workspace/visits/*` action 
 
 ---
 
+### Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
+
+No new endpoints - purely additive fields on existing patient/queue endpoints, plus one new query filter.
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` / `PUT` | `/patients`, `/patients/{id}` | `is_yakap_beneficiary` (bool, default `false`) accepted in `PatientCreate`/`PatientUpdate`, returned in `PatientRead`/`PatientListItem`. |
+| `POST` | `/queues` | `visit_classification` (`"Yakap"` \| `"Regular"`, default `"Regular"`) accepted in `QueueCreate` - does not affect `queue_number`/`queue_prefix` generation. |
+| `PATCH` | `/queues/{id}` | `visit_classification` now also accepted in `QueueUpdate` for reassignment after creation. |
+| `GET` | `/queues` | New optional `visit_classification` query param filters the list - view-only, does not alter queue numbers or state. |
+| `GET` | `/public/tv-display/{identifier}` | `now_serving[]`/`next_waiting[]` entries gained `visit_classification` - safe to expose publicly (same privacy tier as the pre-existing `priority` field). Patient name is still never included anywhere in this response; only `patient_initials` (pre-existing). |
+
+Role gating unchanged: classification is set/edited under the same `QUEUE_MANAGE_ROLES`/`QUEUE_TRANSITION_ROLES` as every other queue field.
+
+---
+
 ## Versioning
 
 All routes are prefixed `/api/v1`. Breaking changes will be introduced under a new prefix (`/api/v2`) rather than mutating `v1` in place; additive/backwards-compatible changes (new optional fields, new endpoints) may land in `v1` directly.

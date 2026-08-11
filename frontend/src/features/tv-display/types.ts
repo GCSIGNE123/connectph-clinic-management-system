@@ -93,6 +93,11 @@ export interface TvDisplayNowServing {
   roomName: string | null;
   status: string;
   calledAt: string | null;
+  /** Phase 2.7 (YAKAP Patient Classification): "Yakap" | "Regular" - safe
+   * to show publicly, same privacy tier as `priority`. Never the patient's
+   * name - `patientInitials` (above) remains the only patient-identifying
+   * field this schema carries. */
+  visitClassification: string;
 }
 
 export interface TvDisplayWaitingEntry {
@@ -103,6 +108,7 @@ export interface TvDisplayWaitingEntry {
   departmentId: string | null;
   departmentName: string | null;
   priority: string;
+  visitClassification: string;
 }
 
 export interface TvInfoContentItem {

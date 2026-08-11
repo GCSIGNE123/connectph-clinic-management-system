@@ -44,6 +44,7 @@ interface RawPatient {
   emergency_contact_phone?: string | null;
   photo_url?: string | null;
   qr_code?: string | null;
+  is_yakap_beneficiary: boolean;
   status: string;
   date_registered: string;
   last_visit?: string | null;
@@ -63,6 +64,7 @@ interface RawPatientListItem {
   mobile_number: string;
   photo_url?: string | null;
   branch_id?: string | null;
+  is_yakap_beneficiary: boolean;
   status: string;
   date_registered: string;
   last_visit?: string | null;
@@ -110,6 +112,7 @@ function toPatient(raw: RawPatient): Patient {
     emergencyContactPhone: raw.emergency_contact_phone,
     photoUrl: raw.photo_url,
     qrCode: raw.qr_code,
+    isYakapBeneficiary: raw.is_yakap_beneficiary,
     status: raw.status as Patient["status"],
     dateRegistered: raw.date_registered,
     lastVisit: raw.last_visit,
@@ -131,6 +134,7 @@ function toPatientListItem(raw: RawPatientListItem): PatientListItem {
     mobileNumber: raw.mobile_number,
     photoUrl: raw.photo_url,
     branchId: raw.branch_id,
+    isYakapBeneficiary: raw.is_yakap_beneficiary,
     status: raw.status as PatientListItem["status"],
     dateRegistered: raw.date_registered,
     lastVisit: raw.last_visit,
@@ -203,6 +207,7 @@ function toCreatePayload(input: CreatePatientInput) {
     remarks: input.remarks || null,
     branch_id: input.branchId || null,
     legacy_patient_id: input.legacyPatientId || null,
+    is_yakap_beneficiary: input.isYakapBeneficiary,
   };
 }
 

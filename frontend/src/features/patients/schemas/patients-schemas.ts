@@ -49,6 +49,8 @@ const basePatientFields = {
   remarks: z.string().optional().or(z.literal("")),
 
   branchId: z.string().optional().or(z.literal("")),
+
+  isYakapBeneficiary: z.boolean().default(false),
 };
 
 export const createPatientSchema = z.object({

@@ -114,6 +114,26 @@ Root cause: only the queue-number text (`numberSizeClassName`) was tier-aware in
 
 ---
 
+## Built — Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
+
+**Complete and live-verified, 2026-08-11.** Distinguishes PhilHealth YAKAP beneficiaries from Regular/walk-in patients and makes the Receptionist the explicit queue controller - built entirely on the existing queue/visit/TV Display/announcement architecture with no redesign of queue numbering, prefixes, or the multi-doctor/multi-department TV layout.
+
+**Core design - two separate, non-duplicated concepts, deliberately not a queue prefix:**
+- **`Patient.is_yakap_beneficiary`** (new boolean column, default `False`) - the patient's STANDING PhilHealth YAKAP beneficiary status, set on the patient profile (`PatientFormDialog.tsx`'s new "Patient classification" section) and persisted like any other patient field (survives refresh/logout/subsequent visits - it's a real column, not client state).
+- **`Queue.visit_classification`** (new `Yakap`/`Regular` enum column, default `Regular`) - the PER-ENCOUNTER classification of a specific queue ticket, set at ticket-creation time in `NewQueueDialog.tsx`. Pre-filled from the selected patient's `is_yakap_beneficiary` flag but independently editable per the explicit requirement that not every visit by a YAKAP beneficiary is necessarily a YAKAP encounter. `A/B/L/R`-style `queue_number`/`queue_prefix` generation (`QueueNumberGenerator`, `_resolve_prefix`) is completely untouched - classification and numbering are orthogonal, verified by creating tickets like `A001 (YAKAP)` and `A002 (Regular)` back-to-back with plain sequential numbers.
+
+**Receptionist queue control.** The Reception Queue table (`QueueTable.tsx`) gained a **Classification** column (YAKAP/Regular badge) and row-level **Call**/**Re-announce** buttons (reusing the exact Call/Re-announce mutations already built for the prior Reception Queue Workflow Improvements phase - no parallel calling mechanism). The receptionist explicitly picks which Waiting ticket to call next; there is no automatic YAKAP-first reordering anywhere in this feature, by explicit design - a future clinic-configurable auto-priority setting is out of scope. A new **All / YAKAP / Regular** filter (`queue/page.tsx`) is view-only and does not touch queue numbers, state, or ordering - confirmed via a dedicated backend filter test.
+
+**TV Display.** `TvDisplayNowServing`/`TvDisplayWaitingEntry` gained a `visit_classification` field, rendered as a YAKAP/REGULAR label on each Now Serving card (`TvDisplayScreen.tsx`) alongside the existing queue number/doctor/room - safe to expose publicly, same privacy tier as the pre-existing `priority` field. The patient's actual name is still never sent to or rendered by the public display; only the pre-existing privacy-safe `patient_initials` (e.g. "JD") remain, unchanged. Multi-doctor/multi-department grouping, the "one card per active destination" rule, and the high-ticket-count responsive layout are all untouched.
+
+**Announcement.** No parallel speech system - Call/Re-announce continue to use the exact same `queue-announcer.ts` infrastructure already shared by Doctor Workspace, Reception, and TV Display. The Receptionist's own browser and the physical TV Display browser are two separate devices that each independently announce via this shared module - confirmed to be pre-existing, intentional dual-device behavior (desk confirmation + waiting-room announcement), not something this feature introduces or changes.
+
+**RBAC** - unchanged. Classification is set/edited under the existing `QUEUE_MANAGE_ROLES`/`QUEUE_TRANSITION_ROLES` exactly like `priority` already is; no new role set was introduced. Cashier remains excluded from Call/Re-announce.
+
+**Live-verified** (see `docs/TESTING.md` for the full evidence table): created a real YAKAP-beneficiary patient and a real Regular patient as a live Receptionist session; confirmed the classification selector in New Queue pre-fills from the patient's profile flag and can be overridden; created tickets `A015 (YAKAP)` and `C003 (Regular)` with plain sequential numbers (no Y-prefix, no numbering disruption); confirmed both classifications render in the Reception Queue table and the YAKAP filter returns exactly the expected ticket; deliberately called the Regular patient (C003) first - confirmed correct destination announcement ("...proceed to Room 102"), correct TV Display update (queue number, REGULAR badge, doctor, room, no patient name), Re-announce producing exactly one additional announcement with the same ticket id/queue number (no duplicate record); then called the YAKAP patient (A015) - confirmed the same, with the TV Display correctly showing the YAKAP badge. `npx tsc --noEmit` clean, full `npm run build` succeeded (all routes, exit 0), and `test_queues.py` (23/23, incl. 5 new YAKAP tests) plus `test_tv_display.py` + `test_doctor_workspace.py` (28/28, incl. 1 new classification-exposure/no-name test) pass against the disposable test database.
+
+---
+
 ## Built (Foundation Stage)
 
 ### Multi-tenant Authentication (Phase 2)

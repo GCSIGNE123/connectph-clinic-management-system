@@ -188,6 +188,12 @@ class TvDisplayNowServing(BaseModel):
     room_name: str | None
     status: str
     called_at: datetime | None
+    # Phase 2.7 (YAKAP Patient Classification): "Yakap"/"Regular" - safe to
+    # expose publicly (not PII by itself, no different from the existing
+    # `priority` field on `TvDisplayWaitingEntry` below). Patient NAME is
+    # still never included anywhere in this schema - only `patient_initials`
+    # (pre-existing, privacy-safe by design).
+    visit_classification: str
 
 
 class TvDisplayWaitingEntry(BaseModel):
@@ -198,6 +204,7 @@ class TvDisplayWaitingEntry(BaseModel):
     department_id: UUID | None = None
     department_name: str | None = None
     priority: str
+    visit_classification: str
 
 
 class TvDisplayData(BaseModel):

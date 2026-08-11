@@ -88,12 +88,14 @@ async def _setup_queue_deps(client: AsyncClient, headers: dict, *, branch_name="
     }
 
 
-def _queue_payload(deps: dict) -> dict:
-    return {
+def _queue_payload(deps: dict, **overrides) -> dict:
+    payload = {
         "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
         "department_id": deps["department_id"], "doctor_id": deps["doctor_id"],
         "service_id": deps["service_id"], "priority": "Normal",
     }
+    payload.update(overrides)
+    return payload
 
 
 async def test_create_update_delete_display_config_owner_admin_only(client: AsyncClient, make_clinic_with_owner, db_session):
@@ -176,6 +178,48 @@ async def test_public_endpoint_zero_auth_header_returns_correct_data(client: Asy
     assert entry["queue_number"] == queue["queue_number"]
     assert entry["patient_initials"] == "JD"  # Juan Dela Cruz
     assert "Dela Cruz" not in str(data)  # never leaks the full patient name
+    assert "Juan" not in str(data)
+
+
+async def test_public_endpoint_exposes_classification_never_patient_name(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Phase 2.7 (YAKAP Patient Classification): the public TV snapshot may
+    expose the queue number and YAKAP/Regular classification, but the
+    patient's actual name must never appear anywhere in the response - not
+    even once the ticket is Called (Now Serving), which is where the
+    classification badge is meant to render."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"branch_id": deps["branch_id"], "display_name": "Public TV", "is_public": True},
+        )
+    ).json()
+    slug = config["public_slug"]
+
+    queue = (
+        await client.post(
+            "/api/v1/queues", headers=owner_headers, json=_queue_payload(deps, visit_classification="Yakap")
+        )
+    ).json()
+    assert queue["visit_classification"] == "Yakap"
+
+    await client.patch(
+        f"/api/v1/queues/{queue['id']}/status", headers=owner_headers, json={"status": "Called"}
+    )
+
+    public_resp = await client.get(f"/api/v1/public/tv-display/{slug}")
+    assert public_resp.status_code == 200, public_resp.text
+    data = public_resp.json()
+    assert data["now_serving"], "expected the Called ticket to appear under now_serving"
+    entry = data["now_serving"][0]
+    assert entry["queue_number"] == queue["queue_number"]
+    assert entry["visit_classification"] == "Yakap"
+    assert entry["patient_initials"] == "JD"
+    assert "Dela Cruz" not in str(data)
     assert "Juan" not in str(data)
 
 

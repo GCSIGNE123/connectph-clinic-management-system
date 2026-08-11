@@ -81,7 +81,7 @@ from app.models.payment import Payment, PaymentMethod, PaymentStatus, Refund
 from app.models.permission import Permission
 from app.models.prescription import Prescription, PrescriptionItem, PrescriptionStatus
 from app.models.procedure import Procedure
-from app.models.queue import Queue, QueueCounter, QueuePriority, QueueStatus, QueueStatusHistory
+from app.models.queue import Queue, QueueCounter, QueuePriority, QueueStatus, QueueStatusHistory, VisitClassification
 from app.models.doctor_session import DoctorSession
 from app.models.queue_setting import PriorityType, QueueSetting
 from app.models.referral import Referral
@@ -198,6 +198,7 @@ __all__ = [
     "QueueSetting",
     "QueueStatus",
     "QueueStatusHistory",
+    "VisitClassification",
     "Referral",
     "RefreshToken",
     "Role",

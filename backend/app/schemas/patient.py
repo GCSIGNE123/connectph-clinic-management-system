@@ -56,6 +56,11 @@ class PatientBase(BaseModel):
 
     branch_id: UUID | None = None
 
+    # Phase 2.7 (YAKAP Patient Classification): the patient's STANDING
+    # PhilHealth YAKAP beneficiary status - separate from the per-encounter
+    # `Queue.visit_classification` set at ticket-creation time.
+    is_yakap_beneficiary: bool = False
+
     @field_validator("mobile_number")
     @classmethod
     def _check_mobile_number(cls, value: str) -> str:
@@ -109,6 +114,7 @@ class PatientUpdate(BaseModel):
 
     photo_url: str | None = Field(default=None, max_length=500)
     branch_id: UUID | None = None
+    is_yakap_beneficiary: bool | None = None
 
     @field_validator("mobile_number")
     @classmethod
@@ -155,6 +161,7 @@ class PatientListItem(BaseModel):
     mobile_number: str
     photo_url: str | None = None
     branch_id: UUID | None = None
+    is_yakap_beneficiary: bool = False
     status: PatientStatus
     date_registered: date
     last_visit: datetime | None = None

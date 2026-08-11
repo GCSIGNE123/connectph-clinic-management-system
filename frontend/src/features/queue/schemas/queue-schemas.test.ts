@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newQueueSchema } from "./queue-schemas";
-import { QueuePriority } from "@/features/queue/types";
+import { QueuePriority, VisitClassification } from "@/features/queue/types";
 
 function validPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -9,6 +9,7 @@ function validPayload(overrides: Partial<Record<string, unknown>> = {}) {
     departmentId: "33333333-3333-3333-3333-333333333333",
     serviceId: "44444444-4444-4444-4444-444444444444",
     priority: QueuePriority.Normal,
+    visitClassification: VisitClassification.Regular,
     ...overrides,
   };
 }

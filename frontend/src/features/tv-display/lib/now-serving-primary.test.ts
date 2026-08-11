@@ -13,6 +13,7 @@ function entry(overrides: Partial<TvDisplayNowServing>): TvDisplayNowServing {
     roomName: null,
     status: "Called",
     calledAt: null,
+    visitClassification: "Regular",
     ...overrides,
   };
 }

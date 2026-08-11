@@ -17,6 +17,7 @@ function buildPatient(overrides: Partial<PatientListItem> = {}): PatientListItem
     lastVisit: null,
     branchId: null,
     photoUrl: null,
+    isYakapBeneficiary: false,
     ...overrides,
   };
 }

@@ -154,6 +154,7 @@ class PatientService:
             medical_notes=payload.medical_notes,
             remarks=payload.remarks,
             photo_url=payload.photo_url,
+            is_yakap_beneficiary=payload.is_yakap_beneficiary,
             status=PatientStatus.ACTIVE,
             date_registered=today,
             created_by=actor.id,

@@ -368,6 +368,7 @@ class TvDisplayService:
                 room_name=room_name(q),
                 status=q.status.value,
                 called_at=q.called_at,
+                visit_classification=q.visit_classification.value,
             )
             for q in now_serving_rows
         ]
@@ -380,6 +381,7 @@ class TvDisplayService:
                 department_id=q.department_id,
                 department_name=q.department.name if q.department else None,
                 priority=q.priority.value,
+                visit_classification=q.visit_classification.value,
             )
             for q in waiting_rows[: config.queue_size]
         ]

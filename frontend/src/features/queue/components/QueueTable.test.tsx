@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueueTable } from "./QueueTable";
-import { QueuePriority, QueueStatus, type QueueListItem } from "@/features/queue/types";
+import { QueuePriority, QueueStatus, VisitClassification, type QueueListItem } from "@/features/queue/types";
 
 function buildQueue(overrides: Partial<QueueListItem> = {}): QueueListItem {
   return {
@@ -10,6 +10,7 @@ function buildQueue(overrides: Partial<QueueListItem> = {}): QueueListItem {
     queueDate: new Date().toISOString().slice(0, 10),
     priority: QueuePriority.Normal,
     status: QueueStatus.Waiting,
+    visitClassification: VisitClassification.Regular,
     branchId: "branch-1",
     departmentId: "dept-1",
     departmentName: "General Medicine",
@@ -55,5 +56,76 @@ describe("QueueTable", () => {
     const items = [buildQueue({ status: QueueStatus.Completed })];
     render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} />);
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the YAKAP/Regular classification for each ticket", () => {
+    const items = [
+      buildQueue({ visitClassification: VisitClassification.Yakap }),
+      buildQueue({ id: "2", queueNumber: "A002", visitClassification: VisitClassification.Regular }),
+    ];
+    render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} />);
+    expect(screen.getByText("YAKAP")).toBeInTheDocument();
+    expect(screen.getByText("Regular")).toBeInTheDocument();
+  });
+
+  it("shows a Call button only for Waiting tickets when the user can transition, and calls onCall", () => {
+    const items = [buildQueue({ status: QueueStatus.Waiting })];
+    let called: QueueListItem | null = null;
+    render(
+      <QueueTable
+        items={items}
+        isLoading={false}
+        canManage
+        onView={noop}
+        onCancel={noop}
+        onReprint={noop}
+        canTransition
+        onCall={(item) => {
+          called = item;
+        }}
+        onReannounce={noop}
+      />
+    );
+    const callButton = screen.getByRole("button", { name: "Call" });
+    callButton.click();
+    expect(called).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Re-announce" })).not.toBeInTheDocument();
+  });
+
+  it("shows a Re-announce button only for Called tickets when the user can transition", () => {
+    const items = [buildQueue({ status: QueueStatus.Called })];
+    render(
+      <QueueTable
+        items={items}
+        isLoading={false}
+        canManage
+        onView={noop}
+        onCancel={noop}
+        onReprint={noop}
+        canTransition
+        onCall={noop}
+        onReannounce={noop}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Re-announce" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Call" })).not.toBeInTheDocument();
+  });
+
+  it("hides Call/Re-announce entirely when the user cannot transition (e.g. Cashier)", () => {
+    const items = [buildQueue({ status: QueueStatus.Waiting })];
+    render(
+      <QueueTable
+        items={items}
+        isLoading={false}
+        canManage={false}
+        onView={noop}
+        onCancel={noop}
+        onReprint={noop}
+        canTransition={false}
+        onCall={noop}
+        onReannounce={noop}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Call" })).not.toBeInTheDocument();
   });
 });

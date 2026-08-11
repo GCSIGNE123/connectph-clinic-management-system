@@ -62,6 +62,7 @@ const emptyDefaults: FormValues = {
   remarks: "",
   branchId: "",
   legacyPatientId: "",
+  isYakapBeneficiary: false,
 };
 
 /**
@@ -120,6 +121,7 @@ export function PatientFormDialog({ open, onOpenChange, patient }: PatientFormDi
               remarks: patient.remarks ?? "",
               branchId: patient.branchId ?? "",
               legacyPatientId: patient.legacyPatientId ?? "",
+              isYakapBeneficiary: patient.isYakapBeneficiary,
             }
           : emptyDefaults
       );
@@ -282,6 +284,23 @@ export function PatientFormDialog({ open, onOpenChange, patient }: PatientFormDi
                 <Label htmlFor="remarks">Remarks</Label>
                 <Textarea id="remarks" rows={2} {...register("remarks")} />
               </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-semibold text-foreground">Patient classification</legend>
+              <label htmlFor="isYakapBeneficiary" className="flex items-center gap-2 text-sm">
+                <input
+                  id="isYakapBeneficiary"
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border"
+                  {...register("isYakapBeneficiary")}
+                />
+                YAKAP beneficiary
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Marks this patient as a PhilHealth YAKAP beneficiary. Each queue ticket still lets the receptionist
+                confirm or change how that specific visit is classified.
+              </p>
             </fieldset>
 
             <DialogFooter>

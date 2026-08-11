@@ -51,6 +51,19 @@ class QueueStatus(str, enum.Enum):
     NO_SHOW = "NoShow"
 
 
+class VisitClassification(str, enum.Enum):
+    """Phase 2.7 (YAKAP Patient Classification): the PER-ENCOUNTER
+    classification of this specific queue ticket - deliberately NOT a queue
+    prefix (A/B/L/R numbering is completely unaffected) and NOT the same
+    thing as `Patient.is_yakap_beneficiary` (the patient's standing
+    beneficiary status). Pre-filled from the patient's beneficiary flag at
+    ticket-creation time but independently editable - a YAKAP beneficiary's
+    visit is not necessarily always processed as a YAKAP encounter."""
+
+    YAKAP = "Yakap"
+    REGULAR = "Regular"
+
+
 # Statuses considered "active" for duplicate-detection and live-dashboard purposes.
 ACTIVE_QUEUE_STATUSES = (QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.SERVING)
 
@@ -110,6 +123,13 @@ class Queue(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin, L
         nullable=False,
         default=QueueStatus.WAITING,
         server_default=QueueStatus.WAITING.value,
+        index=True,
+    )
+    visit_classification: Mapped[VisitClassification] = mapped_column(
+        SAEnum(VisitClassification, name="visit_classification", values_callable=_enum_values),
+        nullable=False,
+        default=VisitClassification.REGULAR,
+        server_default=VisitClassification.REGULAR.value,
         index=True,
     )
 

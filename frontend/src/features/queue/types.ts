@@ -12,6 +12,20 @@ export enum QueuePriority {
   VIP = "VIP",
 }
 
+/** Phase 2.7 (YAKAP Patient Classification): the PER-ENCOUNTER
+ * classification of a queue ticket - NOT a queue prefix, does not affect
+ * A/B/L/R numbering. Separate from `Patient.isYakapBeneficiary` (the
+ * patient's standing beneficiary status). */
+export enum VisitClassification {
+  Yakap = "Yakap",
+  Regular = "Regular",
+}
+
+export const VISIT_CLASSIFICATION_LABELS: Record<VisitClassification, string> = {
+  [VisitClassification.Yakap]: "YAKAP",
+  [VisitClassification.Regular]: "Regular",
+};
+
 export enum QueueStatus {
   Waiting = "Waiting",
   Called = "Called",
@@ -74,6 +88,7 @@ export interface QueueListItem {
   queueDate: string;
   priority: QueuePriority;
   status: QueueStatus;
+  visitClassification: VisitClassification;
   branchId: string;
   departmentId: string;
   departmentName: string | null;
@@ -135,6 +150,7 @@ export interface QueueListParams {
   doctorId?: string;
   status?: QueueStatus;
   priority?: QueuePriority;
+  visitClassification?: VisitClassification;
   queueDate?: string;
   page?: number;
   pageSize?: number;
@@ -153,6 +169,10 @@ export interface CreateQueueInput {
   // instead of creating a new Visit - required for Consultation/Follow-up
   // services, ignored/rejected server-side for everything else.
   visitId?: string | null;
+  // Phase 2.7 (YAKAP Patient Classification): defaults to Regular server-side
+  // when omitted. The frontend pre-fills this from the selected patient's
+  // `isYakapBeneficiary` flag but the receptionist may override it per ticket.
+  visitClassification?: VisitClassification;
 }
 
 export interface UpdateQueueInput {
@@ -161,6 +181,7 @@ export interface UpdateQueueInput {
   serviceId?: string;
   priority?: QueuePriority;
   notes?: string;
+  visitClassification?: VisitClassification;
 }
 
 /** Live event payloads pushed over `/ws/queues/{clinicId}`. */

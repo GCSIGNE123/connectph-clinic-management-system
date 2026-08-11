@@ -78,6 +78,11 @@ export interface Patient {
   photoUrl?: string | null;
   qrCode?: string | null;
 
+  /** Phase 2.7 (YAKAP Patient Classification): the patient's STANDING
+   * PhilHealth YAKAP beneficiary status - separate from the per-encounter
+   * classification set on each queue ticket. */
+  isYakapBeneficiary: boolean;
+
   status: PatientStatus;
   dateRegistered: string;
   lastVisit?: string | null;
@@ -100,6 +105,7 @@ export type PatientListItem = Pick<
   | "mobileNumber"
   | "photoUrl"
   | "branchId"
+  | "isYakapBeneficiary"
   | "status"
   | "dateRegistered"
   | "lastVisit"

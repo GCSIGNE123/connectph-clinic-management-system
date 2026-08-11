@@ -1241,3 +1241,14 @@ Migration `0021_doctor_session.py` (`down_revision = "0020_shift_management"`). 
 - **No `LegacyMixin`**: a net-new feature with no legacy-system equivalent.
 
 **Down-revision chain**: `0021_doctor_session` → `0020_shift_management` (unchanged, append-only). Verified clean end-to-end (`alembic upgrade head` from a fresh empty database through all 21 migrations) on a throwaway database before applying to the real dev database.
+
+## Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
+
+Migration `0029_yakap_classification.py` (`down_revision = "0028_tv_display_short_code"`). Two additive columns, no new tables, no rewrite of existing rows.
+
+- **`patients.is_yakap_beneficiary`** (`Boolean`, `NOT NULL`, `server_default=false`): the patient's STANDING PhilHealth YAKAP beneficiary status, set on the patient profile. Every existing patient row defaults to `false` (Regular) with no backfill needed.
+- **`queues.visit_classification`** (new Postgres enum `visit_classification` — `'Yakap' | 'Regular'`, `NOT NULL`, `server_default='Regular'`, indexed via `ix_queues_visit_classification`): the PER-ENCOUNTER classification of a specific queue ticket, set at ticket-creation time (pre-filled from the patient's beneficiary flag, independently editable). Deliberately NOT a queue prefix — `queue_number`/`queue_prefix` generation (`QueueCounter`, `QueueNumberGenerator`) is completely untouched by this migration.
+- **Why two separate columns, not one**: `Patient.is_yakap_beneficiary` is a standing fact about the patient; `Queue.visit_classification` is a per-visit operational decision the receptionist makes (pre-filled from the patient flag, but not forced) — collapsing them into one field would have made it impossible to record a YAKAP beneficiary's walk-in visit as a Regular encounter, or vice versa, which the spec explicitly required.
+- **No `LegacyMixin` interaction**: both columns are additive on existing tables; legacy-migrated rows get the same safe defaults as any other pre-existing row.
+
+**Down-revision chain**: `0029_yakap_classification` → `0028_tv_display_short_code` (unchanged, append-only). Applied cleanly to the real dev database with `alembic upgrade head`; the disposable test database (built via `Base.metadata.create_all()`, not Alembic — see `backend/app/tests/conftest.py`) picks up both columns automatically from the updated models, no separate migration step needed there.

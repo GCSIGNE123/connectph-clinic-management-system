@@ -9,13 +9,21 @@ import { Card } from "@/components/ui/card";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useDebouncedValue } from "@/features/patients/hooks/use-patients";
 import { useQueues, useQueueRealtime } from "@/features/queue/hooks/use-queues";
-import { useCancelQueue } from "@/features/queue/hooks/use-queue-mutations";
+import { useCancelQueue, useChangeQueueStatus, useReannounceQueue } from "@/features/queue/hooks/use-queue-mutations";
 import { NewQueueDialog } from "@/features/queue/components/NewQueueDialog";
 import { QueueTable } from "@/features/queue/components/QueueTable";
 import { QueueDetailsDialog } from "@/features/queue/components/QueueDetailsDialog";
 import { QueueSlipDialog } from "@/features/queue/components/QueueSlipDialog";
 import { ReceptionVitalsDialog } from "@/features/consultation/components/ReceptionVitalsDialog";
-import { QUEUE_PRIORITY_LABELS, QUEUE_STATUS_LABELS, QueuePriority, QueueStatus, type QueueListItem } from "@/features/queue/types";
+import {
+  QUEUE_PRIORITY_LABELS,
+  QUEUE_STATUS_LABELS,
+  VISIT_CLASSIFICATION_LABELS,
+  QueuePriority,
+  QueueStatus,
+  VisitClassification,
+  type QueueListItem,
+} from "@/features/queue/types";
 import { Role } from "@/types";
 
 const MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist]);
@@ -42,6 +50,7 @@ export default function QueuePage() {
   const debouncedSearch = useDebouncedValue(searchInput, 300);
   const [status, setStatus] = useState<QueueStatus | "">("");
   const [priority, setPriority] = useState<QueuePriority | "">("");
+  const [visitClassification, setVisitClassification] = useState<VisitClassification | "">("");
 
   const [newQueueOpen, setNewQueueOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
@@ -50,16 +59,19 @@ export default function QueuePage() {
   const [vitalsTarget, setVitalsTarget] = useState<QueueListItem | null>(null);
 
   const cancelQueue = useCancelQueue();
+  const changeStatus = useChangeQueueStatus();
+  const reannounceQueue = useReannounceQueue();
 
   const params = useMemo(
     () => ({
       search: debouncedSearch || undefined,
       status: status || undefined,
       priority: priority || undefined,
+      visitClassification: visitClassification || undefined,
       pageSize: 100,
       page: 1,
     }),
-    [debouncedSearch, status, priority]
+    [debouncedSearch, status, priority, visitClassification]
   );
 
   const { data, isLoading } = useQueues(params);
@@ -105,6 +117,20 @@ export default function QueuePage() {
             </option>
           ))}
         </Select>
+        {/* Phase 2.7 (YAKAP Patient Classification): viewing/filtering only -
+            does not alter queue numbers, state, or ordering in any way. */}
+        <Select
+          value={visitClassification}
+          onChange={(e) => setVisitClassification(e.target.value as VisitClassification | "")}
+          className="sm:w-48"
+        >
+          <option value="">All (YAKAP / Regular)</option>
+          {Object.values(VisitClassification).map((c) => (
+            <option key={c} value={c}>
+              {VISIT_CLASSIFICATION_LABELS[c]}
+            </option>
+          ))}
+        </Select>
       </div>
 
       <Card>
@@ -116,6 +142,9 @@ export default function QueuePage() {
           onReprint={(item) => setSlipId(item.id)}
           onCancel={(item) => setCancelTarget(item)}
           onEnterVitals={canEnterVitals ? (item) => setVitalsTarget(item) : undefined}
+          canTransition={canTransition}
+          onCall={(item) => changeStatus.mutate({ id: item.id, status: QueueStatus.Called })}
+          onReannounce={(item) => reannounceQueue.mutate(item.id)}
         />
       </Card>
 

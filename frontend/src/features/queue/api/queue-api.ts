@@ -26,6 +26,7 @@ interface RawQueueListItem {
   queue_date: string;
   priority: string;
   status: string;
+  visit_classification: string;
   branch_id: string;
   department_id: string;
   department_name: string | null;
@@ -89,6 +90,7 @@ function toQueueListItem(raw: RawQueueListItem): QueueListItem {
     queueDate: raw.queue_date,
     priority: raw.priority as QueueListItem["priority"],
     status: raw.status as QueueListItem["status"],
+    visitClassification: raw.visit_classification as QueueListItem["visitClassification"],
     branchId: raw.branch_id,
     departmentId: raw.department_id,
     departmentName: raw.department_name,
@@ -148,6 +150,7 @@ function toQueryString(params: QueueListParams): string {
   if (params.doctorId) search.set("doctor_id", params.doctorId);
   if (params.status) search.set("status", params.status);
   if (params.priority) search.set("priority", params.priority);
+  if (params.visitClassification) search.set("visit_classification", params.visitClassification);
   if (params.queueDate) search.set("queue_date", params.queueDate);
 
   const pageSize = params.pageSize ?? 50;
@@ -168,6 +171,7 @@ function toCreatePayload(input: CreateQueueInput) {
     priority: input.priority,
     notes: input.notes || null,
     visit_id: input.visitId || null,
+    visit_classification: input.visitClassification,
   };
 }
 
@@ -178,6 +182,7 @@ function toUpdatePayload(input: UpdateQueueInput) {
     service_id: input.serviceId,
     priority: input.priority,
     notes: input.notes,
+    visit_classification: input.visitClassification,
   };
 }
 

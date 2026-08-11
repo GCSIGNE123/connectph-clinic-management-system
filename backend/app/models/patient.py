@@ -123,6 +123,15 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin,
     photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     qr_code: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
 
+    # Phase 2.7 (YAKAP Patient Classification): the patient's STANDING
+    # PhilHealth YAKAP beneficiary status - a patient-profile-level fact,
+    # separate from `Queue.visit_classification` (the per-ENCOUNTER
+    # classification set at ticket-creation time, pre-filled from this flag
+    # but independently editable - not every visit by a YAKAP beneficiary is
+    # necessarily processed as a YAKAP encounter). Defaults False so every
+    # existing patient record is unaffected.
+    is_yakap_beneficiary: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+
     status: Mapped[PatientStatus] = mapped_column(
         SAEnum(PatientStatus, name="patient_status", values_callable=_enum_values),
         nullable=False,

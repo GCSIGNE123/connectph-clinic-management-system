@@ -17,7 +17,7 @@ import { createCrudApi } from "@/features/clinic-config/api/crud-factory";
 import { useDebouncedValue } from "@/features/patients/hooks/use-patients";
 import { useCreateQueue } from "@/features/queue/hooks/use-queue-mutations";
 import { newQueueSchema, type NewQueueInput } from "@/features/queue/schemas/queue-schemas";
-import { QUEUE_PRIORITY_LABELS, QueuePriority } from "@/features/queue/types";
+import { QUEUE_PRIORITY_LABELS, QueuePriority, VISIT_CLASSIFICATION_LABELS, VisitClassification } from "@/features/queue/types";
 import { useShiftRequiredError } from "@/features/shifts/hooks/use-shift-required-error";
 import { ShiftRequiredDialog } from "@/features/shifts/components/ShiftRequiredDialog";
 import { visitsApi } from "@/features/visits/api/visits-api";
@@ -65,7 +65,9 @@ export interface NewQueueDialogProps {
 export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated }: NewQueueDialogProps) {
   const [patientSearch, setPatientSearch] = useState("");
   const debouncedSearch = useDebouncedValue(patientSearch, 300);
-  const [selectedPatient, setSelectedPatient] = useState<{ id: string; label: string } | null>(null);
+  const [selectedPatient, setSelectedPatient] = useState<{ id: string; label: string; isYakapBeneficiary: boolean } | null>(
+    null
+  );
   const [inlinePatientOpen, setInlinePatientOpen] = useState(false);
 
   // Phase 21 (Vitals-before-Queue): draft Visit created for Consultation/
@@ -98,6 +100,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
       serviceId: "",
       priority: QueuePriority.Normal,
       notes: "",
+      visitClassification: VisitClassification.Regular,
     },
   });
 
@@ -111,6 +114,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
         serviceId: "",
         priority: QueuePriority.Normal,
         notes: "",
+        visitClassification: VisitClassification.Regular,
       });
       setSelectedPatient(null);
       setPatientSearch("");
@@ -156,9 +160,13 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     });
   }, [doctors.data, departmentId, branchId]);
 
-  function selectPatient(id: string, label: string) {
-    setSelectedPatient({ id, label });
+  function selectPatient(id: string, label: string, isYakapBeneficiary: boolean) {
+    setSelectedPatient({ id, label, isYakapBeneficiary });
     setValue("patientId", id, { shouldValidate: true });
+    // Phase 2.7 (YAKAP Patient Classification): pre-fills the per-ticket
+    // classification from the patient's standing beneficiary flag - the
+    // receptionist can still change it below before creating the ticket.
+    setValue("visitClassification", isYakapBeneficiary ? VisitClassification.Yakap : VisitClassification.Regular);
     setPatientSearch("");
   }
 
@@ -222,6 +230,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
         priority: values.priority,
         notes: values.notes,
         visitId: requiresVitals ? draftVisit?.id ?? null : null,
+        visitClassification: values.visitClassification,
       });
       onOpenChange(false);
       onCreated?.(result.id);
@@ -279,7 +288,9 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                           key={p.id}
                           type="button"
                           className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent"
-                          onClick={() => selectPatient(p.id, `${p.firstName} ${p.lastName} — ${p.patientNumber}`)}
+                          onClick={() =>
+                            selectPatient(p.id, `${p.firstName} ${p.lastName} — ${p.patientNumber}`, p.isYakapBeneficiary)
+                          }
                         >
                           <span>
                             {p.firstName} {p.lastName}
@@ -366,6 +377,22 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                     ))}
                   </Select>
                 </div>
+                <div className="space-y-1.5">
+                  <Label>Classification</Label>
+                  <Select {...register("visitClassification")}>
+                    {Object.values(VisitClassification).map((c) => (
+                      <option key={c} value={c}>
+                        {VISIT_CLASSIFICATION_LABELS[c]}
+                      </option>
+                    ))}
+                  </Select>
+                  {selectedPatient?.isYakapBeneficiary ? (
+                    <p className="text-xs text-muted-foreground">
+                      Pre-filled from patient profile (YAKAP beneficiary) - change if this visit is being processed
+                      differently.
+                    </p>
+                  ) : null}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -418,7 +445,9 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
         onOpenChange={setInlinePatientOpen}
         onCreated={(id, label) => {
           setInlinePatientOpen(false);
-          selectPatient(id, label);
+          // The inline quick-create form has no YAKAP field - defaults to
+          // Regular, same as `Patient.is_yakap_beneficiary`'s own default.
+          selectPatient(id, label, false);
         }}
       />
       <ShiftRequiredDialog open={shiftError.open} onOpenChange={shiftError.setOpen} />

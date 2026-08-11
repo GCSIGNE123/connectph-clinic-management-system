@@ -7,7 +7,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQueueDetail } from "@/features/queue/hooks/use-queues";
 import { useChangeQueueStatus, useReannounceQueue } from "@/features/queue/hooks/use-queue-mutations";
 import { QueueStatusBadge } from "@/features/queue/components/QueueStatusBadge";
-import { QUEUE_PRIORITY_LABELS, QUEUE_STATUS_LABELS, QUEUE_STATUS_TRANSITIONS, QueueStatus } from "@/features/queue/types";
+import {
+  QUEUE_PRIORITY_LABELS,
+  QUEUE_STATUS_LABELS,
+  QUEUE_STATUS_TRANSITIONS,
+  VISIT_CLASSIFICATION_LABELS,
+  QueueStatus,
+} from "@/features/queue/types";
 
 export interface QueueDetailsDialogProps {
   queueId: string | null;
@@ -41,6 +47,7 @@ export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: Que
               <Field label="Doctor" value={queue.doctorName ?? "Unassigned"} />
               <Field label="Service" value={queue.serviceName ?? "—"} />
               <Field label="Priority" value={QUEUE_PRIORITY_LABELS[queue.priority]} />
+              <Field label="Classification" value={VISIT_CLASSIFICATION_LABELS[queue.visitClassification]} />
               <Field label="Branch" value={queue.branchName ?? "—"} />
               <Field label="Created" value={new Date(queue.createdAt).toLocaleString()} />
             </div>

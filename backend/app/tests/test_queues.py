@@ -324,6 +324,142 @@ async def test_list_and_filter_queues(client: AsyncClient, make_clinic_with_owne
     assert body["items"][0]["queue_number"] == "A001"
 
 
+async def test_patient_yakap_flag_defaults_false_and_persists(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Phase 2.7: `Patient.is_yakap_beneficiary` defaults False for existing-
+    style patient creation, and a patient explicitly marked YAKAP persists
+    that flag across a fresh GET (proxy for "survives refresh/logout")."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+
+    regular = (
+        await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json={
+                "first_name": "Regular",
+                "last_name": "Patient",
+                "birth_date": "1990-01-01",
+                "gender": "Male",
+                "civil_status": "Single",
+                "mobile_number": "+639170000001",
+            },
+        )
+    ).json()["patient"]
+    assert regular["is_yakap_beneficiary"] is False
+
+    yakap = (
+        await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json={
+                "first_name": "Yakap",
+                "last_name": "Patient",
+                "birth_date": "1990-01-01",
+                "gender": "Female",
+                "civil_status": "Single",
+                "mobile_number": "+639170000002",
+                "is_yakap_beneficiary": True,
+            },
+        )
+    ).json()["patient"]
+    assert yakap["is_yakap_beneficiary"] is True
+
+    refetched = (await client.get(f"/api/v1/patients/{yakap['id']}", headers=headers)).json()
+    assert refetched["is_yakap_beneficiary"] is True
+
+
+async def test_queue_ticket_preserves_visit_classification_independent_of_prefix(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Phase 2.7: YAKAP/Regular is a classification, NOT a queue prefix -
+    two tickets in the same A-prefix bucket, one YAKAP and one Regular,
+    still get plain sequential A001/A002 numbers with no Y-prefix and no
+    numbering disruption."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    yakap_ticket = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, visit_classification="Yakap"))
+    ).json()
+    assert yakap_ticket["queue_number"] == "A001"
+    assert yakap_ticket["queue_prefix"] == "A"
+    assert yakap_ticket["visit_classification"] == "Yakap"
+
+    patient2 = (
+        await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json={
+                "first_name": "Second", "last_name": "Patient", "birth_date": "1991-02-02",
+                "gender": "Female", "civil_status": "Single", "mobile_number": "+639170000003",
+            },
+        )
+    ).json()["patient"]
+    regular_ticket = (
+        await client.post(
+            "/api/v1/queues",
+            headers=headers,
+            json=_queue_payload(deps, patient_id=patient2["id"], visit_classification="Regular"),
+        )
+    ).json()
+    assert regular_ticket["queue_number"] == "A002"
+    assert regular_ticket["queue_prefix"] == "A"
+    assert regular_ticket["visit_classification"] == "Regular"
+
+
+async def test_queue_visit_classification_defaults_regular_when_omitted(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """A raw `POST /queues` call that omits `visit_classification` entirely
+    (e.g. an older/unaware client) still succeeds and defaults to Regular -
+    fully backward compatible."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    assert created["visit_classification"] == "Regular"
+
+
+async def test_queue_filter_by_visit_classification(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Filtering by classification is view-only - does not alter queue
+    numbers, prefixes, or ticket state."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, visit_classification="Yakap"))
+
+    patient2 = (
+        await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json={
+                "first_name": "Filter", "last_name": "Test", "birth_date": "1992-03-03",
+                "gender": "Male", "civil_status": "Single", "mobile_number": "+639170000004",
+            },
+        )
+    ).json()["patient"]
+    await client.post(
+        "/api/v1/queues",
+        headers=headers,
+        json=_queue_payload(deps, patient_id=patient2["id"], visit_classification="Regular"),
+    )
+
+    yakap_only = await client.get(
+        "/api/v1/queues", headers=headers, params={"visit_classification": "Yakap"}
+    )
+    assert yakap_only.status_code == 200
+    yakap_body = yakap_only.json()
+    assert yakap_body["total"] == 1
+    assert yakap_body["items"][0]["queue_number"] == "A001"
+
+    regular_only = await client.get(
+        "/api/v1/queues", headers=headers, params={"visit_classification": "Regular"}
+    )
+    regular_body = regular_only.json()
+    assert regular_body["total"] == 1
+    assert regular_body["items"][0]["queue_number"] == "A002"
+
+    all_tickets = await client.get("/api/v1/queues", headers=headers)
+    assert all_tickets.json()["total"] == 2
+
+
 async def test_queue_slip_payload(client: AsyncClient, make_clinic_with_owner) -> None:
     _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, headers)

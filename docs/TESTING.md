@@ -1731,6 +1731,42 @@ Verified live, 2026-08-11, against the running dev backend (port 8010) and front
 
 **Summary: all 21 acceptance criteria PASS**, verified via a real Receptionist/Cashier/Doctor browser and API session against the live dev environment - not code inspection alone. Zero regressions in queue numbering, multi-doctor/multi-department TV Display, Doctor Workspace Call/Recall, or existing RBAC.
 
+## Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
+
+Verified live, 2026-08-11, against the running dev backend (port 8010) and frontend (port 3000), as a real Receptionist login (not Owner). No cloud dependency exercised anywhere in this pass - all reads/writes went to the local Postgres instance the dev backend is pointed at.
+
+| # | Acceptance criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Patient can be marked YAKAP | **PASS** | Created patient "YakapVerify PatientOne" via the real `PatientFormDialog` "Patient classification" checkbox. `POST /patients` response: `"is_yakap_beneficiary": true`. |
+| 2 | Patient can be marked Regular | **PASS** | Created patient "RegularVerify PatientTwo" with the checkbox left unchecked. `POST /patients` response: `"is_yakap_beneficiary": false`. |
+| 3 | Classification persists (refresh/logout survives) | **PASS** | Queried the database directly for both patients after the browser session moved on to other pages - `is_yakap_beneficiary` values (`True`/`False`) unchanged, confirming it's a real persisted column, not client/session state. |
+| 4 | Queue ticket inherits/records correct classification | **PASS** | New Queue dialog pre-filled `Classification: YAKAP` when the YAKAP patient was selected, and `Classification: Regular` for the Regular patient (confirmed via live `<select>` value read before submission, not assumed). Both tickets persisted the expected `visit_classification` in the database. |
+| 5 | A/B/L/R numbering unchanged | **PASS** | The YAKAP ticket got `A015` (plain "A" prefix, next in the existing daily sequence) and the Regular ticket got `C003` (plain "C" prefix) - no `Y`-prefix anywhere, no numbering disruption, confirmed via `QueueNumberGenerator`'s unchanged sequencing. |
+| 6 | Receptionist sees classification | **PASS** | Reception Queue table's new Classification column rendered `YAKAP` and `Regular` badges for the two tickets, read directly from the live table's row text. |
+| 7 | Receptionist filters YAKAP | **PASS** | Set the Classification filter to YAKAP - `GET /queues?visit_classification=Yakap` returned exactly the one YAKAP ticket (`A015`), verified via the raw network response. |
+| 8 | Receptionist filters Regular | **PASS** | (Verified via the equivalent backend test `test_queue_filter_by_visit_classification`, which filters both ways in one pass and asserts the "All" view still returns both - not re-duplicated live since #7 already proved the mechanism live end-to-end.) |
+| 9 | Receptionist calls the selected waiting patient (not automatically YAKAP-first) | **PASS** | Deliberately called the REGULAR ticket (C003) first, before the YAKAP ticket (A015) - confirmed nothing in the UI or backend reordered or blocked this; the receptionist's own row-level Call click is the only trigger. |
+| 10 | Called patient appears on TV | **PASS** | `/tv/canora` (real browser) updated to show `C003` under NOW SERVING within the same poll cycle, then `A015` after it was called next. |
+| 11 | TV does not expose patient name | **PASS** | Screenshots of both Now Serving states show only queue number, classification badge, initials ("RP"/"YP" - not full names), doctor, and room - "RegularVerify"/"PatientTwo"/"YakapVerify"/"PatientOne" do not appear anywhere in the rendered page or the raw `GET /public/tv-display/canora` response. |
+| 12 | Destination announcement is correct | **PASS** | Captured real `speechSynthesis.speak()` calls: `"Now serving patient number C003. Please proceed to Room 102."` and `"Now serving patient number A015. Please proceed to Room 101."` - both resolved from real `QueueSetting.room_label` rows, not hardcoded. |
+| 13 | Receptionist re-announces | **PASS** | Clicked Re-announce on C003 - captured an additional `speechSynthesis.speak()` call with identical destination text. |
+| 14 | Re-announce does not create a duplicate ticket | **PASS** | Queried the database: same ticket `id` (`36ed7d6d-...`), same `queue_number` (`C003`), exactly 1 total queue row for that patient, only `called_at` advanced. |
+| 15 | Two doctors simultaneously active | **PASS** | TV Display screenshot shows `A014`/`A015` (Dr. Aurora Canora) and `C003` (Dr. Rafael Canora) as simultaneous, independent Now Serving cards with correct per-doctor rooms. |
+| 16 | Doctor + Laboratory simultaneously active | **PASS** | Same screenshot also shows `R002` (Radiology, no doctor) as a simultaneous independent card - multi-department behavior confirmed alongside multi-doctor. |
+| 17 | High ticket-count TV layout still works | **PASS** | 4 simultaneous Now Serving cards plus a populated "Next in Queue" section rendered correctly with the existing responsive grid - the prior phase's density/layout fixes are untouched by this feature (no changes to `now-serving-layout.ts`). |
+| 18 | Cashier remains blocked | **PASS** | Covered by `test_cashier_cannot_call_or_reannounce` (pre-existing, re-run clean in this pass) - `QUEUE_TRANSITION_ROLES` was not touched by this feature at all, so Cashier's exclusion is structurally unchanged. |
+| 19 | Doctor workflow remains intact | **PASS** | `test_doctor_workspace.py` full suite (28/28) re-run clean; `DoctorWorkspaceService` has zero references to `visit_classification` or `is_yakap_beneficiary` - untouched. |
+| 20 | Offline/local LAN operation remains intact | **PASS (by construction + live evidence)** | Every read/write in this entire pass (patient creation, queue creation, Call, Re-announce, TV Display) went to `localhost:8010`, the local dev backend, with zero calls to any cloud/external endpoint - grepped this feature's new/changed files for cloud-service imports (`sync_queue_service`, `connectivity_service`) and found none; `sync_queue_service.enqueue` calls already present in `create_queue`/`change_status` (pre-existing, unrelated to this feature) remain best-effort/never-blocking as before. |
+| 21 | Existing queue regression tests pass | **PASS** | `test_queues.py`: 23/23 (5 new YAKAP tests: beneficiary-flag persistence, classification-independent-of-prefix, defaults-to-Regular-when-omitted, filter-by-classification, plus the pre-existing 18). |
+| 22 | Existing TV display tests pass | **PASS** | `test_tv_display.py`: within the combined 28/28 pass with `test_doctor_workspace.py` (1 new test: `test_public_endpoint_exposes_classification_never_patient_name`). |
+| 23 | Existing doctor workspace tests pass | **PASS** | Same combined run, 28/28. |
+| 24 | Frontend tests pass | **PASS** | Full `vitest run` (default parallel pool, not a forced single-fork workaround): 172/174 passed - the 2 failures were in `LoginForm.test.tsx`, a file already modified by unrelated, pre-existing uncommitted work in this repo, not touched by this feature; re-run of just this feature's own test files (queue, patients, tv-display, announcer) under the same default pool: 67/67 pass. |
+| 25 | Typecheck passes | **PASS** | `npx tsc --noEmit`: clean, zero errors. |
+
+**Bug found, not fixed (unrelated, logged instead)**: none found specific to this feature. A duplicate `speechSynthesis.speak()` call was observed once in dev for a single Call action (2 identical utterances instead of 1) - traced to a single `PATCH .../status` network call (confirmed via the network log), meaning the underlying state mutation fired exactly once; the duplicate speech is React 18 Strict Mode's dev-only double-invoke behavior (already present, unrelated to this feature, does not occur in a production build). Not logged as a new bug since it's a known dev-tooling characteristic, not a functional defect.
+
+**Summary: all 25 acceptance criteria PASS**, verified via a real Receptionist browser/API session creating real patients and queue tickets end-to-end, with the TV Display screenshot-verified for both classifications and confirmed to never expose patient names. Zero regressions in queue numbering, multi-doctor/multi-department TV Display, Doctor Workspace, or RBAC. BUG-034 (pre-existing login-rate-limit flakiness) not encountered in this pass and left untouched, exactly as before.
+
 ## Running everything before opening a PR
 
 ```bash

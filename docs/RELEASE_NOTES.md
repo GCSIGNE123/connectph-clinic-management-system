@@ -4,6 +4,12 @@ Human-readable, per-version summary of what shipped. For full detail see [`FEATU
 
 ---
 
+## Post-RC1 — Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
+
+**As of 2026-08-11.** Distinguishes PhilHealth YAKAP beneficiaries from Regular/walk-in patients, and makes the Receptionist the explicit queue controller. `Patient.is_yakap_beneficiary` (standing beneficiary status, patient profile) and `Queue.visit_classification` (per-encounter classification, queue ticket, pre-filled from the patient flag but independently editable) are two deliberately separate, additive fields - not a queue prefix, not a merge of the two concepts. Existing A/B/L/R queue numbering, multi-doctor/multi-department TV Display grouping, and destination-aware announcements are completely untouched. Reception Queue gained a Classification column, an All/YAKAP/Regular filter, and row-level Call/Re-announce actions (reusing the Call/Re-announce mechanism already built for the prior Reception Queue Workflow Improvements release) - the receptionist explicitly chooses who is called next; there is no automatic YAKAP-first prioritization. The public TV Display now shows a YAKAP/REGULAR badge alongside the existing queue number/doctor/room, while continuing to never expose the patient's name (only the pre-existing privacy-safe initials). Live-verified end-to-end with a real Receptionist session: two real patients (one YAKAP, one Regular), two queue tickets with plain sequential numbers, a deliberate out-of-order call (Regular called before YAKAP), correct destination announcements, correct TV Display updates with no patient name exposed, and a clean Re-announce with no duplicate ticket. See `docs/FEATURES.md`/`docs/TESTING.md` for full detail, `docs/DATABASE.md`/`docs/API.md` for schema/endpoint detail. No cloud dependency introduced or exercised - fully functional against the local clinic server alone.
+
+---
+
 ## Post-RC1 — Multi-Department / Multi-Doctor TV Queue Display
 
 **As of 2026-08-07, continuing the same narrow freeze exception used throughout Post-RC1**: extends the existing TV Queue Display and queue-prefix configuration to support multiple simultaneous doctors/departments (e.g. Doctor A, Doctor B, Laboratory, Radiology all shown at once, each with their own independent prefix and sequencing), for the Canora Medical Clinic go-live. Explicitly additive on top of the existing Queue/QueueSetting/TvDisplayConfig architecture — no redesign of queue creation, calling, or numbering; no change to existing single-doctor clinic behavior.

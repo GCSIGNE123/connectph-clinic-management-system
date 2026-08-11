@@ -105,6 +105,7 @@ function toDisplayData(raw: any): TvDisplayData {
       roomName: e.room_name,
       status: e.status,
       calledAt: e.called_at,
+      visitClassification: e.visit_classification,
     })),
     nextWaiting: (raw.next_waiting ?? []).map((e: any) => ({
       queueId: e.queue_id,
@@ -114,6 +115,7 @@ function toDisplayData(raw: any): TvDisplayData {
       departmentId: e.department_id ?? null,
       departmentName: e.department_name ?? null,
       priority: e.priority,
+      visitClassification: e.visit_classification,
     })),
     announcements: (raw.announcements ?? []).map(toAnnouncement),
     infoContent: (raw.info_content ?? []).map(toInfoContent),
