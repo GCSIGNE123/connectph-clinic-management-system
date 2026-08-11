@@ -6,7 +6,8 @@
       "runtimeExecutable": "powershell",
       "runtimeArgs": ["-ExecutionPolicy", "Bypass", "-File", "backend/scripts/start_dev_postgres.ps1"],
       "cwd": ".",
-      "port": 5433
+      "port": 5433,
+      "autoPort": false
     },
     {
       "name": "frontend",
@@ -18,9 +19,9 @@
     {
       "name": "backend",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8000"],
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8010"],
       "cwd": "backend",
-      "port": 8000
+      "port": 8010
     }
   ]
 }
