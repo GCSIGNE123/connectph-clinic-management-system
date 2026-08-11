@@ -54,29 +54,38 @@ export function saveQueueAnnouncerPrefs(prefs: QueueAnnouncerPrefs): void {
  *
  * Post-RC1 (Multi-Department/Multi-Doctor TV Queue Display): destination-
  * aware. When a room label is configured for this destination (e.g. "Room
- * 101" - see `queue_settings.room_label`, set via the `/queue-settings`
+ * #1" - see `queue_settings.room_label`, set via the `/queue-settings`
  * admin page), it takes priority over naming the doctor/department at all
- * ("please proceed to Room 101" instead of "...to Dr. X"). Without a room,
- * falls back to naming the doctor if assigned, else the department (e.g.
- * Laboratory/Radiology, no doctor assigned). Callers that pass none of the
- * three (all existing non-TV call sites - Doctor Workspace, Reception) get
- * the original, unchanged phrasing, so behavior for every existing caller
- * is identical to before this change. */
+ * ("please proceed to Room #1" instead of "...to Dr. X") - the doctor's
+ * name is deliberately never spoken once a room is configured for that
+ * destination. Without a room, falls back to naming the doctor if
+ * assigned, else the department (e.g. Laboratory/Radiology, no doctor
+ * assigned). Callers that pass none of the three (all existing non-TV call
+ * sites - Doctor Workspace, Reception) get the original, unchanged
+ * phrasing, so behavior for every existing caller is identical to before
+ * this change.
+ *
+ * Wording (queue announcement wording update): "Now serving Patient #
+ * {N}, please proceed to {destination}." - this exact template is shared
+ * by every caller (Doctor Workspace Call/Recall, Reception Call/Re-
+ * announce, TV Display), so a single change here updates the spoken
+ * wording everywhere at once - no parallel announcement text exists
+ * anywhere else in the codebase. */
 export function buildAnnouncementText(
   queueNumber: string,
   destination?: { doctorName?: string | null; departmentName?: string | null; roomName?: string | null }
 ): string {
-  const base = `Now serving patient number ${queueNumber}.`;
+  const base = `Now serving Patient # ${queueNumber}`;
   if (destination?.roomName) {
-    return `${base} Please proceed to ${destination.roomName}.`;
+    return `${base}, please proceed to ${destination.roomName}.`;
   }
   if (destination?.doctorName) {
-    return `${base} Please proceed to Dr. ${destination.doctorName}.`;
+    return `${base}, please proceed to Dr. ${destination.doctorName}.`;
   }
   if (destination?.departmentName) {
-    return `${base} Please proceed to the ${destination.departmentName}.`;
+    return `${base}, please proceed to the ${destination.departmentName}.`;
   }
-  return `Now serving patient number ${queueNumber}`;
+  return base;
 }
 
 // Post-RC1: a small local speak-queue so multiple simultaneous

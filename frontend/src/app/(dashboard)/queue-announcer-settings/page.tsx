@@ -52,7 +52,7 @@ export default function QueueAnnouncerSettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Queue Announcer</h1>
         <p className="text-sm text-muted-foreground">
-          Controls the spoken (&quot;Now serving patient number…&quot;) announcement that plays on this
+          Controls the spoken (&quot;Now serving Patient #…&quot;) announcement that plays on this
           browser/device whenever a Call or Recall succeeds, on the Doctor Workspace, Reception Queue, and
           TV Display views. Stored on this browser/device only.
         </p>
