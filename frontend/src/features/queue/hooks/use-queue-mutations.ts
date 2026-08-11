@@ -66,18 +66,53 @@ export function useChangeQueueStatus() {
       queueApi.changeStatus(id, status, note),
     onSuccess: (queue, variables) => {
       queryClient.invalidateQueries({ queryKey: queueKeys.all });
-      // Item 8: the Reception Queue view's "Call" action is this same
-      // Waiting -> Called status transition (there's no separate
-      // call/recall endpoint here like Doctor Workspace has) - announce it
-      // with the same shared TTS utility so both surfaces sound identical.
+      // Item 8 / Reception Queue Workflow Improvements: the Reception Queue
+      // view's "Call" action is this same Waiting -> Called status
+      // transition (there's no separate call endpoint here like Doctor
+      // Workspace has) - announce it with the same shared TTS utility, now
+      // destination-aware (room/doctor/department, same priority TV
+      // Display already uses) so it says "...proceed to Room 1" instead of
+      // just the bare queue number.
       if (variables.status === QueueStatus.Called) {
-        announceQueueNumber(queue.queueNumber);
+        announceQueueNumber(queue.queueNumber, {
+          doctorName: queue.doctorName,
+          departmentName: queue.departmentName,
+          roomName: queue.roomName,
+        });
       }
     },
     onError: (error) => {
       toast({
         title: "Could not update status",
         description: errorMessage(error, "That transition isn't allowed from the current status."),
+        variant: "error",
+      });
+    },
+  });
+}
+
+/** Reception Queue Workflow Improvements (Feature 3, re-announce): repeats
+ * the destination-aware announcement for a ticket already `Called`, without
+ * creating a new ticket or touching queue numbering/status - see
+ * `QueueService.reannounce` on the backend. */
+export function useReannounceQueue() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: (id: string) => queueApi.reannounce(id),
+    onSuccess: (queue) => {
+      queryClient.invalidateQueries({ queryKey: queueKeys.all });
+      announceQueueNumber(queue.queueNumber, {
+        doctorName: queue.doctorName,
+        departmentName: queue.departmentName,
+        roomName: queue.roomName,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not re-announce ticket",
+        description: errorMessage(error, "Please try again."),
         variant: "error",
       });
     },

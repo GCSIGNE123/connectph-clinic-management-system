@@ -5,15 +5,37 @@ rejection, status transitions + history, list/search/filter, tenant isolation.
 """
 
 import asyncio
+import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.dependencies import get_db
+from app.core.security import hash_password
 from app.main import app
+from app.models.role import Role
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    """Reception Queue Workflow Improvements added several new tests to this
+    file that each log in via the real endpoint, which pushed this file's
+    own login count past `RATE_LIMIT_LOGIN_MAX_ATTEMPTS` within a single
+    ~60s pytest run - the same shared, real, non-test-mode-bypassed limiter
+    documented as BUG-034 (there, the trigger is combining this file with
+    OTHER login-heavy files in one run; here it's this file alone getting
+    large enough). Reusing the exact same per-test reset already used by
+    `test_tv_display.py`/`test_billing.py`/etc. rather than inventing a new
+    workaround - this only affects test isolation, no production code path."""
+    from app.core.rate_limit import _memory_buckets
+
+    _memory_buckets.clear()
+    yield
+    _memory_buckets.clear()
 
 
 async def _login(client: AsyncClient, clinic_slug: str, email: str, password: str) -> str:
@@ -29,6 +51,27 @@ async def _owner_headers(client: AsyncClient, make_clinic_with_owner):
     clinic, owner, password = await make_clinic_with_owner()
     token = await _login(client, clinic.slug, owner.email, password)
     return clinic, owner, {"Authorization": f"Bearer {token}"}
+
+
+async def _make_role_login(db_session: AsyncSession, *, clinic_id, role_name: str, password: str = "TestPass123!"):
+    """Same pattern used across the rest of the suite (e.g. `test_tv_display.py`,
+    `test_billing.py`) - creates a real user of the given role directly via
+    the DB session (no HTTP round-trip needed for setup) and returns its
+    login email."""
+    from app.models.user import User
+
+    result = await db_session.execute(select(Role).where(Role.name == role_name))
+    role = result.scalar_one()
+    suffix = uuid.uuid4().hex[:8]
+    email = f"{role_name.lower()}-{suffix}@example.com"
+    user = User(
+        clinic_id=clinic_id, email=email, username=f"{role_name.lower()}{suffix}", hashed_password=hash_password(password),
+        first_name="Test", last_name=role_name, role_id=role.id, is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return email, user
 
 
 async def _setup_queue_deps(client: AsyncClient, headers: dict) -> dict:
@@ -87,6 +130,31 @@ def _queue_payload(deps: dict, **overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+async def _enter_vitals(client: AsyncClient, headers: dict, visit_id: str) -> None:
+    """Reception Queue Workflow Improvements (Feature 1): records all
+    required vitals for a Queue ticket's linked Visit via the real
+    Receptionist-facing endpoints (`open-for-reception` +
+    `soap/subjective-objective`), the same path `ReceptionVitalsDialog`
+    uses in the browser - not a direct DB write."""
+    consultation = (
+        await client.post(f"/api/v1/visits/{visit_id}/consultation/open-for-reception", headers=headers)
+    ).json()
+    response = await client.put(
+        f"/api/v1/consultations/{consultation['id']}/soap/subjective-objective",
+        headers=headers,
+        json={
+            "blood_pressure": "120/80",
+            "pulse_rate": 72,
+            "respiratory_rate": 18,
+            "temperature": 36.8,
+            "height_cm": 170,
+            "weight_kg": 65,
+            "oxygen_saturation": 98,
+        },
+    )
+    assert response.status_code == 200, response.text
 
 
 async def test_create_queue_generates_sequential_number(client: AsyncClient, make_clinic_with_owner) -> None:
@@ -260,6 +328,7 @@ async def test_queue_slip_payload(client: AsyncClient, make_clinic_with_owner) -
     _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, headers)
     created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    await _enter_vitals(client, headers, created["visit_id"])
 
     response = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
     assert response.status_code == 200
@@ -267,6 +336,111 @@ async def test_queue_slip_payload(client: AsyncClient, make_clinic_with_owner) -
     assert slip["queue_number"] == "A001"
     assert slip["patient_name"]
     assert slip["qr_token"]
+    assert slip["vitals_taken"] is True
+
+
+async def test_queue_slip_blocked_without_vitals(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Feature 1 (Reception Queue Workflow Improvements): printing (fetching
+    the slip) is rejected with a clear, real backend error - not merely a
+    disabled frontend button - when the ticket's linked visit has no vitals
+    recorded yet. A raw API call (bypassing any frontend button state)
+    still gets blocked."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    response = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert response.status_code == 400, response.text
+    assert "vital signs" in response.json()["detail"].lower()
+
+
+async def test_queue_slip_succeeds_after_vitals_entered(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Same ticket: blocked before vitals, then printable immediately after -
+    proves the gate re-evaluates live state rather than caching a stale
+    rejection, and that vitals is the only thing standing in the way."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    blocked = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert blocked.status_code == 400
+
+    await _enter_vitals(client, headers, created["visit_id"])
+
+    allowed = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert allowed.status_code == 200
+    assert allowed.json()["vitals_taken"] is True
+
+
+async def test_queue_call_and_reannounce(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Feature 3: Owner (a role in `QUEUE_TRANSITION_ROLES`) calls a Waiting
+    ticket via the existing status-transition endpoint (Waiting -> Called),
+    then re-announces it via the new endpoint - queue number, ticket id, and
+    history/status stay exactly the same across the re-announce; only
+    `called_at` moves forward, which is what the announcement/TV-display
+    re-fire mechanism already keys off of."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    queue_id = created["id"]
+
+    called = await client.patch(f"/api/v1/queues/{queue_id}/status", headers=headers, json={"status": "Called"})
+    assert called.status_code == 200, called.text
+    called_body = called.json()
+    assert called_body["status"] == "Called"
+    assert called_body["queue_number"] == "A001"
+    first_called_at = called_body["called_at"]
+    assert first_called_at is not None
+
+    reannounced = await client.post(f"/api/v1/queues/{queue_id}/reannounce", headers=headers)
+    assert reannounced.status_code == 200, reannounced.text
+    reannounced_body = reannounced.json()
+    assert reannounced_body["id"] == queue_id
+    assert reannounced_body["queue_number"] == "A001"
+    assert reannounced_body["status"] == "Called"
+    assert reannounced_body["called_at"] >= first_called_at
+
+    # Re-announcing did not create a second ticket.
+    all_today = await client.get("/api/v1/queues", headers=headers)
+    assert all_today.json()["total"] == 1
+
+
+async def test_reannounce_requires_already_called(client: AsyncClient, make_clinic_with_owner) -> None:
+    """A ticket still Waiting has nothing to re-announce yet."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    response = await client.post(f"/api/v1/queues/{created['id']}/reannounce", headers=headers)
+    assert response.status_code == 400
+
+
+async def test_cashier_cannot_call_or_reannounce(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """RBAC: Cashier must not gain queue-calling permissions it never had -
+    `QUEUE_TRANSITION_ROLES` (Owner/Administrator/Receptionist/Doctor/Nurse)
+    is unchanged by this feature, and the new `/reannounce` endpoint reuses
+    that exact same dependency."""
+    clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    await client.patch(f"/api/v1/queues/{created['id']}/status", headers=headers, json={"status": "Called"})
+
+    cashier_password = "SuperSecret123!"
+    cashier_email, _cashier_user = await _make_role_login(
+        db_session, clinic_id=clinic.id, role_name="Cashier", password=cashier_password
+    )
+    cashier_token = await _login(client, clinic.slug, cashier_email, cashier_password)
+    cashier_headers = {"Authorization": f"Bearer {cashier_token}"}
+
+    call_attempt = await client.patch(
+        f"/api/v1/queues/{created['id']}/status", headers=cashier_headers, json={"status": "Called"}
+    )
+    assert call_attempt.status_code == 403
+
+    reannounce_attempt = await client.post(f"/api/v1/queues/{created['id']}/reannounce", headers=cashier_headers)
+    assert reannounce_attempt.status_code == 403
 
 
 async def test_doctor_scoped_prefix_override_and_independent_sequencing(

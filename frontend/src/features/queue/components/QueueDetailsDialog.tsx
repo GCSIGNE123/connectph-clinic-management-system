@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueueDetail } from "@/features/queue/hooks/use-queues";
-import { useChangeQueueStatus } from "@/features/queue/hooks/use-queue-mutations";
+import { useChangeQueueStatus, useReannounceQueue } from "@/features/queue/hooks/use-queue-mutations";
 import { QueueStatusBadge } from "@/features/queue/components/QueueStatusBadge";
 import { QUEUE_PRIORITY_LABELS, QUEUE_STATUS_LABELS, QUEUE_STATUS_TRANSITIONS, QueueStatus } from "@/features/queue/types";
 
@@ -18,6 +18,7 @@ export interface QueueDetailsDialogProps {
 export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: QueueDetailsDialogProps) {
   const { data: queue, isLoading } = useQueueDetail(queueId);
   const changeStatus = useChangeQueueStatus();
+  const reannounce = useReannounceQueue();
 
   return (
     <Dialog open={Boolean(queueId)} onOpenChange={onOpenChange}>
@@ -44,7 +45,7 @@ export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: Que
               <Field label="Created" value={new Date(queue.createdAt).toLocaleString()} />
             </div>
 
-            {canTransition && (QUEUE_STATUS_TRANSITIONS[queue.status]?.length ?? 0) > 0 ? (
+            {canTransition && ((QUEUE_STATUS_TRANSITIONS[queue.status]?.length ?? 0) > 0 || queue.status === QueueStatus.Called) ? (
               <div>
                 <p className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Actions</p>
                 <div className="flex flex-wrap gap-2">
@@ -56,9 +57,23 @@ export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: Que
                       disabled={changeStatus.isPending}
                       onClick={() => changeStatus.mutate({ id: queue.id, status: next })}
                     >
-                      {QUEUE_STATUS_LABELS[next]}
+                      {next === QueueStatus.Called ? "Call" : QUEUE_STATUS_LABELS[next]}
                     </Button>
                   ))}
+                  {/* Reception Queue Workflow Improvements (Feature 3): only
+                      offered once already Called - re-announces the exact
+                      same ticket/queue number, no new ticket or status
+                      change (see `QueueService.reannounce`). */}
+                  {queue.status === QueueStatus.Called ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reannounce.isPending}
+                      onClick={() => reannounce.mutate(queue.id)}
+                    >
+                      Re-announce
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             ) : null}

@@ -1699,6 +1699,37 @@ Verified live on 2026-08-11 against the running dev backend (port 8010) and fron
 
 **Summary: all 12 acceptance criteria addressed** — 10 directly verified live/via automated test, 2 (LAN-IP/cross-machine access) verified architecturally by code inspection rather than a genuine second machine, since none exists in this sandboxed dev environment; the short-code lookup reuses the exact same LAN-IP-configurable request-building code every other TV Display call already uses, so no new `localhost` dependency was introduced. Zero regressions beyond one pre-existing, already-documented flaky-test pair unrelated to this feature; production build succeeds.
 
+## Post-RC1: Reception Queue Workflow Improvements
+
+Verified live, 2026-08-11, against the running dev backend (port 8010) and frontend (port 3000), using a real Receptionist account (freshly created, not Owner) plus real Cashier/Doctor logins for RBAC. No migration required (all fields computed at request time).
+
+| # | Acceptance criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Print blocked when required vitals are missing | **PASS** | Fresh ticket A014 (patient "UatFinalVerify Patient", no vitals). `GET /queues/{id}/slip` → `400 {"detail":"Vital signs must be taken before printing the queue ticket."}`. `QueueSlipDialog`'s Print button confirmed `disabled: true` via DOM inspection; the exact message rendered inline (screenshot). |
+| 2 | Print succeeds once vitals are completed | **PASS** | Vitals genuinely entered and saved via `ReceptionVitalsDialog` (BP/pulse/resp/temp/height/weight/SpO2). Re-opened the slip: `200 OK`, Print button `disabled: false`. |
+| 3 | Direct API call cannot bypass the restriction | **PASS** | The block above is enforced in `QueueService.get_slip` itself (backend), not the frontend button - the 400 was observed on the raw `GET .../slip` network request, before any frontend Print-button logic runs. |
+| 4 | Printed ticket contains queue number, patient, department, doctor, date, and "VITALS TAKEN" | **PASS** | Screenshot of the real print preview: `A014`, `UatFinalVerify Patient`, `General Medicine`, `Aurora Canora`, `8/11/2026 7:11 PM`, and a `VITALS TAKEN` line styled smaller/secondary to the queue number - no UUIDs present. |
+| 5 | No UUID printed | **PASS** | Same screenshot/DOM check as #4 - only human-readable fields render; `qrToken`/`queue_id` remain on the API response but are not displayed, unchanged from the pre-existing ticket format. |
+| 6 | Receptionist can Call a Waiting ticket | **PASS** | Real Receptionist login, `PATCH /queues/{id}/status {status:"Called"}` → `200`, `status: Waiting → Called`, `called_at` stamped. |
+| 7 | Call announcement is destination-aware, not hardcoded | **PASS** | Captured the real `speechSynthesis.speak()` call for A014: `"Now serving patient number A014. Please proceed to Room 101."` - `Room 101` resolved live from `QueueSetting.room_label` (Aurora Canora + General Medicine), not a literal string in the code. |
+| 8 | TV Display updates after a Receptionist Call | **PASS** | Public `/tv/canora` (real browser + raw `GET /public/tv-display/canora`) shows `now_serving: [{queue_number:"A014", doctor_name:"Aurora Canora", room_name:"Room 101", ...}]` - exactly one entry, correct fields, existing 50/50 Queue+Info-panel layout unaffected. |
+| 9 | Re-announce speaks again with the same destination | **PASS** | `POST /queues/{id}/reannounce` → `200`. Captured speech identical to #7. |
+| 10 | Re-announce does not create a duplicate ticket or change the queue number | **PASS** | Compared the `PATCH .../status` response and the `POST .../reannounce` response: identical `id` (`d29a0ec1-...`) and `queue_number` (`A014`); `history` array unchanged (still 2 entries); only `called_at`/`updated_at` advanced. |
+| 11 | Destination A: doctor + configured room | **PASS** | A014 → `"...Please proceed to Room 101."` (see #7). |
+| 12 | Destination B: doctor only, no room configured | **PASS** | New ticket B001 (Carlos Mendoza, General Medicine, no `room_label` row) → `"Now serving patient number B001. Please proceed to Dr. Carlos Mendoza."` |
+| 13 | Destination L: Laboratory with configured room | **PASS** | New ticket L004 (Laboratory, no doctor, `room_label: "Room 103"`) → `"Now serving patient number L004. Please proceed to Room 103."` |
+| 14 | Destination R: Radiology, no doctor/room | **PASS** | New ticket R002 (Radiology, no doctor, no `room_label`) → `"Now serving patient number R002. Please proceed to the Radiology."` (department-name fallback). |
+| 15 | Receptionist RBAC: can Call and Re-announce | **PASS** | Both #6 and #9 performed as a real Receptionist login (not Owner). |
+| 16 | Cashier RBAC: cannot Call or Re-announce | **PASS** | Real Cashier login, `PATCH .../status` → `403`; `POST .../reannounce` → `403`. `QUEUE_TRANSITION_ROLES` unchanged (`Owner/Administrator/Receptionist/Doctor/Nurse`). |
+| 17 | Doctor Workspace calling/recall unaffected | **PASS** | Real Doctor login, `POST /doctor-workspace/visits/{id}/call` → `200`, `status: Called`, `called_time` stamped, timeline event added - untouched code path, unaffected by this feature. |
+| 18 | Existing queue numbering / multi-doctor / multi-department unaffected | **PASS** | All new tickets (A014, B001, L004, R002) received correctly independent, non-colliding prefix/sequence numbers per the pre-existing resolution chain; TV Display's multi-doctor/multi-department grouping logic was not touched (`resolve_room_label` extraction is a pure move, verified via full `test_tv_display.py` regression pass). |
+| 19 | Existing Recall functionality unaffected | **PASS** | Same as #17 - `DoctorWorkspaceService.recall_patient` was not modified by this feature. |
+| 20 | Production build succeeds | **PASS** | Full `npm run build`: compiled, type-checked, linted, and all 51/51 static routes generated, exit code 0. |
+| 21 | Backend/frontend regression tests | **PASS** | `test_queues.py`: 19/19 (7 new: vitals-blocked, vitals-succeeds, call+reannounce, reannounce-requires-Called, Cashier RBAC). `test_tv_display.py` + `test_doctor_workspace.py`: 27/27 (confirms the `resolve_room_label` extraction didn't regress either). Frontend `vitest` (queue + announcer): 15/15. `npx tsc --noEmit`: clean. |
+
+**Bug found, not fixed (unrelated, logged instead)**: none found specific to this feature. BUG-034 (pre-existing login-rate-limit test flakiness) did not recur in this pass (the existing `_reset_login_rate_limit` autouse fixture, already present in `test_queues.py`, held) - left documented as-is, not touched.
+
+**Summary: all 21 acceptance criteria PASS**, verified via a real Receptionist/Cashier/Doctor browser and API session against the live dev environment - not code inspection alone. Zero regressions in queue numbering, multi-doctor/multi-department TV Display, Doctor Workspace Call/Recall, or existing RBAC.
 
 ## Running everything before opening a PR
 

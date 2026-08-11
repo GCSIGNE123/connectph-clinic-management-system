@@ -148,11 +148,28 @@ export function enqueueAnnouncement(
  * no assigned number yet). Kept for single-announcement callers (Doctor
  * Workspace Call/Recall, Reception) - unchanged behavior.
  */
-export function announceQueueNumber(queueNumber: string | null | undefined, prefsOverride?: QueueAnnouncerPrefs): void {
+export function announceQueueNumber(
+  queueNumber: string | null | undefined,
+  destinationOrPrefs?:
+    | { doctorName?: string | null; departmentName?: string | null; roomName?: string | null }
+    | QueueAnnouncerPrefs,
+  prefsOverride?: QueueAnnouncerPrefs
+): void {
   if (!queueNumber) return;
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
 
-  const prefs = prefsOverride ?? getQueueAnnouncerPrefs();
+  // Reception Queue Workflow Improvements: `destinationOrPrefs` is
+  // additive - existing callers (Doctor Workspace Call/Recall) either omit
+  // the second argument entirely or pass a `QueueAnnouncerPrefs` object
+  // (identified by its `enabled` key), so their behavior/phrasing is
+  // unchanged. A destination object (identified by having none of
+  // `QueueAnnouncerPrefs`' required keys) opts into the same
+  // "...proceed to Room X" phrasing `enqueueAnnouncement`/TV Display uses.
+  const isPrefs = destinationOrPrefs != null && "enabled" in destinationOrPrefs;
+  const destination = isPrefs ? undefined : (destinationOrPrefs as
+    | { doctorName?: string | null; departmentName?: string | null; roomName?: string | null }
+    | undefined);
+  const prefs = (isPrefs ? (destinationOrPrefs as QueueAnnouncerPrefs) : prefsOverride) ?? getQueueAnnouncerPrefs();
   if (!prefs.enabled) return;
 
   try {
@@ -162,7 +179,7 @@ export function announceQueueNumber(queueNumber: string | null | undefined, pref
       window.speechSynthesis.cancel();
     }
 
-    const utterance = new SpeechSynthesisUtterance(buildAnnouncementText(queueNumber));
+    const utterance = new SpeechSynthesisUtterance(buildAnnouncementText(queueNumber, destination));
     utterance.rate = prefs.rate;
     utterance.volume = prefs.volume;
 

@@ -25,6 +25,7 @@ from app.models.visit import VISIT_STATUS_TRANSITIONS, VisitPriority, VisitStatu
 from app.repositories.consultation_repository import ConsultationRepository
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.queue_setting_repository import QueueSettingRepository
+from app.services.queue_destination import resolve_room_label
 from app.services.shift_service import enforce_receptionist_open_shift
 from app.schemas.queue import (
     QueueCreate,
@@ -466,7 +467,18 @@ class QueueService:
         if queue is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Queue ticket not found")
         history = await self.repo.get_history(queue_id, clinic_id)
-        return _to_detail(queue, history)
+        detail = _to_detail(queue, history)
+        # Post-RC1 (Reception Queue Workflow Improvements): same room-label
+        # resolution TV Display already uses for its "Please proceed to
+        # Room X" announcement, exposed here so the Reception Queue page can
+        # build the identical destination-aware announcement via the shared
+        # `queue-announcer.ts` when the Receptionist calls/re-announces a
+        # ticket - no separate destination concept introduced.
+        settings = await self.setting_repo.list_for_clinic(clinic_id)
+        detail.room_name = resolve_room_label(
+            settings, branch_id=queue.branch_id, department_id=queue.department_id, doctor_id=queue.doctor_id
+        )
+        return detail
 
     async def update_queue(self, queue_id: UUID, payload: QueueUpdate, *, clinic_id: UUID, actor: User) -> QueueDetail:
         queue = await self.repo.get_by_id_and_clinic(queue_id, clinic_id)
@@ -550,10 +562,66 @@ class QueueService:
             queue_id, clinic_id=clinic_id, actor=actor, new_status=QueueStatus.CANCELLED, note=note or "Cancelled"
         )
 
+    async def reannounce(self, queue_id: UUID, *, clinic_id: UUID, actor: User) -> QueueDetail:
+        """Reception Queue Workflow Improvements: re-trigger the announcement
+        for a ticket that has ALREADY been called, without creating a new
+        ticket, changing the queue number, or moving queue state. Mirrors
+        `DoctorWorkspaceService.recall_patient`'s exact idempotent pattern
+        (same status in, same status out - `Called -> Called` is
+        deliberately NOT in `QUEUE_STATUS_TRANSITIONS`, so this bypasses
+        `change_status` entirely rather than adding a same-state edge to
+        that transition map) - re-stamping `called_at` is what TV Display's
+        existing `called_at`-diff already uses to detect "this needs
+        announcing again", so no second "called" state is introduced."""
+        queue = await self.repo.get_by_id_and_clinic(queue_id, clinic_id)
+        if queue is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Queue ticket not found")
+        if queue.status != QueueStatus.CALLED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only an already-called ticket can be re-announced.",
+            )
+
+        queue = await self.repo.update(queue, called_at=datetime.now(UTC), updated_by=actor.id)
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor.id, action="queue.reannounced",
+            entity_type="queue", entity_id=str(queue_id), metadata={},
+        )
+        await self.session.commit()
+
+        detail = await self.get_detail(queue_id, clinic_id=clinic_id)
+        await queue_connection_manager.broadcast(clinic_id, "queue.status_changed", detail.model_dump(mode="json"))
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue_id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail
+
     async def get_slip(self, queue_id: UUID, *, clinic_id: UUID) -> QueueSlip:
         queue = await self.repo.get_with_relations(queue_id, clinic_id)
         if queue is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Queue ticket not found")
+
+        # Reception Queue Workflow Improvements (Feature 1): the printable
+        # slip is the point of enforcement, not the frontend Print button -
+        # a direct API call still gets rejected. Only enforced when the
+        # ticket has a linked Visit (the vitals-carrying record); every
+        # Queue ticket created since Phase 6 has one (Queue creation always
+        # transactionally creates/links a Visit - see `create_queue` below),
+        # so this covers ticket creation. A ticket with no linked Visit at
+        # all (only possible via pre-Phase-6 legacy data) is left unblocked
+        # rather than guessing at vitals that were never structurally
+        # capturable - a documented limitation, not a bypass.
+        vitals_taken = True
+        if queue.visit_id is not None:
+            missing = await self._missing_required_vitals(queue.visit_id, clinic_id=clinic_id)
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Vital signs must be taken before printing the queue ticket.",
+                )
+        else:
+            vitals_taken = False
 
         clinic_stmt_result = await self.session.get(Clinic, clinic_id)
         clinic_name = clinic_stmt_result.name if clinic_stmt_result else ""
@@ -570,5 +638,6 @@ class QueueService:
             priority=queue.priority,
             queue_date=queue.queue_date,
             created_at=queue.created_at,
+            vitals_taken=vitals_taken,
             qr_token=_slip_qr_token(clinic_id, queue.id),
         )

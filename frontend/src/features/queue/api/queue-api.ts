@@ -52,6 +52,7 @@ interface RawQueueDetail extends RawQueueListItem {
   updated_at: string;
   branch_name: string | null;
   history: RawHistoryEntry[];
+  room_name: string | null;
 }
 
 interface RawQueueSlip {
@@ -67,6 +68,7 @@ interface RawQueueSlip {
   queue_date: string;
   created_at: string;
   qr_token: string;
+  vitals_taken: boolean;
 }
 
 function toHistoryEntry(raw: RawHistoryEntry): QueueStatusHistoryEntry {
@@ -116,6 +118,7 @@ export function toQueueDetail(raw: RawQueueDetail): QueueDetail {
     updatedAt: raw.updated_at,
     branchName: raw.branch_name,
     history: raw.history.map(toHistoryEntry),
+    roomName: raw.room_name ?? null,
   };
 }
 
@@ -133,6 +136,7 @@ function toQueueSlip(raw: RawQueueSlip): QueueSlip {
     queueDate: raw.queue_date,
     createdAt: raw.created_at,
     qrToken: raw.qr_token,
+    vitalsTaken: raw.vitals_taken,
   };
 }
 
@@ -217,6 +221,11 @@ export const queueApi = {
 
   async cancel(id: string): Promise<QueueDetail> {
     const raw = await apiClient.post<RawQueueDetail>(`/queues/${id}/cancel`);
+    return toQueueDetail(raw);
+  },
+
+  async reannounce(id: string): Promise<QueueDetail> {
+    const raw = await apiClient.post<RawQueueDetail>(`/queues/${id}/reannounce`);
     return toQueueDetail(raw);
   },
 

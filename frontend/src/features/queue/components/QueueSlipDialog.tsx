@@ -1,12 +1,14 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { queueApi } from "@/features/queue/api/queue-api";
 import { queueKeys } from "@/features/queue/hooks/use-queues";
 import { QUEUE_PRIORITY_LABELS } from "@/features/queue/types";
+import { ApiError } from "@/lib/api-client";
 
 export interface QueueSlipDialogProps {
   queueId: string | null;
@@ -56,11 +58,31 @@ function SlipField({ label, value }: { label: string; value: string }) {
  * block below for the full rationale on each rule.
  */
 export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps) {
-  const { data: slip, isLoading } = useQuery({
+  const {
+    data: slip,
+    isLoading,
+    isError,
+    error,
+  } = useQuery({
     queryKey: queueId ? queueKeys.slip(queueId) : ["queue", "slip", "none"],
     queryFn: () => queueApi.getSlip(queueId as string),
     enabled: Boolean(queueId),
+    // Feature 1 (Reception Queue Workflow Improvements): a missing-vitals
+    // rejection is not a transient failure - retrying it just re-triggers
+    // the same 400, so don't burn TanStack Query's default retries on it.
+    retry: false,
   });
+
+  // Real backend enforcement (see `QueueService.get_slip`), not just a
+  // disabled Print button - the slip request itself is rejected with 400
+  // when required vitals are missing, and that's surfaced here instead of
+  // ever rendering a printable ticket.
+  const blockedMessage =
+    isError && error instanceof ApiError
+      ? error.message || "Vital signs must be taken before printing the queue ticket."
+      : isError
+        ? "Vital signs must be taken before printing the queue ticket."
+        : null;
 
   return (
     <Dialog open={Boolean(queueId)} onOpenChange={onOpenChange}>
@@ -69,7 +91,12 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
           <DialogTitle>Queue Slip</DialogTitle>
         </DialogHeader>
 
-        {isLoading || !slip ? (
+        {blockedMessage ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{blockedMessage}</p>
+          </div>
+        ) : isLoading || !slip ? (
           <Skeleton className="h-64 w-full" />
         ) : (
           <div id="queue-slip-printable" className="space-y-2 rounded-md border border-border p-4 text-center">
@@ -87,6 +114,9 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
                 {formatSlipDateTime(slip.createdAt)}
               </p>
             </div>
+            {/* Feature 2: a small, secondary confirmation line - deliberately
+                not styled to compete with the large queue number above it. */}
+            {slip.vitalsTaken ? <p className="pt-1 text-xs font-semibold tracking-wide text-muted-foreground">VITALS TAKEN</p> : null}
             <p className="pt-2 text-sm font-medium">Thank you!</p>
           </div>
         )}
@@ -95,7 +125,7 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button type="button" onClick={() => window.print()} disabled={!slip}>
+          <Button type="button" onClick={() => window.print()} disabled={!slip || Boolean(blockedMessage)}>
             Print
           </Button>
         </DialogFooter>

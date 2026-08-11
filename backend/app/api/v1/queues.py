@@ -115,6 +115,17 @@ async def cancel_queue(
     return await service.cancel(queue_id, clinic_id=clinic_id, actor=current_user)
 
 
+@router.post("/{queue_id}/reannounce", response_model=QueueDetail)
+async def reannounce_queue(
+    queue_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_queue_transition_role),
+) -> QueueDetail:
+    service = QueueService(db)
+    return await service.reannounce(queue_id, clinic_id=clinic_id, actor=current_user)
+
+
 @router.get("/{queue_id}/slip", response_model=QueueSlip)
 async def get_queue_slip(
     queue_id: UUID,

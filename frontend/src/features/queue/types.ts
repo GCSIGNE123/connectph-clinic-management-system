@@ -103,6 +103,11 @@ export interface QueueDetail extends QueueListItem {
   updatedAt: string;
   branchName: string | null;
   history: QueueStatusHistoryEntry[];
+  /** Reception Queue Workflow Improvements: same room-label resolution TV
+   * Display uses, so a Receptionist's Call/Re-announce speaks the same
+   * "...proceed to Room X" destination as the public display, instead of a
+   * hardcoded room. Null when no room override is configured. */
+  roomName: string | null;
 }
 
 export interface QueueSlip {
@@ -118,6 +123,9 @@ export interface QueueSlip {
   queueDate: string;
   createdAt: string;
   qrToken: string;
+  /** Feature 2: always true when a slip is actually returned - printing is
+   * blocked server-side (400) before this point if vitals are missing. */
+  vitalsTaken: boolean;
 }
 
 export interface QueueListParams {

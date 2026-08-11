@@ -113,6 +113,13 @@ class QueueListItem(BaseModel):
 class QueueDetail(QueueRead):
     history: list[QueueStatusHistoryRead] = Field(default_factory=list)
     patient_name: str | None = None
+    # Reception Queue Workflow Improvements: same room-label resolution TV
+    # Display already uses (`queue_destination.resolve_room_label`), exposed
+    # here so the Reception Queue page can build a destination-aware
+    # announcement ("...proceed to Room 1") when calling/re-announcing -
+    # None when no room override is configured for this ticket's
+    # doctor/department/branch, same as TV Display's own fallback.
+    room_name: str | None = None
     patient_number: str | None = None
     department_name: str | None = None
     doctor_name: str | None = None
@@ -153,3 +160,9 @@ class QueueSlip(BaseModel):
     queue_date: date
     created_at: datetime
     qr_token: str
+    # Feature 2 (Reception Queue Workflow Improvements): always True when the
+    # slip is actually returned, since `QueueService.get_slip` now rejects
+    # the request entirely (400) if required vitals are missing - included
+    # explicitly (rather than assumed) so the printed ticket's "VITALS
+    # TAKEN" line is driven by real response data, not a hardcoded assumption.
+    vitals_taken: bool = True
