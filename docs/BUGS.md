@@ -87,6 +87,7 @@ YYYY-MM-DD
 | BUG-028 | `PATCH /clinics/{clinic_id}` and `DELETE /clinics/{clinic_id}` had no role restriction — any authenticated user of any role (incl. Receptionist, Doctor) could rename or soft-delete the clinic | Critical | Fixed | backend | unassigned |
 | BUG-033 | The clinic-wide `QueueSetting` row saved from `/queue-settings` (branch_id always submitted as `null`) can never actually be selected by `_resolve_prefix`/`_resolve_max_daily_queue`, because resolution requires an EXACT `branch_id` match against the queue ticket's own (never-null) `branch_id`. The clinic-wide prefix currently "works" in production only by accident — because when no `QueueSetting` row matches, the code falls back to the hardcoded `DEFAULT_QUEUE_PREFIX = "A"`, which happens to equal what most clinics configure anyway. A clinic that changes its clinic-wide prefix or max-daily-queue via the Queue Settings page would find the change silently has zero effect on real tickets. Found while adding this session's per-doctor/department prefix overrides (which had to be built branch_id-aware to actually take effect, confirmed live via a real API+DB round trip) - not fixed inline since it's a pre-existing, unrelated defect, out of scope for the additive TV-display feature. | High | Open | backend | unassigned |
 | BUG-034 | Running `app/tests/test_queues.py` together with `test_tv_display.py`/`test_doctor_workspace.py` (or even `test_queues.py` alone in full) intermittently but reproducibly 429s 2 of its own tests (`test_doctor_scoped_prefix_override_and_independent_sequencing`, `test_tenant_isolation`) with `"Too many attempts. Please try again later."` — both tests pass individually every time. Root cause: `RATE_LIMIT_LOGIN_MAX_ATTEMPTS=10` per 60s (`core/config.py`) is a real, shared, non-test-mode-bypassed limiter, and `test_queues.py` alone calls `_login()` well past 10 times across its full suite; running it back-to-back with other login-heavy files within the same ~60s window exhausts the budget for whichever test happens to log in last. Not caused by, or specific to, the Multi-Department TV Queue Display feature — reproduced twice, both times against the pre-existing `_login`/`_owner_headers` test helper shared by every test in the file, unrelated to any of this feature's own code. A real test-infra gap (the rate limiter should be disabled or reset between tests in the test environment), not a product bug — logged rather than fixed inline per this feature's "no unrelated changes" scope. | Medium | Open | infra | unassigned |
+| BUG-036 | Real POS-80 thermal printer (Windows driver "POS-80 11.3.0.1", a generic Zjiang/ZPrinter-style GDI driver) fed a long blank strip of paper before cutting, even after the queue ticket's print CSS/layout was fixed — driver only exposes fixed-length paper sizes, none of them "auto" | Low | Closed (resolved via printer configuration, not a code fix) | deployment | unassigned |
 
 ## Resolved Bugs
 
@@ -1033,6 +1034,41 @@ Unhandled `IntegrityError` → `500`, no useful error message to the client.
 
 **Resolution date**
 2026-07-29
+
+---
+
+### BUG-036: Real POS-80 thermal printer fed excessive blank paper even after the CMS's ticket print layout was fixed — driver only offers fixed-length paper sizes
+
+- **Reported by:** User, live physical printer test following the "URGENT FIX — 80mm thermal queue ticket printing has excessive blank paper" task
+- **Date reported:** 2026-08-11
+- **Severity:** Low
+- **Status:** Closed (resolved via printer configuration, not a code fix)
+- **Area:** deployment
+
+**Description**
+After the queue ticket's print CSS/DOM architecture was fixed (see the commit below) so that Chrome's own print preview showed a compact, content-height-only ticket, the physical POS-80 thermal printer still fed a long blank strip of paper before cutting on the first real hardware test.
+
+**Steps to reproduce**
+1. Print any queue slip (Reception Queue → Print) to a POS-80 printer using the Windows driver "POS-80 11.3.0.1".
+2. Observe Chrome's print dialog → More settings → Paper size: only three options are offered, all with fixed lengths — `ZPrinter Paper(80 x 210mm)`, `ZPrinter Paper(80 x 297mm)`, `ZPrinter Paper(80 x 3276mm)`. There is no "auto"/continuous-roll option, and Chrome's own "Manage custom sizes" is not available for this driver either.
+3. With `ZPrinter Paper(80 x 210mm)` selected (the default), both Chrome's print preview AND the physical printout show a large blank area below the ticket content.
+
+**Expected behavior**
+The physical ticket should print compactly (content, then cut) with no significant blank paper, matching the already-fixed on-screen/DOM behavior.
+
+**Actual behavior**
+With the default `80 x 210mm` paper size, both Chrome's own print preview and the physical printer showed the same fixed 210mm page length, with the actual ~50-60mm of ticket content followed by blank space filling out the rest of that nominal page — confirming this instance was a genuine paper-size selection issue, not merely a printer-side feed quirk invisible to the browser.
+
+**Root cause**
+This specific Windows driver ("POS-80 11.3.0.1") is a generic Zjiang/ZPrinter-style GDI label-printer driver adapted for receipt use, not a proper continuous-roll ESC/POS receipt driver. It has no true "auto height" page size — the CMS's `@page { size: 80mm auto }` (see `frontend/src/features/queue/components/QueueSlipDialog.tsx`) can only ask Chrome to pick from whatever fixed sizes this driver registers, and none of them are actually variable-length. The `80 x 3276mm` entry in the driver's own list is this class of driver's standard workaround for the missing auto mode: it registers one very long nominal page and relies on the printer's own firmware to auto-cut shortly after the actual print data ends, rather than after the full nominal page length.
+
+**Fix / PR**
+No code change. Selecting **`ZPrinter Paper(80 x 3276mm)`** in Chrome's print dialog (More settings → Paper size) instead of the driver's default `80 x 210mm` resolved it — the physical ticket now cuts immediately after the content, matching the already-verified compact on-screen behavior. This is printer-driver/paper-size configuration, external to the CMS; the actual print-layout code fix (`frontend/src/features/queue/components/QueueSlipDialog.tsx` — portaling the printable ticket to `document.body` so `@page auto` has real in-flow content to size against) remains a separate, already-shipped commit (`65db7b2`) and is unaffected by this finding.
+
+**Note for future clinic deployments using the same/similar printer:** if a newly-deployed clinic's POS-80 (or similar generic-branded 80mm thermal printer) shows this same blank-paper symptom, check Chrome's print dialog paper-size options first — look for the largest available fixed-length option (often a "3276mm"-class value) and select that instead of the driver's default, before assuming it's a CMS defect. If the driver doesn't expose that option at all, installing Windows' built-in "Generic / Text Only" driver, or a proper ESC/POS driver from the printer's actual manufacturer, is the more permanent fix.
+
+**Resolution date**
+2026-08-11
 
 ---
 
