@@ -102,24 +102,39 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
       </DialogContent>
 
       <style jsx global>{`
+        /* 80mm thermal roll (e.g. POS-80). Height is auto, not a fixed
+           length like A4/Letter - a receipt printer's roll has no fixed
+           page length, so the browser should paginate to exactly however
+           tall the ticket content is, not a forced 210mm/11in page with
+           blank space below. Zero page margin is required for the width
+           below to actually reach 80mm (a nonzero @page margin shrinks
+           the usable area) and is also the standard way to starve
+           Chrome's built-in print header/footer (URL/title/date/page
+           number) of the margin space it renders into - there is no CSS
+           property that force-disables that browser-chrome UI directly,
+           so this is the closest a print stylesheet can get without
+           relying on the user manually unchecking "Headers and footers"
+           in the OS print dialog.
+
+           Deliberately declared at the STYLESHEET TOP LEVEL, not nested
+           inside \`@media print\` (both are valid CSS, but real hardware
+           testing found a difference): some Windows thermal-printer print
+           pipelines negotiate the physical paper size with the OS/driver
+           before Chrome finishes evaluating conditional (\`@media\`-nested)
+           rules, so a nested \`@page\` was sometimes not honored in time -
+           the driver would fall back to its own default paper profile
+           (typically A4/Letter-shaped), and since our ticket content is
+           only ~1-2 inches tall, the printer would feed the rest of that
+           much taller default page as blank BEFORE ejecting/cutting,
+           rather than starting the next print job immediately after the
+           short ticket. \`@page\` only ever applies to paginated/print
+           output regardless of nesting, so hoisting it here changes
+           nothing for on-screen rendering. */
+        @page {
+          size: 80mm auto;
+          margin: 0;
+        }
         @media print {
-          /* 80mm thermal roll (e.g. POS-80). Height is auto, not a fixed
-             length like A4/Letter - a receipt printer's roll has no fixed
-             page length, so the browser should paginate to exactly however
-             tall the ticket content is, not a forced 210mm/11in page with
-             blank space below. Zero page margin is required for the width
-             below to actually reach 80mm (a nonzero @page margin shrinks
-             the usable area) and is also the standard way to starve
-             Chrome's built-in print header/footer (URL/title/date/page
-             number) of the margin space it renders into - there is no CSS
-             property that force-disables that browser-chrome UI directly,
-             so this is the closest a print stylesheet can get without
-             relying on the user manually unchecking "Headers and footers"
-             in the OS print dialog. */
-          @page {
-            size: 80mm auto;
-            margin: 0;
-          }
           /* The dialog/app shell behind the ticket is hidden via the
              visibility property (not display: none) so hiding it doesn't
              also hide the printable ticket nested inside the same DOM

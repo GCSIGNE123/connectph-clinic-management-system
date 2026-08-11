@@ -44,6 +44,10 @@ Root cause: only the queue-number text (`numberSizeClassName`) was tier-aware in
 
 **Live-verified (follow-up)**: printed a real ticket, confirmed the rendered text matches the required field order/format exactly (including the compact date format, e.g. `7/27/2026 8:48 PM`), confirmed via a UUID-pattern regex over the rendered text that no UUID is present, confirmed the truncation CSS (`overflow: hidden`, `text-overflow: ellipsis`, `white-space: nowrap`) is actually applied to the value spans via `getComputedStyle`, and reconfirmed the ordinary web queue table is pixel-unchanged. `npx tsc --noEmit` clean, `npm run build` succeeds, all pre-existing `features/queue` tests (10/10) pass unmodified.
 
+**Follow-up: blank paper feeding before the ticket printed** (reported after real POS-80 hardware use) — the `@page { size: 80mm auto; margin: 0; }` rule was declared inside the `@media print { ... }` block. On this hardware/driver combination the printer fed a long blank sheet *before* the ticket content, then cut: the driver was negotiating its own default (fixed, much taller) paper profile with Windows before the nested `@page` rule took effect, so the job briefly padded out to that default page length first. Fix: hoisted `@page { size: 80mm auto; margin: 0; }` to the top level of the stylesheet, outside `@media print` — both are valid CSS, but `@page` is inherently print-only regardless of nesting, and declaring it at the top level is negotiated earlier/more reliably by print pipelines. No other print rule changed; on-screen rendering is unaffected.
+
+**User-verified on real hardware**: user confirmed printing is now correct on the physical POS-80 thermal printer after this change, with no blank feed before or after the ticket.
+
 ---
 
 ## Built — Post-RC1: TV Display 50/50 Queue + Information/Advertisement Panel
