@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Plus, Search } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Plus, Search, Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +11,28 @@ import { useToast } from "@/components/ui/toast";
 import type { ColumnConfig, FieldConfig } from "@/features/clinic-config/components/FieldConfig";
 import { MasterDataFormDialog } from "@/features/clinic-config/components/MasterDataFormDialog";
 import { createCrudHooks } from "@/features/clinic-config/hooks/use-crud";
+import { toCsv, parseCsv, downloadCsv } from "@/lib/csv";
+
+/** Optional CSV import/export config for a `MasterDataPage` resource - only
+ * a handful of resources need this (Services was the first request), so
+ * it's opt-in per page rather than built into every master-data page. */
+export interface MasterDataCsvConfig<T> {
+  /** Download filename, e.g. "services.csv". */
+  filename: string;
+  /** CSV header row, in column order - also the keys `fromRow` receives. */
+  headers: string[];
+  /** Maps one record to a CSV row, in the same order as `headers`. */
+  toRow: (item: T) => (string | number | null | undefined)[];
+  /** Parses one CSV row (header-keyed) into a create/update payload. Throw
+   * a descriptive `Error` to reject a malformed row - surfaced per-row in
+   * the import summary rather than aborting the whole file. */
+  fromRow: (row: Record<string, string>) => Partial<T>;
+  /** Field used to detect "this row already exists" during import (e.g.
+   * `service_code`) - a match updates that record, no match creates a new
+   * one. Must be a field also present on `T` and derivable from `fromRow`'s
+   * output. */
+  matchKey: keyof T;
+}
 
 interface MasterDataPageProps<T extends { id: string; status?: string }> {
   title: string;
@@ -22,6 +44,7 @@ interface MasterDataPageProps<T extends { id: string; status?: string }> {
   canManage: boolean;
   searchPlaceholder?: string;
   rowLabel: (row: T) => string;
+  csv?: MasterDataCsvConfig<T>;
 }
 
 /**
@@ -40,6 +63,7 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
   canManage,
   searchPlaceholder = "Search...",
   rowLabel,
+  csv,
 }: MasterDataPageProps<T>) {
   const { useList, useMutations } = useMemo(() => createCrudHooks<T>(resourceKey, resourcePath), [resourceKey, resourcePath]);
   const [search, setSearch] = useState("");
@@ -50,8 +74,59 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<T | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<T | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const items = data?.items ?? [];
+
+  function handleExportCsv() {
+    if (!csv) return;
+    const csvText = toCsv(csv.headers, items.map(csv.toRow));
+    downloadCsv(csv.filename, csvText);
+  }
+
+  async function handleImportCsvFile(file: File) {
+    if (!csv) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      let created = 0;
+      let updated = 0;
+      const errors: string[] = [];
+
+      for (const [index, row] of rows.entries()) {
+        try {
+          const payload = csv.fromRow(row);
+          const matchValue = payload[csv.matchKey];
+          const existing = items.find((item) => item[csv.matchKey] === matchValue);
+          if (existing) {
+            await update.mutateAsync({ id: existing.id, payload });
+            updated += 1;
+          } else {
+            await create.mutateAsync(payload);
+            created += 1;
+          }
+        } catch (err) {
+          errors.push(`Row ${index + 2}: ${(err as Error).message}`);
+        }
+      }
+
+      if (errors.length === 0) {
+        toast({ title: `Import complete`, description: `${created} created, ${updated} updated.`, variant: "success" });
+      } else {
+        toast({
+          title: `Import finished with ${errors.length} error(s)`,
+          description: `${created} created, ${updated} updated. ${errors.slice(0, 3).join(" ")}`,
+          variant: "error",
+        });
+      }
+    } catch (err) {
+      toast({ title: "Import failed", description: (err as Error).message, variant: "error" });
+    } finally {
+      setImporting(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -61,16 +136,46 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
         {canManage ? (
-          <Button
-            type="button"
-            onClick={() => {
-              setEditing(null);
-              setFormOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            Add
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {csv ? (
+              <>
+                <Button type="button" variant="outline" onClick={handleExportCsv}>
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  Export CSV
+                </Button>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void handleImportCsvFile(file);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  isLoading={importing}
+                  onClick={() => importFileRef.current?.click()}
+                >
+                  <Upload className="h-4 w-4" aria-hidden="true" />
+                  Import CSV
+                </Button>
+              </>
+            ) : null}
+            <Button
+              type="button"
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add
+            </Button>
+          </div>
         ) : null}
       </div>
 

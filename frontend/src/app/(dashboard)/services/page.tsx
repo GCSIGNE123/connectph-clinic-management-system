@@ -43,6 +43,36 @@ export default function ServicesPage() {
           ],
         },
       ]}
+      csv={{
+        filename: "services.csv",
+        headers: ["service_code", "service_name", "description", "default_price", "duration_minutes", "status"],
+        toRow: (s) => [s.service_code, s.service_name, s.description ?? "", s.default_price, s.duration_minutes ?? "", s.status],
+        matchKey: "service_code",
+        fromRow: (row) => {
+          if (!row.service_code?.trim()) throw new Error("service_code is required.");
+          if (!row.service_name?.trim()) throw new Error("service_name is required.");
+          const price = Number(row.default_price);
+          if (row.default_price?.trim() && Number.isNaN(price)) {
+            throw new Error(`default_price "${row.default_price}" is not a number.`);
+          }
+          const duration = row.duration_minutes?.trim() ? Number(row.duration_minutes) : null;
+          if (duration !== null && Number.isNaN(duration)) {
+            throw new Error(`duration_minutes "${row.duration_minutes}" is not a number.`);
+          }
+          const status = row.status?.trim() || "Active";
+          if (status !== "Active" && status !== "Inactive") {
+            throw new Error(`status "${row.status}" must be "Active" or "Inactive".`);
+          }
+          return {
+            service_code: row.service_code.trim(),
+            service_name: row.service_name.trim(),
+            description: row.description?.trim() || undefined,
+            default_price: row.default_price?.trim() || "0",
+            duration_minutes: duration,
+            status,
+          } as Partial<ClinicServiceItem>;
+        },
+      }}
     />
   );
 }
