@@ -65,17 +65,20 @@ export function saveQueueAnnouncerPrefs(prefs: QueueAnnouncerPrefs): void {
  * phrasing, so behavior for every existing caller is identical to before
  * this change.
  *
- * Wording (queue announcement wording update): "Now serving Patient #
+ * Wording (queue announcement wording update): "Now serving Patient
  * {N}, please proceed to {destination}." - this exact template is shared
  * by every caller (Doctor Workspace Call/Recall, Reception Call/Re-
  * announce, TV Display), so a single change here updates the spoken
  * wording everywhere at once - no parallel announcement text exists
- * anywhere else in the codebase. */
+ * anywhere else in the codebase. No literal "#" character in the spoken
+ * text - most TTS voices read a standalone "#" aloud as "hashtag" (heard
+ * live: "now serving hashtag B002..."), so the queue number is spoken on
+ * its own with no symbol in front of it. */
 export function buildAnnouncementText(
   queueNumber: string,
   destination?: { doctorName?: string | null; departmentName?: string | null; roomName?: string | null }
 ): string {
-  const base = `Now serving Patient # ${queueNumber}`;
+  const base = `Now serving Patient ${queueNumber}`;
   if (destination?.roomName) {
     return `${base}, please proceed to ${destination.roomName}.`;
   }
