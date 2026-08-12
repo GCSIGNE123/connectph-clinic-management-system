@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api-client";
 import { tokenStorage } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-url";
 import type {
   MigrationBatch,
   MigrationEntityType,
@@ -13,7 +14,7 @@ import type {
   MigrationVerificationReport,
 } from "@/features/migration/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8006/api/v1";
+const API_URL = getApiBaseUrl();
 
 async function uploadFiles(batchId: string, files: File[]): Promise<MigrationBatch> {
   const form = new FormData();

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { queueApi } from "@/features/queue/api/queue-api";
 import type { QueueListParams, QueueWsEvent } from "@/features/queue/types";
 import { tokenStorage } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-url";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 
 export const queueKeys = {
@@ -33,7 +34,7 @@ export function useQueueDetail(id: string | null) {
 }
 
 function wsUrl(clinicId: string, token: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+  const apiUrl = getApiBaseUrl();
   const wsBase = apiUrl.replace(/^http/, "ws").replace(/\/api\/v1$/, "");
   return `${wsBase}/api/v1/ws/queues/${clinicId}?token=${encodeURIComponent(token)}`;
 }

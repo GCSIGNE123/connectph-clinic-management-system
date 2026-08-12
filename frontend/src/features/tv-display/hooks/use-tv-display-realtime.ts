@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TvDisplayData } from "@/features/tv-display/types";
 import { fetchPublicTvDisplay } from "@/features/tv-display/api/tv-display-api";
+import { getApiBaseUrl } from "@/lib/api-url";
 import {
   type BackoffState,
   initialBackoffState,
@@ -13,7 +14,7 @@ import {
 } from "@/features/tv-display/hooks/use-connection-backoff";
 
 function wsUrl(clinicId: string, publicSlug: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+  const apiUrl = getApiBaseUrl();
   const wsBase = apiUrl.replace(/^http/, "ws").replace(/\/api\/v1$/, "");
   // Public displays have no JWT. The `public_slug` itself is passed as the
   // `token` query param and doubles as the WS credential for this one

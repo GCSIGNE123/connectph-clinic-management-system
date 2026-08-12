@@ -1,6 +1,7 @@
 import type { ApiErrorResponse, AuthTokens } from "@/types";
+import { getApiBaseUrl } from "@/lib/api-url";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const API_URL = getApiBaseUrl();
 
 const ACCESS_TOKEN_KEY = "cph_access_token";
 const REFRESH_TOKEN_KEY = "cph_refresh_token";

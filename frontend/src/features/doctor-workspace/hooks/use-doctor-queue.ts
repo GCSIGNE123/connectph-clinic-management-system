@@ -6,6 +6,7 @@ import { doctorWorkspaceApi } from "@/features/doctor-workspace/api/doctor-works
 import { doctorWorkspaceKeys } from "@/features/doctor-workspace/hooks/use-doctor-dashboard";
 import type { DoctorWsEvent } from "@/features/doctor-workspace/types";
 import { tokenStorage } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-url";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 
 /** Today's visits assigned to the logged-in doctor (or all/filtered for
@@ -21,7 +22,7 @@ export function useDoctorQueue(doctorId?: string) {
 }
 
 function wsUrl(clinicId: string, token: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+  const apiUrl = getApiBaseUrl();
   const wsBase = apiUrl.replace(/^http/, "ws").replace(/\/api\/v1$/, "");
   return `${wsBase}/api/v1/ws/queues/${clinicId}?token=${encodeURIComponent(token)}`;
 }

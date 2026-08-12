@@ -9,7 +9,9 @@
  * the same browser.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+import { getApiBaseUrl } from "@/lib/api-url";
+
+const API_URL = getApiBaseUrl();
 
 const ACCESS_TOKEN_KEY = "patient_access_token";
 const REFRESH_TOKEN_KEY = "patient_refresh_token";

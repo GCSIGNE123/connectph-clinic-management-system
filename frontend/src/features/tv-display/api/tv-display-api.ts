@@ -1,4 +1,5 @@
 import { apiClient, tokenStorage } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-url";
 import type {
   CreateAnnouncementInput,
   CreateTvDisplayInput,
@@ -11,7 +12,7 @@ import type {
   UpdateTvInfoContentInput,
 } from "@/features/tv-display/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const API_URL = getApiBaseUrl();
 
 /** `image_url` on a `TvInfoContentItem` is a backend-relative path (e.g.
  * `/media/tv-info-content/{clinic_id}/{file}`), not an absolute URL - the
@@ -293,7 +294,7 @@ export const tvDisplayApi = {
  * 401) since this must work with zero session state, e.g. in an
  * incognito/kiosk tab that never logged in. */
 export async function fetchPublicTvDisplay(publicSlug: string): Promise<TvDisplayData> {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+  const apiUrl = getApiBaseUrl();
   const res = await fetch(`${apiUrl}/public/tv-display/${encodeURIComponent(publicSlug)}`, {
     method: "GET",
     cache: "no-store",

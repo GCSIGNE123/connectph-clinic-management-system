@@ -1,4 +1,5 @@
 import { apiClient, tokenStorage } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-url";
 import type {
   ActivityFeedItem,
   AlertItem,
@@ -186,7 +187,7 @@ export const analyticsApi = {
    * the CSV/Excel blob can be triggered as a real file download.
    */
   exportReport: async (report: ReportKey, format: ExportFormat, filters: ReportFilters): Promise<void> => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+    const apiUrl = getApiBaseUrl();
     const params = { ...filterParams(filters), format };
     const token = tokenStorage.getAccessToken();
     const response = await fetch(`${apiUrl}/analytics/reports/${report}/export${toQueryString(params)}`, {
