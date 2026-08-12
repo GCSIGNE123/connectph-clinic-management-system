@@ -372,8 +372,8 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
             grid itself is a last-resort safety net for ticket counts beyond
             what any real clinic would realistically have simultaneously
             active - it does not kick in at normal counts. */}
-        <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-[1.2cqw]">
-          <p className="text-[clamp(1.1rem,4cqw,2rem)] font-semibold uppercase tracking-widest text-white/60">
+        <section className="tv-now-serving-section flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-[1.2cqw]">
+          <p className="tv-now-serving-header text-[clamp(1.1rem,4cqw,2rem)] font-semibold uppercase tracking-widest text-white/60">
             Now Serving
           </p>
           {data && primaryNowServing.length > 0 ? (
@@ -384,9 +384,11 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
                   {primaryNowServing.map((entry) => (
                     <div
                       key={entry.queueId}
-                      className={`rounded-2xl bg-white/10 text-center shadow-xl backdrop-blur ${layout.cardClassName}`}
+                      className={`tv-now-serving-card rounded-2xl bg-white/10 text-center shadow-xl backdrop-blur ${layout.cardClassName}`}
                     >
-                      <p className={`${layout.numberSizeClassName} font-extrabold tabular-nums`}>{entry.queueNumber}</p>
+                      <p className={`tv-now-serving-number ${layout.numberSizeClassName} font-extrabold tabular-nums`}>
+                        {entry.queueNumber}
+                      </p>
                       {/* Phase 2.7 (YAKAP Patient Classification): safe to
                           show publicly - queue number, classification,
                           doctor/department/room only. Never the patient's
@@ -394,12 +396,14 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
                           patient-identifying field on this public screen,
                           unchanged from the pre-existing design. */}
                       <p
-                        className={`${layout.lineSpacingClassName} ${layout.initialsSizeClassName} font-semibold uppercase tracking-wide text-white/80`}
+                        className={`tv-now-serving-initials ${layout.lineSpacingClassName} ${layout.initialsSizeClassName} font-semibold uppercase tracking-wide text-white/80`}
                       >
                         {entry.visitClassification === "Yakap" ? "YAKAP" : "Regular"}
                       </p>
-                      <p className={`${layout.lineSpacingClassName} ${layout.initialsSizeClassName}`}>{entry.patientInitials}</p>
-                      <p className={`${layout.lineSpacingClassName} ${layout.detailSizeClassName} text-white/70`}>
+                      <p className={`tv-now-serving-initials ${layout.lineSpacingClassName} ${layout.initialsSizeClassName}`}>
+                        {entry.patientInitials}
+                      </p>
+                      <p className={`tv-now-serving-detail ${layout.lineSpacingClassName} ${layout.detailSizeClassName} text-white/70`}>
                         {entry.doctorName ? `Dr. ${entry.doctorName}` : entry.departmentName ?? ""}
                         {entry.roomName ? ` · ${entry.roomName}` : ""}
                       </p>
@@ -409,7 +413,9 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
               );
             })()
           ) : (
-            <p className="text-[clamp(1.3rem,5cqw,3rem)] text-white/50">No one is currently being served</p>
+            <p className="tv-now-serving-empty text-[clamp(1.3rem,5cqw,3rem)] text-white/50">
+              No one is currently being served
+            </p>
           )}
         </section>
 
@@ -486,6 +492,49 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
           }
           100% {
             transform: translateX(-100%);
+          }
+        }
+
+        /* Fallback for browsers without CSS Container Query support (no
+           \`cqw\` unit, no \`container-type\`) - notably common on older
+           smart-TV browser engines (many LG webOS/Samsung Tizen/budget
+           Android TV builds predate Container Queries, which only landed in
+           Chrome 105/Safari 16/Firefox 110, 2022-2023). \`cqw\` needs an
+           established query container to size against; without one, some
+           of these browsers fall back to resolving it against the FULL
+           viewport width instead of the actual half-width Now Serving
+           column (see \`FONT_SIZE_CLASS\`'s comment above for why \`cqw\`
+           was introduced over plain \`vw\` in the first place - this is
+           that exact same bug reappearing on older engines). Confirmed
+           live: queue numbers rendered oversized and overlapping their own
+           card boundary on a real smart TV. This block restores bounded,
+           \`vw\`-based sizing (halved, to approximate "percentage of the
+           half-width column" using full-viewport-relative units) as a
+           safety net - only takes effect when Container Queries aren't
+           supported at all, so modern-browser sizing (desktop, most
+           current smart TVs) is completely unaffected. */
+        @supports not (container-type: inline-size) {
+          .tv-now-serving-section {
+            padding-top: 0.6vw;
+            padding-bottom: 0.6vw;
+          }
+          .tv-now-serving-header {
+            font-size: clamp(1.1rem, 2vw, 2rem) !important;
+          }
+          .tv-now-serving-card {
+            padding: 0.75vw !important;
+          }
+          .tv-now-serving-number {
+            font-size: clamp(2rem, 5vw, 5.5rem) !important;
+          }
+          .tv-now-serving-initials {
+            font-size: clamp(0.85rem, 1.7vw, 1.4rem) !important;
+          }
+          .tv-now-serving-detail {
+            font-size: clamp(0.7rem, 1.3vw, 1.05rem) !important;
+          }
+          .tv-now-serving-empty {
+            font-size: clamp(1.3rem, 2.5vw, 3rem) !important;
           }
         }
       `}</style>
