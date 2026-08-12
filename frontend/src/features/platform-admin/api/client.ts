@@ -24,22 +24,33 @@ export interface PlatformTokens {
 export const platformTokenStorage = {
   getAccessToken(): string | null {
     if (typeof window === "undefined") return null;
-    return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+    return window.localStorage.getItem(ACCESS_TOKEN_KEY) ?? window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
   },
   getRefreshToken(): string | null {
     if (typeof window === "undefined") return null;
-    return window.localStorage.getItem(REFRESH_TOKEN_KEY);
+    return window.localStorage.getItem(REFRESH_TOKEN_KEY) ?? window.sessionStorage.getItem(REFRESH_TOKEN_KEY);
   },
-  setTokens(tokens: PlatformTokens): void {
+  /**
+   * `rememberMe` picks where tokens persist: localStorage survives closing
+   * the browser, sessionStorage is cleared when the tab/browser closes. The
+   * unused storage is cleared so a stale copy can never win on next read.
+   */
+  setTokens(tokens: PlatformTokens, rememberMe: boolean): void {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
-    window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
+    const target = rememberMe ? window.localStorage : window.sessionStorage;
+    const other = rememberMe ? window.sessionStorage : window.localStorage;
+    target.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
+    target.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
+    other.removeItem(ACCESS_TOKEN_KEY);
+    other.removeItem(REFRESH_TOKEN_KEY);
     document.cookie = `${SESSION_COOKIE_NAME}=1; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
   },
   clearTokens(): void {
     if (typeof window === "undefined") return;
     window.localStorage.removeItem(ACCESS_TOKEN_KEY);
     window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+    window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+    window.sessionStorage.removeItem(REFRESH_TOKEN_KEY);
     document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0`;
   },
 };
@@ -94,13 +105,17 @@ export async function platformApiFetch<T>(path: string, options: RequestOptions 
   return (await res.json()) as T;
 }
 
-export async function platformLogin(identifier: string, password: string): Promise<PlatformTokens> {
+export async function platformLogin(
+  identifier: string,
+  password: string,
+  rememberMe: boolean
+): Promise<PlatformTokens> {
   const data = await platformApiFetch<{ access_token: string; refresh_token: string }>(
     "/platform-admin/auth/login",
     { method: "POST", body: { identifier, password }, skipAuth: true }
   );
   const tokens = { accessToken: data.access_token, refreshToken: data.refresh_token };
-  platformTokenStorage.setTokens(tokens);
+  platformTokenStorage.setTokens(tokens, rememberMe);
   return tokens;
 }
 

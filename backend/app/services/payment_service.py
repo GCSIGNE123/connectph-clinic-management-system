@@ -36,6 +36,7 @@ from app.services.audit_service import AuditService
 from app.services.invoice_service import _to_detail
 from app.services.shift_service import enforce_receptionist_open_shift
 from app.services.visit_service import VisitService
+from app.services import sync_queue_service
 
 
 class PaymentService:
@@ -101,11 +102,14 @@ class PaymentService:
                 detail=f"Payment amount ({total_new}) exceeds the remaining balance ({current_balance}).",
             )
         now = datetime.now(UTC)
+        created_payments = []
         for p in payments:
-            await self.repo.add_payment(
-                invoice_id, clinic_id, payment_method=p["payment_method"], amount=Decimal(str(p["amount"])),
-                reference_number=p.get("reference_number"), status=PaymentStatus.COMPLETED,
-                received_by=actor_id, paid_at=now,
+            created_payments.append(
+                await self.repo.add_payment(
+                    invoice_id, clinic_id, payment_method=p["payment_method"], amount=Decimal(str(p["amount"])),
+                    reference_number=p.get("reference_number"), status=PaymentStatus.COMPLETED,
+                    received_by=actor_id, paid_at=now,
+                )
             )
         await self.session.refresh(invoice, attribute_names=["payments"])
         self._recompute_amount_paid(invoice)
@@ -121,6 +125,21 @@ class PaymentService:
             await self._sync_visit_on_paid(invoice, actor_id=actor_id)
 
         await self.session.commit()
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed payment (see sync_queue_service.py).
+        for payment, p in zip(created_payments, payments):
+            await sync_queue_service.enqueue(
+                entity_type="payment", record_id=payment.id, operation="create",
+                payload={
+                    "invoice_id": str(invoice_id),
+                    "payment_method": str(p["payment_method"]),
+                    "amount": str(p["amount"]),
+                    "reference_number": p.get("reference_number"),
+                    "received_by": str(actor_id),
+                    "paid_at": now.isoformat(),
+                },
+                clinic_id=clinic_id,
+            )
         return _to_detail(await self.repo.get_by_id(invoice_id, clinic_id))
 
     async def void_payment(self, payment_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> InvoiceDetail:

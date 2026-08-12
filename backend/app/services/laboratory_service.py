@@ -34,6 +34,7 @@ from app.repositories.visit_repository import VisitRepository
 from app.schemas.laboratory import LaboratoryOrderRead, LaboratoryResultRead, LaboratoryTemplateRead
 from app.services.audit_service import AuditService
 from app.services.invoice_service import InvoiceService
+from app.services import sync_queue_service
 
 # Maps LaboratoryOrderStatus -> the underlying Phase 9 Order's OrderStatus.
 # This is the same class of "reflect a child entity's status onto the
@@ -171,7 +172,14 @@ class LaboratoryService:
             status=LaboratoryOrderStatus.REQUESTED,
         )
         await self.session.commit()
-        return await self.repo.get_by_id(lab_order.id, clinic_id)
+        refreshed = await self.repo.get_by_id(lab_order.id, clinic_id)
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="laboratory_order", record_id=refreshed.id, operation="create",
+            payload=_to_read(refreshed).model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return refreshed
 
     # --- Reads ---
 
@@ -266,11 +274,17 @@ class LaboratoryService:
         )
         await self.session.commit()
 
+        result_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
+        await sync_queue_service.enqueue(
+            entity_type="laboratory_result", record_id=laboratory_order_id, operation="update",
+            payload=result_read.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+
         # Billing integration - fires once the order first reaches Completed.
         if completed_at == now:
             await self._sync_billing(lab_order, clinic_id=clinic_id, actor_id=actor_id)
 
-        return await self.get(laboratory_order_id, clinic_id=clinic_id)
+        return result_read
 
     async def release_results(self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
@@ -287,7 +301,12 @@ class LaboratoryService:
             entity_type="laboratory_order", entity_id=str(lab_order.id),
         )
         await self.session.commit()
-        return await self.get(laboratory_order_id, clinic_id=clinic_id)
+        released_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
+        await sync_queue_service.enqueue(
+            entity_type="laboratory_order", record_id=laboratory_order_id, operation="update",
+            payload=released_read.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return released_read
 
     async def cancel_order(self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)

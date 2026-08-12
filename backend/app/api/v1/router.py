@@ -8,6 +8,7 @@ from app.api.v1 import (
     analytics,
     appointments,
     auth,
+    backup,
     billing,
     branches,
     clinic_settings,
@@ -30,8 +31,10 @@ from app.api.v1 import (
     roles,
     services,
     shifts,
+    system_status,
     tv_display,
     users,
+    vaccinations,
     visits,
     ws_queues,
 )
@@ -87,6 +90,9 @@ api_router.include_router(billing.router)
 api_router.include_router(laboratory.router)
 api_router.include_router(laboratory.visit_router)
 
+# Post-RC1: Vaccination Administration
+api_router.include_router(vaccinations.router)
+
 # Phase 11: Appointment Management
 api_router.include_router(appointments.router)
 api_router.include_router(appointments.doctors_router)
@@ -112,3 +118,12 @@ api_router.include_router(platform_admin_router)
 # get_current_patient (never get_current_user/require_roles or
 # get_current_platform_admin).
 api_router.include_router(patient_portal_router)
+
+# Post-RC1 Phase 2 Milestone 1: Cloud Readiness - System Status panel.
+api_router.include_router(system_status.router)
+
+# Post-RC1 Phase 2 Milestone 2: Cloud Backup (One-Way Sync) - the API a
+# cloud-hosted instance of this codebase exposes to a clinic's local sync
+# worker. Gated by X-Sync-Api-Key, not any JWT dependency - see
+# app/api/v1/backup.py.
+api_router.include_router(backup.router)

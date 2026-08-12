@@ -37,6 +37,7 @@ from app.schemas.visit import (
 )
 from app.services.audit_service import AuditService
 from app.services.visit_number_generator import VisitNumberGenerator
+from app.services import sync_queue_service
 
 
 def _full_name(entity) -> str:
@@ -245,7 +246,14 @@ class VisitService:
             metadata={"visit_number": visit_number, "patient_id": str(payload.patient_id), "source": "pre_queue"},
         )
         await self.session.commit()
-        return await self.get_detail(visit.id, clinic_id=clinic_id)
+        detail = await self.get_detail(visit.id, clinic_id=clinic_id)
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit.id, operation="create",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail
 
     async def create_visit(self, payload: VisitCreate, *, clinic_id: UUID, actor_id: UUID | None) -> VisitDetail:
         """Standalone creation entrypoint (internal/test use - see module docstring)."""
@@ -324,7 +332,12 @@ class VisitService:
             entity_type="visit", entity_id=str(visit_id), metadata={"fields": list(updates.keys())},
         )
         await self.session.commit()
-        return await self.get_detail(visit_id, clinic_id=clinic_id)
+        detail = await self.get_detail(visit_id, clinic_id=clinic_id)
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit_id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail
 
     async def change_status(
         self, visit_id: UUID, *, clinic_id: UUID, actor_id: UUID | None, new_status: VisitStatus, note: str | None
@@ -369,4 +382,9 @@ class VisitService:
             metadata={"from": from_status.value, "to": new_status.value},
         )
         await self.session.commit()
-        return await self.get_detail(visit_id, clinic_id=clinic_id)
+        detail = await self.get_detail(visit_id, clinic_id=clinic_id)
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit_id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail

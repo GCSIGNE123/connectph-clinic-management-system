@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
@@ -18,6 +19,7 @@ import { ApiError } from "@/lib/api-client";
  */
 export function LoginForm() {
   const login = useLogin();
+  const [showPassword, setShowPassword] = useState(false);
   const {
     register,
     handleSubmit,
@@ -77,7 +79,7 @@ export function LoginForm() {
         </div>
         <Input
           id="password"
-          type="password"
+          type={showPassword ? "text" : "password"}
           autoComplete="current-password"
           placeholder="••••••••"
           invalid={Boolean(errors.password)}
@@ -86,6 +88,15 @@ export function LoginForm() {
         {errors.password ? (
           <p className="text-xs text-destructive">{errors.password.message}</p>
         ) : null}
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
+            checked={showPassword}
+            onChange={(event) => setShowPassword(event.target.checked)}
+          />
+          Show password
+        </label>
       </div>
 
       <label className="flex items-center gap-2 text-sm text-muted-foreground">

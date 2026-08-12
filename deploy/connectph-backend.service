@@ -1,0 +1,23 @@
+[Unit]
+Description=CONNECT.PH Clinic Platform - Backend (FastAPI)
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=connectph
+Group=connectph
+WorkingDirectory=/opt/connectph/backend
+EnvironmentFile=/opt/connectph/backend/.env
+ExecStart=/opt/connectph/backend/.venv/bin/gunicorn app.main:app \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8000 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile -
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

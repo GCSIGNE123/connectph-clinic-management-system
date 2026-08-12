@@ -39,6 +39,7 @@ from app.schemas.clinical_orders import (
 )
 from app.services.audit_service import AuditService
 from app.services.clinical_number_generator import OrderNumberGenerator, PrescriptionNumberGenerator
+from app.services import sync_queue_service
 
 
 class ClinicalOrdersService:
@@ -131,6 +132,15 @@ class ClinicalOrdersService:
             from app.services.laboratory_service import LaboratoryService
 
             await LaboratoryService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
+
+        # Post-RC1: a Vaccination-category order automatically gets its own
+        # `vaccination_administrations` workflow record, so it shows up on
+        # the Vaccination Dashboard immediately - same pattern as Laboratory
+        # above, see `services/vaccination_service.py` for the design.
+        if payload.order_category == OrderCategory.VACCINATION:
+            from app.services.vaccination_service import VaccinationService
+
+            await VaccinationService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
 
         return OrderRead.model_validate(order)
 
@@ -264,7 +274,14 @@ class ClinicalOrdersService:
             metadata={"prescription_number": prescription_number, "warnings": warnings},
         )
         await self.session.commit()
-        return PrescriptionCreateResponse(prescription=PrescriptionRead.model_validate(prescription), warnings=warnings)
+        read = PrescriptionRead.model_validate(prescription)
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="prescription", record_id=prescription.id, operation="create",
+            payload=read.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return PrescriptionCreateResponse(prescription=read, warnings=warnings)
 
     async def list_prescriptions(self, consultation_id: UUID, *, clinic_id: UUID) -> list[PrescriptionRead]:
         await self._require_consultation(consultation_id, clinic_id)

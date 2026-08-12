@@ -9,7 +9,7 @@ describe("platformTokenStorage", () => {
   });
 
   it("stores platform tokens under keys distinct from the clinic portal's", () => {
-    platformTokenStorage.setTokens({ accessToken: "pa-access", refreshToken: "pa-refresh" });
+    platformTokenStorage.setTokens({ accessToken: "pa-access", refreshToken: "pa-refresh" }, true);
 
     expect(window.localStorage.getItem("platform_access_token")).toBe("pa-access");
     expect(window.localStorage.getItem("platform_refresh_token")).toBe("pa-refresh");
@@ -19,14 +19,14 @@ describe("platformTokenStorage", () => {
   });
 
   it("sets a platform_session cookie distinct from the clinic portal's cph_session cookie", () => {
-    platformTokenStorage.setTokens({ accessToken: "a", refreshToken: "b" });
+    platformTokenStorage.setTokens({ accessToken: "a", refreshToken: "b" }, true);
     expect(document.cookie).toContain("platform_session=1");
     expect(document.cookie).not.toContain("cph_session=1");
   });
 
   it("clearTokens removes only the platform tokens", () => {
     window.localStorage.setItem("cph_access_token", "clinic-token");
-    platformTokenStorage.setTokens({ accessToken: "a", refreshToken: "b" });
+    platformTokenStorage.setTokens({ accessToken: "a", refreshToken: "b" }, true);
 
     platformTokenStorage.clearTokens();
 

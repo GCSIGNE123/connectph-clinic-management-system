@@ -8,6 +8,8 @@ export default function PlatformLoginPage() {
   const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -16,7 +18,7 @@ export default function PlatformLoginPage() {
     setError(null);
     setLoading(true);
     try {
-      await platformLogin(identifier, password);
+      await platformLogin(identifier, password, rememberMe);
       router.push("/platform/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -53,13 +55,31 @@ export default function PlatformLoginPage() {
 
         <label style={{ display: "block", fontSize: 12, marginBottom: 4, marginTop: 12 }}>Password</label>
         <input
-          type="password"
+          type={showPassword ? "text" : "password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           style={inputStyle}
           autoComplete="current-password"
           required
         />
+
+        <label style={checkboxLabelStyle}>
+          <input
+            type="checkbox"
+            checked={showPassword}
+            onChange={(e) => setShowPassword(e.target.checked)}
+          />
+          Show password
+        </label>
+
+        <label style={checkboxLabelStyle}>
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+          />
+          Remember me on this device
+        </label>
 
         {error && (
           <div style={{ color: "#f87171", fontSize: 12, marginTop: 12 }}>{error}</div>
@@ -72,6 +92,15 @@ export default function PlatformLoginPage() {
     </div>
   );
 }
+
+const checkboxLabelStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 12,
+  color: "#9ca3af",
+  marginTop: 12,
+};
 
 const inputStyle: React.CSSProperties = {
   width: "100%",

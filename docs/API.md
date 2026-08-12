@@ -29,6 +29,84 @@ All three verified live against the running dev backend during v1.0.0 release ve
 
 ---
 
+## `GET /api/v1/system/status` (Post-RC1 Phase 2 Milestone 1: Cloud Readiness)
+
+Owner/Administrator only (`require_system_status_role`, 403 for every other role). Refreshes and returns the Connectivity Service's current state (`app/services/connectivity_service.py`) — groundwork for a future hybrid local+cloud deployment, does not gate or change any business logic. See `docs/FEATURES.md`'s "Post-RC1 — Phase 2 Milestone 1" section for the full scope.
+
+**Response `200 OK`**
+
+```json
+{
+  "deployment_mode": "local",
+  "app_version": "1.7.0-rc1",
+  "local_status": "up",
+  "cloud_status": "not_configured",
+  "database_status": "reachable",
+  "internet_status": "reachable",
+  "last_successful_cloud_connection": null,
+  "last_checked_at": "2026-08-06T05:55:33.569294Z",
+  "pending_sync_jobs": 0,
+  "last_successful_sync_at": "2026-08-06T06:27:33.931470Z",
+  "last_failed_sync_at": null,
+  "last_failed_sync_reason": null,
+  "total_uploaded_today": 3,
+  "retry_queue_count": 1,
+  "average_sync_time_ms": 16.67
+}
+```
+
+- `deployment_mode` — `"local"` | `"hybrid"`, mirrors `Settings.DEPLOYMENT_MODE`.
+- `app_version` — **Post-RC1 Phase 2.5**: backend version string, mirrors `Settings.APP_VERSION` (also used as `app.main`'s FastAPI `version=`). The frontend's own build version ("Frontend Version" on the System Status page) is self-reported client-side via `NEXT_PUBLIC_APP_VERSION`, not part of this response — the backend has no way to know a separately-deployed frontend's version.
+- `cloud_status` — `"up"` | `"down"` | `"not_configured"`. `"not_configured"` (not `"down"`) when `CLOUD_API_URL` is unset — the expected state for every existing local-only clinic.
+- `database_status` / `internet_status` — `"reachable"` | `"unreachable"`.
+- `last_successful_cloud_connection` — ISO timestamp of the last successful cloud reachability check, or `null` if never (client renders this as "Never").
+- **Post-RC1 Phase 2 Milestone 2 (Cloud Backup) fields**, sourced from the `sync_jobs` table and `sync_worker_service`'s in-memory counters:
+  - `pending_sync_jobs` — count of `pending`/`in_progress` rows.
+  - `retry_queue_count` — count of rows with `retry_count > 0` (i.e. have failed at least once, regardless of current status).
+  - `total_uploaded_today` — count of jobs completed since local midnight UTC of the current process (resets on backend restart, consistent with the in-memory pattern already used by `connectivity_service.py`).
+  - `average_sync_time_ms` — rolling average of the last 200 completed jobs' `duration_ms`, or `null` if none have completed yet.
+  - `last_successful_sync_at` / `last_failed_sync_at` (+`last_failed_sync_reason`) — `MAX(completed_at)` over `completed` jobs, and the most recent `failed`-status job's `updated_at`/`last_error` respectively. `null`/`"Never"` if none.
+
+Live-verified (see `docs/TESTING.md`) with `CLOUD_API_URL` unset (`cloud_status: "not_configured"`, `last_successful_cloud_connection: null`), then temporarily with a reachable and an unreachable `CLOUD_API_URL` to confirm the `"up"`/`"down"` paths flip correctly. A Receptionist token received `403 Forbidden`.
+
+---
+
+## `POST /api/v1/backup/{entity_type}` (Post-RC1 Phase 2 Milestone 2: Cloud Backup)
+
+Exposed by a **cloud-hosted instance** of this same codebase (pointed at `CLOUD_DATABASE_URL`) for a clinic's local instance's background sync worker to call. Not part of the normal clinic-facing API surface — no clinic-staff/patient/platform-admin JWT is accepted here at all.
+
+**Auth**: `X-Sync-Api-Key: <shared secret>` header, checked against that instance's own `Settings.CLOUD_SYNC_API_KEY`. Missing or wrong key → `401`. Deliberately the only HTTP method exposed on this path is `POST` — no `GET`/`PUT`/`PATCH`/`DELETE` — so this channel can only ever be pushed to, never read from or told to overwrite something by any other caller.
+
+`entity_type` (path param) — one of `patient`, `visit`, `soap_note`, `queue_ticket`, `prescription`, `laboratory_order`, `laboratory_result`, `payment`, `shift`. Any other value → `400`.
+
+**Request**
+
+```json
+{
+  "clinic_id": "d6d9d58a-cfa6-4608-a048-a93dfc2e4629",
+  "record_id": "840ed22a-7405-4f55-87cc-d4818e71ec70",
+  "operation": "create",
+  "payload": { "...": "full JSON snapshot of the record at enqueue time" }
+}
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "id": "c8e734db-59f1-4e1c-8a47-13d94e5ea91e",
+  "entity_type": "patient",
+  "record_id": "840ed22a-7405-4f55-87cc-d4818e71ec70",
+  "synced_at": "2026-08-06T06:25:16.765214Z"
+}
+```
+
+Upserts into `synced_records`, keyed on `(clinic_id, entity_type, record_id)` — a later upload for the same record overwrites the stored snapshot (local always wins; this endpoint never merges or diffs against its own prior state). See `app/models/synced_record.py` for why this is a document-style backup store rather than a fully-normalized relational mirror of `patients`/`visits`/etc.
+
+Live-verified end-to-end against a real second instance of this codebase on a separate port/database standing in for "the cloud" — see `docs/TESTING.md`.
+
+---
+
 ## `POST /api/v1/auth/register`
 
 Registers a new clinic and its first user (the Owner), or registers a new user invited into an existing clinic, depending on payload. Foundation-stage implementation covers the "new clinic + owner" path.
@@ -783,6 +861,16 @@ All routes below are prefixed `/api/v1` and require a bearer token + tenant cont
 | `PATCH` | `/laboratory/templates/{template_id}` | Partial update, including replacing the `parameters` list. Administrator/Owner only. |
 | `GET` | `/visits/{visit_id}/laboratory` | All laboratory orders for a visit (Visit Details Laboratory tab). |
 | `GET` | `/patients/{patient_id}/laboratory` | All laboratory orders for a patient across visits (Patient Profile Laboratory tab). |
+
+## Vaccination Administration (Post-RC1)
+
+All routes below are prefixed `/api/v1` and require a bearer token + tenant context. A doctor still ORDERS a vaccination via the unchanged Phase 9 `POST /consultations/{id}/orders` with `"order_category": "Vaccination"` — this creates a matching `vaccination_administrations` row automatically (same auto-creation pattern as Laboratory). Administering it is deliberately broader than other clinical-order categories: Owner/Administrator/Doctor/**Nurse**/**Receptionist** may all administer, not just the ordering doctor — see `VACCINATION_ADMINISTER_ROLES` in `core/dependencies.py`.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/vaccinations` | Worklist for the dashboard. Optional `status_filter` (`Requested`/`Administered`/`Cancelled`) and `patient_id` (immunization history for one patient) query params. |
+| `POST` | `/vaccinations/{vaccination_id}/administer` | `Requested → Administered`. Body: `{vaccine_name?, dose?, lot_number?, site?, route?, notes?}` — all optional; `vaccine_name` defaults to what the doctor ordered if omitted. Also advances the underlying Order to `Completed`. |
+| `POST` | `/vaccinations/{vaccination_id}/cancel` | `Requested → Cancelled`. Also advances the underlying Order to `Cancelled`. |
 
 ### Phase 11: Appointment Management
 

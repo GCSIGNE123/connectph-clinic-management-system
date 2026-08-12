@@ -91,6 +91,8 @@ from app.models.role_permission import RolePermission
 from app.models.shift import Shift, ShiftStatus
 from app.models.soap_note import SoapNote
 from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
+from app.models.sync_job import SyncJob, SyncJobOperation, SyncJobStatus
+from app.models.synced_record import SyncedRecord
 from app.models.system_setting import SystemSetting
 from app.models.tv_announcement import TvAnnouncement, TvAnnouncementType
 from app.models.tv_display_config import (
@@ -101,6 +103,11 @@ from app.models.tv_display_config import (
 )
 from app.models.tv_info_content import DEFAULT_DURATION_SECONDS, TvInfoContent, TvInfoContentType
 from app.models.user import User, UserStatus
+from app.models.vaccination_administration import (
+    VaccinationAdministration,
+    VaccinationStatus,
+    VACCINATION_STATUS_TRANSITIONS,
+)
 from app.models.visit import (
     Visit,
     VisitPriority,
@@ -210,6 +217,10 @@ __all__ = [
     "Subscription",
     "SubscriptionPlan",
     "SubscriptionStatus",
+    "SyncJob",
+    "SyncJobOperation",
+    "SyncJobStatus",
+    "SyncedRecord",
     "SystemSetting",
     "TvAnnouncement",
     "TvAnnouncementType",
@@ -222,6 +233,9 @@ __all__ = [
     "DEFAULT_DURATION_SECONDS",
     "User",
     "UserStatus",
+    "VaccinationAdministration",
+    "VaccinationStatus",
+    "VACCINATION_STATUS_TRANSITIONS",
     "Visit",
     "VisitCounter",
     "VisitLock",

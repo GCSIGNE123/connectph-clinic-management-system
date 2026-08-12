@@ -30,6 +30,7 @@ from app.schemas.patient import (
 )
 from app.services.audit_service import AuditService
 from app.services.patient_number_generator import PatientNumberGenerator
+from app.services import sync_queue_service
 
 
 def _qr_payload(clinic_id: UUID, patient_id: UUID) -> str:
@@ -174,7 +175,14 @@ class PatientService:
         await self.session.commit()
 
         refreshed = await self.patient_repo.get_by_id_and_clinic(patient.id, clinic_id)
-        return PatientCreateResponse(patient=PatientRead.model_validate(refreshed), duplicates=[])
+        read = PatientRead.model_validate(refreshed)
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="patient", record_id=refreshed.id, operation="create",
+            payload=read.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return PatientCreateResponse(patient=read, duplicates=[])
 
     async def update_patient(
         self,
@@ -219,7 +227,12 @@ class PatientService:
         await self.session.commit()
 
         refreshed = await self.patient_repo.get_by_id_and_clinic(patient.id, clinic_id)
-        return PatientCreateResponse(patient=PatientRead.model_validate(refreshed), duplicates=[])
+        read = PatientRead.model_validate(refreshed)
+        await sync_queue_service.enqueue(
+            entity_type="patient", record_id=refreshed.id, operation="update",
+            payload=read.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return PatientCreateResponse(patient=read, duplicates=[])
 
     async def archive_patient(self, patient_id: UUID, *, clinic_id: UUID, actor: User) -> Patient:
         patient = await self.patient_repo.get_by_id_and_clinic(patient_id, clinic_id)

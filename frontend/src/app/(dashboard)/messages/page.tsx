@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -18,6 +18,25 @@ import { useConversation, useSendMessage, useStaffDirectory } from "@/features/m
  * this page, not per-message ticks).
  */
 export default function MessagesPage() {
+  // Post-RC1 Phase 2.5 (BUG-031): `useSearchParams()` requires a Suspense
+  // boundary during static generation, or `next build` (production build)
+  // fails outright with a prerender error - `next dev` never surfaced this
+  // since dev doesn't statically prerender. Vercel deploys always run a real
+  // production build, so this was a genuine launch blocker for Vercel
+  // readiness, not a cosmetic warning. Fix: isolate the `with=` query-param
+  // read into its own child component wrapped in <Suspense>.
+  return (
+    <Suspense fallback={<MessagesPageFallback />}>
+      <MessagesPageInner />
+    </Suspense>
+  );
+}
+
+function MessagesPageFallback() {
+  return <p className="text-sm text-muted-foreground">Loading…</p>;
+}
+
+function MessagesPageInner() {
   const { data: currentUser } = useCurrentUser();
   const searchParams = useSearchParams();
   const [otherUserId, setOtherUserId] = useState<string>("");

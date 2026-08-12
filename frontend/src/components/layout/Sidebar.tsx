@@ -23,12 +23,14 @@ import {
   ClipboardCheck,
   Receipt,
   FlaskConical,
+  Syringe,
   Monitor,
   UploadCloud,
   MessageSquare,
   Printer,
   Volume2,
   Wallet,
+  Wifi,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/types";
@@ -55,6 +57,7 @@ const NAV_ITEMS: (NavItem & { icon: ComponentType<{ className?: string }> })[] =
   { label: "Visits", href: "/visits", icon: FileClock },
   { label: "Doctor Workspace", href: "/doctor-workspace", icon: ClipboardCheck },
   { label: "Laboratory", href: "/laboratory", icon: FlaskConical },
+  { label: "Vaccinations", href: "/vaccinations", icon: Syringe },
   { label: "Billing", href: "/billing", icon: Receipt },
   // Phase 21: Receptionist Shift Management - not role-gated in this list
   // (same pattern as most nav items here); the backend still only lets a
@@ -125,9 +128,17 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
   // same strictest gate as Analytics/TV Displays - bulk-importing real
   // clinical data is not something any operational role can trigger.
   const canSeeMigration = Boolean(currentUser && ANALYTICS_ROLES.has(currentUser.role ?? ""));
-  const finalConfigNavItems = canSeeMigration
+  const migrationNavItems = canSeeMigration
     ? [...configNavItems, { label: "Legacy Migration", href: "/migration", icon: UploadCloud }]
     : configNavItems;
+  // Post-RC1 Phase 2 Milestone 1: Cloud Readiness - System Status panel is
+  // Owner/Administrator only, same gate/rationale as Analytics/TV
+  // Displays/Migration above - the backend 403s every other role on
+  // `GET /system/status`.
+  const canSeeSystemStatus = Boolean(currentUser && ANALYTICS_ROLES.has(currentUser.role ?? ""));
+  const finalConfigNavItems = canSeeSystemStatus
+    ? [...migrationNavItems, { label: "System Status", href: "/system-status", icon: Wifi }]
+    : migrationNavItems;
 
   return (
     <>

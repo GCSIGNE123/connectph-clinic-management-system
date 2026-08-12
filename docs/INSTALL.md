@@ -1,6 +1,6 @@
 # Install / Local Development Setup
 
-Step-by-step setup for running the full CONNECT.PH Clinic Platform locally. For hosted deployment (Vercel/Railway/Supabase) see [`DEPLOYMENT.md`](DEPLOYMENT.md) instead — this doc is local dev only.
+Step-by-step setup for running the full CONNECT.PH Clinic Platform locally. For hosted deployment (Vercel + VPS/Nginx, see Post-RC1 Phase 2.5) see [`DEPLOYMENT.md`](DEPLOYMENT.md) instead — this doc is local dev only. For physical clinic-hardware setup (workstations, TV display, printers, network) see [`INSTALLATION_GUIDE.md`](INSTALLATION_GUIDE.md) — this doc covers the software only.
 
 ---
 

@@ -26,6 +26,7 @@ from app.models.shift import Shift, ShiftStatus
 from app.models.user import User
 from app.schemas.shift import ShiftClose, ShiftCreate, ShiftDetail, ShiftRead, ShiftSummary
 from app.services.audit_service import AuditService
+from app.services import sync_queue_service
 
 
 SHIFT_ENFORCED_ROLE = "Receptionist"
@@ -203,7 +204,19 @@ class ShiftService:
             entity_type="shift", entity_id=str(shift.id),
             metadata={"opening_cash": str(payload.opening_cash)},
         )
-        return await self._to_detail(shift)
+        detail = await self._to_detail(shift)
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort (see
+        # sync_queue_service.py). Note: unlike the other hooked services,
+        # ShiftService relies on the request-scoped session's own
+        # commit-on-success (`app/db/session.py::get_session`) rather than
+        # calling `session.commit()` itself - nothing else happens in this
+        # request after this point, so enqueuing here is equivalent in
+        # practice.
+        await sync_queue_service.enqueue(
+            entity_type="shift", record_id=shift.id, operation="create",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail
 
     async def has_open_shift(self, *, clinic_id: UUID, user_id: UUID) -> bool:
         """Item 7 (Shift Enforcement): reusable "does this user have a
@@ -259,7 +272,12 @@ class ShiftService:
                 "cash_difference": str(cash_difference),
             },
         )
-        return await self._to_detail(shift)
+        detail = await self._to_detail(shift)
+        await sync_queue_service.enqueue(
+            entity_type="shift", record_id=shift.id, operation="update",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        return detail
 
     async def reopen_shift(self, shift_id: UUID, *, clinic_id: UUID, actor: User) -> ShiftDetail:
         shift = await self._get_or_404(shift_id, clinic_id)

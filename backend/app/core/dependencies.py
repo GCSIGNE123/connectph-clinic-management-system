@@ -310,6 +310,20 @@ require_clinical_orders_view_role = require_roles(*CLINICAL_ORDERS_VIEW_ROLES)
 require_clinical_orders_edit_role = require_roles(*CLINICAL_ORDERS_EDIT_ROLES)
 require_clinical_orders_lab_view_role = require_roles(*CLINICAL_ORDERS_LAB_VIEW_ROLES)
 
+# Post-RC1: Vaccination administration. A doctor ORDERS a vaccination via the
+# normal Clinical Orders flow above (CLINICAL_ORDERS_EDIT_ROLES); actually
+# ADMINISTERING it (recording lot/site/route/dose and marking it given) is a
+# deliberately separate, broader permission - unlike other order categories,
+# not restricted to "the assigned doctor": any Nurse or Receptionist in the
+# clinic may administer, in addition to the ordering Doctor and Owner/
+# Administrator, matching real clinic staffing where front-desk/nursing
+# staff routinely give injections a doctor has ordered.
+VACCINATION_ADMINISTER_ROLES = {"Owner", "Administrator", "Doctor", "Nurse", "Receptionist"}
+VACCINATION_VIEW_ROLES = VACCINATION_ADMINISTER_ROLES
+
+require_vaccination_administer_role = require_roles(*VACCINATION_ADMINISTER_ROLES)
+require_vaccination_view_role = require_roles(*VACCINATION_VIEW_ROLES)
+
 # Phase 10: Laboratory Management.
 # View: broad, same shape as the other clinical modules - Doctor/Receptionist
 # are read-only ("Reception: view-only" per spec), Laboratory/Owner/
@@ -357,6 +371,13 @@ require_appointment_schedule_manage_role = require_roles(*APPOINTMENT_SCHEDULE_M
 ANALYTICS_ROLES = {"Owner", "Administrator"}
 
 require_analytics_role = require_roles(*ANALYTICS_ROLES)
+
+# Post-RC1 Phase 2 Milestone 1: Cloud Readiness - System Status panel.
+# Owner and Administrator ONLY, same strictest gate/rationale as the
+# Analytics module above - reused verbatim (`ANALYTICS_ROLES`) rather than
+# defining a new permission, per the milestone spec's explicit instruction
+# to match the existing admin-settings role-gating convention.
+require_system_status_role = require_roles(*ANALYTICS_ROLES)
 
 # Phase 14: Legacy Migration Wizard.
 # Owner and Administrator ONLY, per spec - the same strictest gate as

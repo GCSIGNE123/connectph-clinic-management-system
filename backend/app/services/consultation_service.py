@@ -42,6 +42,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.upload_validation import validate_document_upload
@@ -63,6 +64,7 @@ from app.schemas.consultation import (
 from app.schemas.doctor_workspace import LockInfo
 from app.services.audit_service import AuditService
 from app.services.visit_service import VisitService
+from app.services import sync_queue_service
 
 LOCK_TTL_MINUTES = 15
 SOAP_FIELDS = [
@@ -275,6 +277,12 @@ class ConsultationService:
                 entity_type="soap_note", entity_id=str(note.id),
             )
         await self.session.commit()
+        await sync_queue_service.enqueue(
+            entity_type="soap_note", record_id=note.id,
+            operation="update" if existing is not None else "create",
+            payload=jsonable_encoder({"consultation_id": str(consultation_id), **fields}),
+            clinic_id=clinic_id,
+        )
         return await self.get_detail(consultation_id, clinic_id=clinic_id, current_user_id=current_user_id)
 
     async def get_consultation_for_visit(self, visit_id: UUID, *, clinic_id: UUID, current_user_id: UUID) -> ConsultationDetail | None:
@@ -340,6 +348,14 @@ class ConsultationService:
                 entity_type="soap_note", entity_id=str(note.id),
             )
         await self.session.commit()
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed save (see sync_queue_service.py).
+        await sync_queue_service.enqueue(
+            entity_type="soap_note", record_id=note.id,
+            operation="update" if existing is not None else "create",
+            payload=jsonable_encoder({"consultation_id": str(consultation_id), **fields}),
+            clinic_id=clinic_id,
+        )
         return await self.get_detail(consultation_id, clinic_id=clinic_id, current_user_id=current_user_id)
 
     # --- Diagnoses ---

@@ -2,7 +2,8 @@
 
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -16,6 +17,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.middleware.request_logging import RequestLoggingMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
+from app.services import connectivity_service, sync_worker_service
 
 
 class JSONLogFormatter(logging.Formatter):
@@ -50,13 +52,34 @@ def setup_logging() -> None:
     root_logger.setLevel(logging.INFO if settings.ENV != "development" else logging.DEBUG)
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Post-RC1 Phase 2 Milestone 1: Cloud Readiness - starts the
+    # Connectivity Service's periodic background poll (every
+    # CHECK_INTERVAL_SECONDS). Purely additive: detects/displays
+    # connectivity state only, never gates any business logic.
+    connectivity_service.start_background_loop()
+    # Post-RC1 Phase 2 Milestone 2: Cloud Backup - starts the background
+    # sync worker (drains `sync_jobs` against the cloud Backup API every
+    # `SYNC_WORKER_INTERVAL_SECONDS`). Purely additive/best-effort: in
+    # `DEPLOYMENT_MODE=local` (CLOUD_API_URL unset), it runs but is always a
+    # no-op - see sync_worker_service.py's module docstring.
+    sync_worker_service.start_background_loop()
+    try:
+        yield
+    finally:
+        sync_worker_service.stop_background_loop()
+        connectivity_service.stop_background_loop()
+
+
 def create_app() -> FastAPI:
     setup_logging()
 
     app = FastAPI(
         title=settings.APP_NAME,
-        version="1.7.0-rc1",
+        version=settings.APP_VERSION,
         description="Multi-tenant Medical Clinic Management SaaS - backend foundation.",
+        lifespan=lifespan,
     )
 
     app.add_middleware(

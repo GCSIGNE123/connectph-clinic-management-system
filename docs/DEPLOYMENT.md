@@ -1,6 +1,188 @@
 # Deployment
 
-This document covers hosting setup for each part of the platform — **Vercel** (frontend), **Railway** (backend), **Supabase** (Postgres + Storage) — required environment variables, and the CI/CD deploy flow.
+> **Post-RC1 Phase 2.5 update (2026-08-06):** the actual first production deployment target for the **backend** is a **VPS behind Nginx/HTTPS** (systemd + Gunicorn/Uvicorn workers), not Railway — see the new §0 below, which is the authoritative, currently-in-use deployment path. The **frontend** stays on **Vercel** as originally planned (§1 below is still accurate for that half). Everything under "Legacy planning doc" further down describes an earlier Railway/Supabase-based plan that was superseded for the backend/database hosting decision before any real deployment happened; it's kept for historical context and because the Supabase Storage guidance may still apply if Supabase is used for file storage independent of where Postgres/the API run. Do not follow the Railway steps for a real deploy — follow §0.
+>
+> **Post-RC1 Phase 2.6 note:** this whole document covers the **cloud/VPS** target (a future, separately-hosted Cloud Server/backup instance). The clinic's own on-prem machine — the actual first live install at Canora Medical Clinic — is a different target with its own doc: see [`LOCAL_DEPLOYMENT.md`](LOCAL_DEPLOYMENT.md).
+
+---
+
+## 0. VPS backend deployment (Post-RC1 Phase 2.5 — authoritative)
+
+This section covers **real production deployment**: frontend on Vercel (§1, unchanged), backend on a VPS behind Nginx/HTTPS, and a Cloud PostgreSQL backup target. For local development setup, see [`INSTALL.md`](INSTALL.md) — this section is production-only.
+
+**Architecture reminder** (unchanged from Milestones 1-2): the **Local Clinic Server** (backend + Postgres, on-prem or its own VPS per clinic) is the sole primary/source-of-truth database. A **Cloud Server** (this same backend codebase, deployed separately, its own Postgres) exists only as a `POST /api/v1/backup/{entity_type}` upload target for one-way sync/monitoring — it never writes back to any Local Clinic Server. The frontend talks only to its own clinic's Local Clinic Server via `NEXT_PUBLIC_API_URL`, never to the Cloud Server directly.
+
+### 0.1 Server requirements
+
+| Component | Minimum | Notes |
+|---|---|---|
+| VPS (backend) | 2 vCPU / 4 GB RAM / 40 GB SSD | Ubuntu 22.04 LTS+ |
+| PostgreSQL | 15+ | one instance per clinic (Local Clinic Server) + one for the Cloud Server, if deployed |
+| Redis | 7+ | rate limiting/caching |
+| Domain | e.g. `connectph-it.com` | see §0.6 DNS |
+
+### 0.2 VPS setup
+
+```bash
+apt update && apt upgrade -y
+apt install -y python3.12 python3.12-venv postgresql postgresql-contrib redis-server nginx certbot python3-certbot-nginx git
+adduser --system --group connectph
+mkdir -p /opt/connectph && chown connectph:connectph /opt/connectph
+```
+
+### 0.3 PostgreSQL installation & database setup
+
+```bash
+sudo -u postgres psql <<'SQL'
+CREATE USER clinic_user WITH PASSWORD '<strong-password>';
+CREATE DATABASE connectph_clinic OWNER clinic_user;
+SQL
+```
+
+For a Cloud Server, repeat with a separate database (e.g. `connectph_cloud_backup`), on the same instance or (for real isolation) a separate managed Postgres. `CLOUD_DATABASE_URL` lives in the **Cloud Server's own** `.env`; the Local Clinic Server never connects to it directly — all communication is HTTP (`POST /api/v1/backup/*`), not a DB connection.
+
+### 0.4 Backend deployment
+
+```bash
+su - connectph
+git clone <repo-url> /opt/connectph
+cd /opt/connectph/backend
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[prod]"
+
+cp .env.production.example .env
+# edit .env: DATABASE_URL, JWT_SECRET_KEY, REDIS_URL, CORS_ORIGINS,
+# CLOUD_* (Local Clinic Server only), SMTP_*
+
+.venv/bin/alembic upgrade head
+```
+
+Verify manually first:
+
+```bash
+.venv/bin/gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000
+curl http://127.0.0.1:8000/api/v1/health   # {"status":"ok"}
+```
+
+Then install as a systemd service (template: [`../deploy/connectph-backend.service`](../deploy/connectph-backend.service)):
+
+```bash
+sudo cp deploy/connectph-backend.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now connectph-backend
+sudo systemctl status connectph-backend
+```
+
+A Cloud Server deployment is identical, just with `DEPLOYMENT_MODE=local` (it has no cloud above itself) and `CLOUD_SYNC_API_KEY` set to authenticate *incoming* backup requests — same codebase, different `.env`, separate VPS/subdomain.
+
+### 0.5 Nginx reverse proxy + HTTPS (Let's Encrypt)
+
+Template: [`../deploy/nginx-connectph.conf`](../deploy/nginx-connectph.conf).
+
+```bash
+sudo cp deploy/nginx-connectph.conf /etc/nginx/sites-available/connectph
+sudo ln -s /etc/nginx/sites-available/connectph /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+sudo certbot --nginx -d clinic-api.connectph-it.com
+
+# Auto-renewal: certbot installs a systemd timer by default on modern
+# Ubuntu — verify rather than adding a duplicate cron job:
+systemctl list-timers | grep certbot
+# fallback if absent: 0 3 * * * certbot renew --quiet && systemctl reload nginx
+```
+
+**Cookies:** this app is primarily JWT-bearer (`Authorization: Bearer <token>`); the one cookie it sets is the refresh-token cookie (`REFRESH_TOKEN_COOKIE_NAME`, see `backend/app/core/config.py`). `COOKIE_SECURE=true` / `COOKIE_SAMESITE=lax` (both already the `Settings` defaults) must stay true in production, which requires the HTTPS this section sets up — `Secure` cookies are simply not set by the browser over plain HTTP.
+
+**`/api/v1/health`** (no auth, no DB call, `{"status":"ok"}`) is the right target for a load-balancer/uptime health check — cheap and fast. Use `/api/v1/ready` instead only if you specifically want DB-reachability verification (heavier, `503` on DB-down).
+
+### 0.6 Required production environment variables
+
+From `backend/app/core/config.py` (`Settings`); full annotated template in `backend/.env.production.example`.
+
+| Variable | Required? | Notes |
+|---|---|---|
+| `DATABASE_URL` | Yes | production Postgres |
+| `JWT_SECRET_KEY` | Yes | long random value, never the dev default |
+| `COOKIE_SECURE` / `COOKIE_SAMESITE` / `COOKIE_DOMAIN` | Recommended | `true` / `lax` behind HTTPS |
+| `REDIS_URL` | Yes | rate limiting |
+| `CORS_ORIGINS` | Yes | real frontend origin(s) only, e.g. `https://clinic.connectph-it.com` — no wildcard, no localhost |
+| `SMTP_*` | If email used | password reset, notifications |
+| `DEPLOYMENT_MODE` | No (`local` default) | `hybrid` on the Local Clinic Server if a Cloud Server exists |
+| `CLOUD_API_URL` | Only in `hybrid` mode | Cloud Server base URL |
+| `CLOUD_DATABASE_URL` | Cloud Server only | its own Postgres |
+| `CLOUD_SYNC_API_KEY` | Both sides in `hybrid` mode | shared secret, same value both sides |
+| `SYNC_WORKER_INTERVAL_SECONDS` / `SYNC_RETRY_BASE_SECONDS` / `SYNC_RETRY_MAX_SECONDS` | No | tuning only |
+
+### 0.7 Frontend deployment (Vercel) — env vars specific to this phase
+
+Builds on §1 below (framework/preset/root-directory guidance there is unchanged). Set in **Project → Settings → Environment Variables** (Production scope):
+
+| Variable | Value |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | `https://clinic-api.connectph-it.com/api/v1` |
+| `NEXT_PUBLIC_APP_NAME` | `CONNECT.PH Clinic Platform` |
+| `NEXT_PUBLIC_APP_ENV` | `production` |
+| `NEXT_PUBLIC_APP_VERSION` | matches `frontend/package.json`'s `version` |
+| `NEXT_PUBLIC_AUTH_COOKIE_NAME` | `cph_session` |
+
+Every `NEXT_PUBLIC_*` var is inlined into the client bundle at build time — no dev-only fallback ships in production as long as `NEXT_PUBLIC_API_URL` is actually set in Vercel (the `?? "http://localhost:4000/api/v1"` fallbacks in source, e.g. `frontend/src/lib/api-client.ts:3`, are dev conveniences only reached when the env var is genuinely absent). Custom domain: **Project → Settings → Domains**, add `clinic.connectph-it.com`, follow Vercel's shown CNAME instructions (independent of the backend's own DNS record, §0.8).
+
+### 0.8 DNS requirements
+
+Example domain: `connectph-it.com`.
+
+| Record | Type | Points to | Purpose |
+|---|---|---|---|
+| `clinic-api.connectph-it.com` | A | VPS public IP | Backend API (Nginx/Gunicorn) |
+| `clinic.connectph-it.com` | CNAME | Vercel's provided target | Frontend |
+| `cloud.connectph-it.com` | A | Cloud Server VPS public IP | Cloud backup/monitoring, if deployed |
+
+### 0.9 Cloud database (backup target)
+
+No local schema changes in this phase. The Cloud Server's Postgres only ever receives data via `POST /api/v1/backup/{entity_type}` (Milestone 2, `backend/app/api/v1/backup.py`) — this phase adds no new write paths. Migration story: a **cloud-hosted instance of this exact same codebase**, pointed at `CLOUD_DATABASE_URL` via its own `.env` and run through `alembic upgrade head`, is how the `sync_jobs`/`synced_records` schema gets created on the cloud side — identical process to §0.4's migration step, just against the cloud database.
+
+### 0.10 Restart / rollback / backup / restore
+
+**Restart:**
+```bash
+sudo systemctl restart connectph-backend
+sudo systemctl status connectph-backend
+curl https://clinic-api.connectph-it.com/api/v1/health
+```
+
+**Rollback (backend):**
+```bash
+cd /opt/connectph
+git log --oneline -5
+git checkout <previous-good-commit-or-tag>
+cd backend && .venv/bin/pip install -e ".[prod]"
+.venv/bin/alembic upgrade head    # or: .venv/bin/alembic downgrade -1, if the bad deploy added a migration to revert
+sudo systemctl restart connectph-backend
+```
+Frontend rollback: Vercel **Deployments → (previous) → Promote to Production** — no git action needed.
+
+**Backup** (application-level, in addition to Milestone 2's automated per-record cloud sync):
+```bash
+pg_dump -U clinic_user -h localhost connectph_clinic | gzip > connectph_clinic_$(date +%F).sql.gz
+```
+Automate via cron/systemd-timer, store off-box.
+
+**Restore:**
+```bash
+gunzip -c connectph_clinic_2026-08-01.sql.gz | psql -U clinic_user -h localhost connectph_clinic
+```
+Restore into a new, empty database first and verify before pointing `DATABASE_URL` at it — never restore directly over a live database without a fresh pre-restore dump of current state.
+
+### 0.11 Modes recap (local vs. hybrid)
+
+Per `backend/app/core/config.py`, `DEPLOYMENT_MODE: Literal["local", "hybrid"]` — there is no separate third "cloud mode". A clinic backend is either fully local (`local`, unchanged default) or hybrid (`hybrid` = "this Local Clinic Server also backs up to a configured Cloud Server"). What's informally called "cloud mode" for the standalone Cloud Server deployment is really the same app running with `DEPLOYMENT_MODE=local` from its own point of view (it has no cloud above itself) — it's distinguished only by `CLOUD_SYNC_API_KEY` being set so it accepts authenticated incoming backup uploads. See `docs/TESTING.md`'s Phase 2.5 section for live proof.
+
+---
+
+## Legacy planning doc (pre-Phase 2.5) — Vercel / Railway / Supabase
+
+The sections below describe an earlier hosting plan (Railway for the backend, Supabase-managed Postgres) drafted before any real deployment occurred. **Superseded for backend/database hosting by §0 above.** Kept for the Vercel frontend guidance (still accurate) and in case Supabase Storage is adopted later for file uploads independent of where Postgres/the API run.
 
 ---
 
