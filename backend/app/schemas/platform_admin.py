@@ -40,6 +40,26 @@ class TenantCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=1, max_length=100)
     email: str | None = None
+    # The clinic's first login. Required: a tenant with no Owner user is a
+    # dead end - nobody could ever sign into it. Created atomically with the
+    # clinic row so "create tenant" always yields an immediately-usable
+    # clinic account, matching how every other clinic in this system works.
+    owner_email: str = Field(min_length=1, max_length=255)
+    owner_username: str = Field(min_length=1, max_length=100)
+    owner_password: str = Field(min_length=8, max_length=255)
+    owner_first_name: str = Field(min_length=1, max_length=100)
+    owner_last_name: str = Field(min_length=1, max_length=100)
+
+
+class TenantUpdateRequest(BaseModel):
+    """All fields optional (partial update). Deliberately excludes status/
+    suspended_*/archived_* - those are lifecycle transitions with their own
+    dedicated, audited endpoints (suspend/reactivate/archive), not plain
+    field edits."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    slug: str | None = Field(default=None, min_length=1, max_length=100)
+    email: str | None = Field(default=None, max_length=255)
 
 
 class TenantSuspendRequest(BaseModel):
@@ -131,6 +151,15 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class TenantUserCreateRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=255)
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=255)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    role_id: UUID
+
+
 class TenantUserUpdateRequest(BaseModel):
     """All fields optional (partial update) - a platform admin editing a
     clinic's own staff account. Deliberately excludes password (use the
@@ -142,6 +171,17 @@ class TenantUserUpdateRequest(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     role_id: UUID | None = None
+
+
+class RoleRead(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    model_config = {"from_attributes": True}
+
+
+class RoleListResponse(BaseModel):
+    items: list[RoleRead]
 
 
 class SystemHealthResponse(BaseModel):

@@ -40,6 +40,50 @@ export async function listTenants(params: { search?: string; status?: string } =
   return platformApiFetch<TenantListResponse>(`/platform-admin/tenants?${qs.toString()}`);
 }
 
+export interface CreateTenantInput {
+  name: string;
+  slug: string;
+  email?: string;
+  ownerEmail: string;
+  ownerUsername: string;
+  ownerPassword: string;
+  ownerFirstName: string;
+  ownerLastName: string;
+}
+
+export async function createTenant(input: CreateTenantInput): Promise<Tenant> {
+  return platformApiFetch<Tenant>("/platform-admin/tenants", {
+    method: "POST",
+    body: {
+      name: input.name,
+      slug: input.slug,
+      email: input.email || null,
+      owner_email: input.ownerEmail,
+      owner_username: input.ownerUsername,
+      owner_password: input.ownerPassword,
+      owner_first_name: input.ownerFirstName,
+      owner_last_name: input.ownerLastName,
+    },
+  });
+}
+
+export interface UpdateTenantInput {
+  name?: string;
+  slug?: string;
+  email?: string;
+}
+
+export async function updateTenant(clinicId: string, input: UpdateTenantInput): Promise<Tenant> {
+  return platformApiFetch<Tenant>(`/platform-admin/tenants/${clinicId}`, {
+    method: "PATCH",
+    body: { name: input.name, slug: input.slug, email: input.email },
+  });
+}
+
+export async function deleteTenant(clinicId: string): Promise<void> {
+  await platformApiFetch<void>(`/platform-admin/tenants/${clinicId}`, { method: "DELETE" });
+}
+
 export async function suspendTenant(clinicId: string, reason: string): Promise<Tenant> {
   return platformApiFetch<Tenant>(`/platform-admin/tenants/${clinicId}/suspend`, {
     method: "POST",

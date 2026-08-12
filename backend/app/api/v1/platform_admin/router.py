@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import (
@@ -26,6 +27,7 @@ from app.models.background_job import BackgroundJob
 from app.models.migration_batch import MigrationBatch
 from app.models.platform_admin_user import PlatformAdminUser
 from app.models.platform_audit_log import PlatformAuditLog
+from app.models.role import Role
 from app.schemas.platform_admin import (
     BackgroundJobRead,
     FeatureFlagRead,
@@ -37,6 +39,8 @@ from app.schemas.platform_admin import (
     PlatformRefreshRequest,
     PlatformTokenResponse,
     ResetPasswordRequest,
+    RoleListResponse,
+    RoleRead,
     SubscriptionRead,
     SubscriptionUpsertRequest,
     SystemHealthResponse,
@@ -45,6 +49,8 @@ from app.schemas.platform_admin import (
     TenantRead,
     TenantStatsResponse,
     TenantSuspendRequest,
+    TenantUpdateRequest,
+    TenantUserCreateRequest,
     TenantUserRead,
     TenantUserUpdateRequest,
 )
@@ -170,8 +176,53 @@ async def create_tenant(
     db: AsyncSession = Depends(get_db),
 ):
     service = TenantManagementService(db)
-    clinic = await service.create_tenant(actor_id=current.id, name=payload.name, slug=payload.slug, email=payload.email)
+    clinic = await service.create_tenant(
+        actor_id=current.id,
+        name=payload.name,
+        slug=payload.slug,
+        email=payload.email,
+        owner_email=payload.owner_email,
+        owner_username=payload.owner_username,
+        owner_password=payload.owner_password,
+        owner_first_name=payload.owner_first_name,
+        owner_last_name=payload.owner_last_name,
+    )
     return TenantRead.model_validate(clinic)
+
+
+@router.patch(
+    "/tenants/{clinic_id}", response_model=TenantRead, dependencies=[Depends(require_platform_admin_tenant_manage)]
+)
+async def update_tenant(
+    clinic_id: UUID,
+    payload: TenantUpdateRequest,
+    current: PlatformAdminUser = Depends(get_current_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = TenantManagementService(db)
+    try:
+        clinic = await service.update_tenant(
+            actor_id=current.id, clinic_id=clinic_id, name=payload.name, slug=payload.slug, email=payload.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return TenantRead.model_validate(clinic)
+
+
+@router.delete(
+    "/tenants/{clinic_id}", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_platform_admin_full)],
+)
+async def delete_tenant(
+    clinic_id: UUID,
+    current: PlatformAdminUser = Depends(get_current_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = TenantManagementService(db)
+    try:
+        await service.delete_tenant(actor_id=current.id, clinic_id=clinic_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post(
@@ -306,6 +357,27 @@ async def list_tenant_users(clinic_id: UUID, db: AsyncSession = Depends(get_db))
     ]
 
 
+@router.post(
+    "/tenants/{clinic_id}/users", response_model=TenantUserRead, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_platform_admin_user_manage)],
+)
+async def create_tenant_user(
+    clinic_id: UUID,
+    payload: TenantUserCreateRequest,
+    current: PlatformAdminUser = Depends(get_current_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = TenantUserAdminService(db)
+    u = await service.create_user(
+        actor_id=current.id, clinic_id=clinic_id, email=payload.email, username=payload.username,
+        password=payload.password, first_name=payload.first_name, last_name=payload.last_name, role_id=payload.role_id,
+    )
+    return TenantUserRead(
+        id=u.id, email=u.email, username=u.username, first_name=u.first_name, last_name=u.last_name,
+        role=u.role.name if u.role else None, status=u.status.value, is_active=u.is_active,
+    )
+
+
 @router.patch(
     "/tenants/{clinic_id}/users/{user_id}", response_model=TenantUserRead,
     dependencies=[Depends(require_platform_admin_user_manage)],
@@ -341,6 +413,12 @@ async def delete_tenant_user(
 ):
     service = TenantUserAdminService(db)
     await service.delete_user(actor_id=current.id, clinic_id=clinic_id, user_id=user_id)
+
+
+@router.get("/roles", response_model=RoleListResponse, dependencies=[Depends(require_platform_admin_view)])
+async def list_roles_for_platform_admin(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Role).order_by(Role.name))
+    return RoleListResponse(items=[RoleRead.model_validate(r) for r in result.scalars().all()])
 
 
 @router.post(

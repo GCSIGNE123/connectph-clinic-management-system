@@ -11,13 +11,16 @@ clinic-scoped endpoint imports this service.
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_password
 from app.models.clinic import Clinic
 from app.models.consultation_attachment import ConsultationAttachment
 from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.refresh_token import RefreshToken
+from app.models.role import Role, RoleName
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.platform_audit_service import PlatformAuditService
@@ -94,16 +97,104 @@ class TenantManagementService:
             "subscription": subscription,
         }
 
-    async def create_tenant(self, *, actor_id: UUID, name: str, slug: str, email: str | None) -> Clinic:
+    async def create_tenant(
+        self,
+        *,
+        actor_id: UUID,
+        name: str,
+        slug: str,
+        email: str | None,
+        owner_email: str,
+        owner_username: str,
+        owner_password: str,
+        owner_first_name: str,
+        owner_last_name: str,
+    ) -> Clinic:
+        owner_role = (await self.session.execute(select(Role).where(Role.name == RoleName.OWNER.value))).scalar_one_or_none()
+        if owner_role is None:
+            # Foundation seed data (app/models/seed.py) guarantees this role
+            # exists in any correctly-migrated database - a missing Owner
+            # role means the deployment itself is broken, not a client error.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Owner role is not seeded in this database - cannot create a clinic without it.",
+            )
+
         clinic = Clinic(name=name, slug=slug, email=email, status="Active")
         self.session.add(clinic)
         await self.session.flush()
+
+        owner = User(
+            clinic_id=clinic.id,
+            email=owner_email,
+            username=owner_username,
+            hashed_password=hash_password(owner_password),
+            first_name=owner_first_name,
+            last_name=owner_last_name,
+            role_id=owner_role.id,
+            is_active=True,
+            is_email_verified=True,
+        )
+        self.session.add(owner)
+        await self.session.flush()
+
         await self.audit.log(
             actor_id=actor_id, action="tenant.create", entity_type="clinic", entity_id=str(clinic.id),
-            clinic_id=clinic.id, metadata={"name": name, "slug": slug},
+            clinic_id=clinic.id, metadata={"name": name, "slug": slug, "owner_email": owner_email},
         )
         await self.session.commit()
         return clinic
+
+    async def update_tenant(
+        self, *, actor_id: UUID, clinic_id: UUID, name: str | None = None, slug: str | None = None,
+        email: str | None = None,
+    ) -> Clinic:
+        clinic = await self.get_tenant(clinic_id)
+        if clinic is None:
+            raise ValueError("Tenant not found")
+
+        if slug is not None and slug != clinic.slug:
+            existing = await self.session.execute(
+                select(Clinic).where(Clinic.slug == slug, Clinic.id != clinic_id, Clinic.is_deleted.is_(False))
+            )
+            if existing.scalar_one_or_none() is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Slug already in use")
+            clinic.slug = slug
+
+        if name is not None:
+            clinic.name = name
+        if email is not None:
+            clinic.email = email
+
+        await self.audit.log(
+            actor_id=actor_id, action="tenant.update", entity_type="clinic", entity_id=str(clinic_id),
+            clinic_id=clinic_id,
+            metadata={"fields": [k for k, v in {"name": name, "slug": slug, "email": email}.items() if v is not None]},
+        )
+        await self.session.commit()
+        await self.session.refresh(clinic)
+        return clinic
+
+    async def delete_tenant(self, *, actor_id: UUID, clinic_id: UUID) -> None:
+        clinic = await self.get_tenant(clinic_id)
+        if clinic is None:
+            raise ValueError("Tenant not found")
+        # Only reachable from the terminal "Archived" lifecycle state - an
+        # explicit two-step (Archive, then Delete) safety rail against
+        # accidentally soft-deleting a live clinic's data (patients, visits,
+        # billing, etc. all still hang off this clinic_id and are never
+        # cascade-removed by this - see `SoftDeleteMixin`, matching every
+        # other delete in this codebase).
+        if clinic.status != "Archived":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tenant must be archived before it can be deleted.",
+            )
+        clinic.is_deleted = True
+        await self.audit.log(
+            actor_id=actor_id, action="tenant.delete", entity_type="clinic", entity_id=str(clinic_id), clinic_id=clinic_id
+        )
+        await self.session.commit()
 
     async def suspend_tenant(self, *, actor_id: UUID, clinic_id: UUID, reason: str | None) -> Clinic:
         clinic = await self.get_tenant(clinic_id)

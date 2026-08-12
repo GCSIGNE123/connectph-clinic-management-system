@@ -31,6 +31,49 @@ class TenantUserAdminService:
         self.refresh_token_repo = RefreshTokenRepository(session)
         self.audit = PlatformAuditService(session)
 
+    async def create_user(
+        self,
+        *,
+        actor_id: UUID,
+        clinic_id: UUID,
+        email: str,
+        username: str,
+        password: str,
+        first_name: str,
+        last_name: str,
+        role_id: UUID,
+    ) -> User:
+        existing_email = await self.session.execute(
+            select(User).where(User.clinic_id == clinic_id, User.email == email, User.is_deleted.is_(False))
+        )
+        if existing_email.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use in this clinic")
+        existing_username = await self.session.execute(
+            select(User).where(User.clinic_id == clinic_id, User.username == username, User.is_deleted.is_(False))
+        )
+        if existing_username.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already in use in this clinic")
+
+        user = User(
+            clinic_id=clinic_id,
+            email=email,
+            username=username,
+            hashed_password=hash_password(password),
+            first_name=first_name,
+            last_name=last_name,
+            role_id=role_id,
+            is_active=True,
+            is_email_verified=True,
+        )
+        self.session.add(user)
+        await self.session.flush()
+        await self.audit.log(
+            actor_id=actor_id, action="tenant_user.create", entity_type="user",
+            entity_id=str(user.id), clinic_id=clinic_id, metadata={"email": email, "role_id": str(role_id)},
+        )
+        await self.session.commit()
+        return await self._get_user(clinic_id, user.id)
+
     async def list_tenant_users(self, clinic_id: UUID) -> list[User]:
         from sqlalchemy.orm import selectinload  # noqa: PLC0415
 
@@ -43,8 +86,12 @@ class TenantUserAdminService:
         return list(result.scalars().all())
 
     async def _get_user(self, clinic_id: UUID, user_id: UUID) -> User:
+        from sqlalchemy.orm import selectinload  # noqa: PLC0415
+
         result = await self.session.execute(
-            select(User).where(User.id == user_id, User.clinic_id == clinic_id, User.is_deleted.is_(False))
+            select(User)
+            .options(selectinload(User.role))
+            .where(User.id == user_id, User.clinic_id == clinic_id, User.is_deleted.is_(False))
         )
         user = result.scalar_one_or_none()
         if user is None:

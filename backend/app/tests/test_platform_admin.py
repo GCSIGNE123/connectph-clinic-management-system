@@ -185,6 +185,92 @@ async def test_archive_tenant(client: AsyncClient, platform_admin_factory, make_
     assert resp.json()["archived_at"] is not None
 
 
+async def test_update_tenant(client: AsyncClient, platform_admin_factory, make_clinic_with_owner):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, _, _ = await make_clinic_with_owner()
+
+    resp = await client.patch(
+        f"/api/v1/platform-admin/tenants/{clinic.id}",
+        json={"name": "Renamed Clinic", "email": "renamed@example.com"},
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Renamed Clinic"
+    assert body["email"] == "renamed@example.com"
+    # Slug untouched since it wasn't in the payload.
+    assert body["slug"] == clinic.slug
+
+
+async def test_update_tenant_rejects_duplicate_slug(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner
+):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic_a, _, _ = await make_clinic_with_owner()
+    clinic_b, _, _ = await make_clinic_with_owner()
+
+    resp = await client.patch(
+        f"/api/v1/platform-admin/tenants/{clinic_b.id}",
+        json={"slug": clinic_a.slug},
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_delete_tenant_requires_archived_first(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner
+):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, _, _ = await make_clinic_with_owner()
+
+    resp = await client.delete(
+        f"/api/v1/platform-admin/tenants/{clinic.id}", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+    assert resp.status_code == 400
+
+
+async def test_delete_tenant_requires_full_platform_admin_role(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner
+):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, _, _ = await make_clinic_with_owner()
+    await client.post(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/archive", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+
+    support_admin, support_password = await platform_admin_factory(role=PlatformAdminRole.SUPPORT_ENGINEER)
+    support_token = await _pa_login(client, support_admin.email, support_password)
+
+    resp = await client.delete(
+        f"/api/v1/platform-admin/tenants/{clinic.id}", headers={"Authorization": f"Bearer {support_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_delete_tenant_after_archive(client: AsyncClient, platform_admin_factory, make_clinic_with_owner):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, _, _ = await make_clinic_with_owner()
+
+    await client.post(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/archive", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+
+    resp = await client.delete(
+        f"/api/v1/platform-admin/tenants/{clinic.id}", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+    assert resp.status_code == 204
+
+    list_resp = await client.get(
+        "/api/v1/platform-admin/tenants?page_size=100", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+    assert all(t["id"] != str(clinic.id) for t in list_resp.json()["items"])
+
+
 # --------------------------------------------------------------------------
 # Feature flags
 # --------------------------------------------------------------------------
