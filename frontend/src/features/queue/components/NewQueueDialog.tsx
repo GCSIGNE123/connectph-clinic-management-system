@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
 import { patientsApi } from "@/features/patients/api/patients-api";
 import { useCreatePatient } from "@/features/patients/hooks/use-patient-mutations";
@@ -357,15 +358,18 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                 </div>
                 <div className="space-y-1.5">
                   <Label>Service</Label>
-                  <Select {...register("serviceId")} invalid={Boolean(errors.serviceId)} disabled={vitalsSaved}>
-                    <option value="">Select service</option>
-                    {(services.data?.items ?? []).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.service_name ?? s.name}
-                        {s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}
-                      </option>
-                    ))}
-                  </Select>
+                  <SearchableSelect
+                    value={serviceId}
+                    onChange={(id) => setValue("serviceId", id, { shouldValidate: true })}
+                    invalid={Boolean(errors.serviceId)}
+                    disabled={vitalsSaved}
+                    placeholder="Select service"
+                    emptyLabel="No services match."
+                    options={(services.data?.items ?? []).map((s) => ({
+                      value: s.id,
+                      label: `${s.service_name ?? s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}`,
+                    }))}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Priority</Label>
