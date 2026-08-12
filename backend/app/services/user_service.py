@@ -8,10 +8,11 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.models.user import User, UserStatus
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
+from app.schemas.auth import ChangeOwnPasswordRequest, UpdateOwnProfileRequest
 from app.schemas.user import UserCreate, UserUpdate
 from app.services.audit_service import AuditService
 
@@ -70,6 +71,40 @@ class UserService:
         )
         await self.session.commit()
         return await self.user_repo.get_by_id_and_clinic(user.id, clinic_id)
+
+    async def update_own_profile(self, payload: UpdateOwnProfileRequest, *, actor: User) -> User:
+        """Self-service profile update (name/mobile number only - see
+        `UpdateOwnProfileRequest`'s own docstring for why role_id/branch_id
+        aren't reachable this way). No role-management dependency gates this
+        - any authenticated user may update their own name/mobile number."""
+        updates = payload.model_dump(exclude_unset=True)
+        user = await self.user_repo.update(actor, **updates)
+        await self.audit_service.log_event(
+            clinic_id=actor.clinic_id, user_id=actor.id, action="user.updated_own_profile",
+            entity_type="user", entity_id=str(actor.id), metadata={"fields": list(updates.keys())},
+        )
+        await self.session.commit()
+        return await self.user_repo.get_by_id_and_clinic(user.id, actor.clinic_id)
+
+    async def change_own_password(self, payload: ChangeOwnPasswordRequest, *, actor: User) -> None:
+        if not verify_password(payload.current_password, actor.hashed_password):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+
+        actor.hashed_password = hash_password(payload.new_password)
+        await self.session.flush()
+        # Revokes every refresh token for this user (same as
+        # `admin_reset_password`) - a changed password should force a fresh
+        # login everywhere, not just where it was changed. The short-lived
+        # access token already in this request's Authorization header stays
+        # valid until it naturally expires, but the next `/auth/refresh`
+        # anywhere (including this tab) will fail and require re-login.
+        await self.refresh_token_repo.revoke_all_for_user(actor.id)
+
+        await self.audit_service.log_event(
+            clinic_id=actor.clinic_id, user_id=actor.id, action="user.changed_own_password",
+            entity_type="user", entity_id=str(actor.id),
+        )
+        await self.session.commit()
 
     async def disable_user(self, user_id: UUID, *, clinic_id: UUID, actor: User) -> User:
         user = await self.user_repo.get_by_id_and_clinic(user_id, clinic_id)

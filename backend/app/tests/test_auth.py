@@ -136,3 +136,119 @@ async def test_logout_revokes_session(client: AsyncClient, make_clinic_with_owne
 
     refresh_response = await client.post("/api/v1/auth/refresh", json={})
     assert refresh_response.status_code == 401
+
+
+async def test_update_own_profile(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Self-service `PATCH /auth/me` - any authenticated user can update
+    their own name/mobile number, and the response reflects it immediately."""
+    clinic, user, password = await make_clinic_with_owner()
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": password, "clinic_slug": clinic.slug},
+    )
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = await client.patch(
+        "/api/v1/auth/me",
+        headers=headers,
+        json={"first_name": "Updated", "middle_name": "M", "last_name": "Name", "mobile_number": "+639171234567"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["first_name"] == "Updated"
+    assert body["middle_name"] == "M"
+    assert body["last_name"] == "Name"
+    assert body["mobile_number"] == "+639171234567"
+
+    # Persisted, not just echoed back - a fresh GET /auth/me confirms it.
+    me_response = await client.get("/api/v1/auth/me", headers=headers)
+    assert me_response.json()["first_name"] == "Updated"
+
+
+async def test_update_own_profile_cannot_change_role_or_branch(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """`UpdateOwnProfileRequest` has no role_id/branch_id fields at all, so
+    even a payload that tries to smuggle them in is simply ignored (extra
+    fields dropped by Pydantic, not a validation error) - self-service
+    profile editing can never be used to escalate privilege."""
+    clinic, user, password = await make_clinic_with_owner()
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": password, "clinic_slug": clinic.slug},
+    )
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = await client.patch(
+        "/api/v1/auth/me",
+        headers=headers,
+        json={"first_name": "Still Owner", "role_id": "11111111-1111-1111-1111-111111111111"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "Owner"
+
+
+async def test_change_own_password_requires_correct_current_password(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    clinic, user, password = await make_clinic_with_owner()
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": password, "clinic_slug": clinic.slug},
+    )
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    wrong_response = await client.post(
+        "/api/v1/auth/me/change-password",
+        headers=headers,
+        json={"current_password": "WrongPassword1!", "new_password": "BrandNewPass1!"},
+    )
+    assert wrong_response.status_code == 400
+
+    correct_response = await client.post(
+        "/api/v1/auth/me/change-password",
+        headers=headers,
+        json={"current_password": password, "new_password": "BrandNewPass1!"},
+    )
+    assert correct_response.status_code == 200
+
+    # New password logs in; old one no longer does.
+    old_login = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": password, "clinic_slug": clinic.slug},
+    )
+    assert old_login.status_code == 401
+
+    new_login = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": "BrandNewPass1!", "clinic_slug": clinic.slug},
+    )
+    assert new_login.status_code == 200
+
+
+async def test_change_own_password_revokes_other_sessions(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    clinic, user, password = await make_clinic_with_owner()
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email_or_username": user.email, "password": password, "clinic_slug": clinic.slug},
+    )
+    access_token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {access_token}"}
+    refresh_cookie = login_response.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+
+    change_response = await client.post(
+        "/api/v1/auth/me/change-password",
+        headers=headers,
+        json={"current_password": password, "new_password": "BrandNewPass1!"},
+    )
+    assert change_response.status_code == 200
+
+    # The refresh token issued before the password change must now be dead.
+    refresh_response = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": refresh_cookie}
+    )
+    assert refresh_response.status_code == 401

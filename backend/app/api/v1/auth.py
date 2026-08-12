@@ -8,6 +8,7 @@ from app.core.dependencies import get_current_user, get_db
 from app.core.rate_limit import rate_limit_forgot_password, rate_limit_login
 from app.models.user import User
 from app.schemas.auth import (
+    ChangeOwnPasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     MeBranch,
@@ -18,9 +19,11 @@ from app.schemas.auth import (
     ResendVerificationRequest,
     ResetPasswordRequest,
     TokenResponse,
+    UpdateOwnProfileRequest,
     VerifyEmailRequest,
 )
 from app.services.auth_service import AuthService
+from app.services.user_service import UserService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -178,7 +181,9 @@ async def me(
         id=current_user.id,
         email=current_user.email,
         first_name=current_user.first_name,
+        middle_name=current_user.middle_name,
         last_name=current_user.last_name,
+        mobile_number=current_user.mobile_number,
         role=role_name,
         clinic_id=current_user.clinic_id,
         clinic=(
@@ -204,3 +209,30 @@ async def me(
         created_at=current_user.created_at.isoformat(),
         updated_at=current_user.updated_at.isoformat(),
     )
+
+
+@router.patch("/me", response_model=MeResponse)
+async def update_me(
+    payload: UpdateOwnProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """Self-service profile update (name/mobile number) - any authenticated
+    user, any role. See `UpdateOwnProfileRequest` for why role/branch/email/
+    username are deliberately not reachable here."""
+    service = UserService(db)
+    await service.update_own_profile(payload, actor=current_user)
+    return await me(current_user=current_user, db=db)
+
+
+@router.post("/me/change-password", status_code=status.HTTP_200_OK)
+async def change_own_password(
+    payload: ChangeOwnPasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Self-service password change - requires the current password (unlike
+    the Owner/Administrator-only `/users/{id}/reset-password`, which doesn't)."""
+    service = UserService(db)
+    await service.change_own_password(payload, actor=current_user)
+    return {"detail": "Password changed. Please sign in again on other devices."}

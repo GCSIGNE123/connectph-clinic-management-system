@@ -17,12 +17,14 @@ interface RawTokenResponse {
   role: string | null;
 }
 
-/** Raw shape returned by `GET /auth/me`. */
+/** Raw shape returned by `GET /auth/me` and `PATCH /auth/me`. */
 interface RawMe {
   id: string;
   email: string;
   first_name: string;
+  middle_name: string | null;
   last_name: string;
+  mobile_number: string | null;
   role: string;
   clinic_id: string;
   clinic: {
@@ -74,7 +76,9 @@ function toUser(raw: RawMe): User {
     id: raw.id,
     email: raw.email,
     firstName: raw.first_name,
+    middleName: raw.middle_name,
     lastName: raw.last_name,
+    mobileNumber: raw.mobile_number,
     role: raw.role as User["role"],
     clinicId: raw.clinic_id,
     clinic,
@@ -117,6 +121,31 @@ export const authApi = {
   async me(): Promise<User> {
     const raw = await apiClient.get<RawMe>("/auth/me");
     return toUser(raw);
+  },
+
+  /** Self-service profile update (name/mobile number only - see the
+   * backend's `UpdateOwnProfileRequest` docstring for why role/branch/
+   * email/username aren't reachable here). */
+  async updateProfile(input: {
+    firstName?: string;
+    middleName?: string | null;
+    lastName?: string;
+    mobileNumber?: string | null;
+  }): Promise<User> {
+    const raw = await apiClient.patch<RawMe>("/auth/me", {
+      first_name: input.firstName,
+      middle_name: input.middleName,
+      last_name: input.lastName,
+      mobile_number: input.mobileNumber,
+    });
+    return toUser(raw);
+  },
+
+  async changePassword(input: { currentPassword: string; newPassword: string }): Promise<void> {
+    await apiClient.post<{ detail: string }>("/auth/me/change-password", {
+      current_password: input.currentPassword,
+      new_password: input.newPassword,
+    });
   },
 
   async forgotPassword(input: ForgotPasswordInput): Promise<void> {

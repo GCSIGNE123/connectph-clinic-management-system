@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { LogOut, Settings, User as UserIcon } from "lucide-react";
 import {
   DropdownMenu,
@@ -20,6 +21,7 @@ import { useLogout } from "@/features/auth/hooks/use-logout";
 export function UserMenu() {
   const { data: user } = useCurrentUser();
   const logout = useLogout();
+  const router = useRouter();
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : "Signed in user";
 
@@ -39,11 +41,15 @@ export function UserMenu() {
       <DropdownMenuContent>
         <DropdownMenuLabel>{user?.email ?? "Account"}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => undefined}>
+        <DropdownMenuItem onClick={() => router.push("/profile")}>
           <UserIcon className="h-4 w-4" aria-hidden="true" />
           Profile
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => undefined}>
+        {/* No separate account-settings page exists yet - the Profile page's
+            "Change password" section is the only self-service account
+            setting so far, so this also routes there rather than being a
+            dead stub. */}
+        <DropdownMenuItem onClick={() => router.push("/profile")}>
           <Settings className="h-4 w-4" aria-hidden="true" />
           Settings
         </DropdownMenuItem>

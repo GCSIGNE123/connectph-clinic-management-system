@@ -94,7 +94,9 @@ class MeResponse(BaseModel):
     id: UUID
     email: str
     first_name: str
+    middle_name: str | None = None
     last_name: str
+    mobile_number: str | None = None
     role: str
     clinic_id: UUID
     clinic: MeClinic | None = None
@@ -104,3 +106,37 @@ class MeResponse(BaseModel):
     is_active: bool
     created_at: str
     updated_at: str
+
+
+class UpdateOwnProfileRequest(BaseModel):
+    """Self-service profile update - deliberately excludes role_id/branch_id/
+    email/username (privilege- or identity-affecting fields), unlike the
+    Owner/Administrator-only `UserUpdate` schema used by `/users/{id}`."""
+
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    mobile_number: str | None = Field(default=None, max_length=20)
+
+    @field_validator("mobile_number")
+    @classmethod
+    def _check_mobile_number(cls, value: str | None) -> str | None:
+        from app.schemas.user import MOBILE_NUMBER_PATTERN  # noqa: PLC0415
+
+        if value is not None and not MOBILE_NUMBER_PATTERN.match(value):
+            raise ValueError("Mobile number must be 7-15 digits, optionally prefixed with '+'.")
+        return value
+
+
+class ChangeOwnPasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def _validate_password_complexity(cls, value: str) -> str:
+        try:
+            validate_password_complexity(value)
+        except PasswordComplexityError as exc:
+            raise ValueError(str(exc)) from exc
+        return value

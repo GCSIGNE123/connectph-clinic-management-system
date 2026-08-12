@@ -44,7 +44,9 @@ export interface User {
   id: string;
   email: string;
   firstName: string;
+  middleName?: string | null;
   lastName: string;
+  mobileNumber?: string | null;
   role: Role;
   clinicId: string;
   clinic?: Clinic;
