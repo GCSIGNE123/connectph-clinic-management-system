@@ -46,6 +46,7 @@ from app.schemas.platform_admin import (
     TenantStatsResponse,
     TenantSuspendRequest,
     TenantUserRead,
+    TenantUserUpdateRequest,
 )
 from app.services.feature_flag_service import FeatureFlagService
 from app.services.platform_admin_auth_service import PlatformAdminAuthService
@@ -303,6 +304,43 @@ async def list_tenant_users(clinic_id: UUID, db: AsyncSession = Depends(get_db))
         )
         for u in users
     ]
+
+
+@router.patch(
+    "/tenants/{clinic_id}/users/{user_id}", response_model=TenantUserRead,
+    dependencies=[Depends(require_platform_admin_user_manage)],
+)
+async def update_tenant_user(
+    clinic_id: UUID,
+    user_id: UUID,
+    payload: TenantUserUpdateRequest,
+    current: PlatformAdminUser = Depends(get_current_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = TenantUserAdminService(db)
+    u = await service.update_user(
+        actor_id=current.id, clinic_id=clinic_id, user_id=user_id,
+        email=payload.email, username=payload.username, first_name=payload.first_name,
+        last_name=payload.last_name, role_id=payload.role_id,
+    )
+    return TenantUserRead(
+        id=u.id, email=u.email, username=u.username, first_name=u.first_name, last_name=u.last_name,
+        role=u.role.name if u.role else None, status=u.status.value, is_active=u.is_active,
+    )
+
+
+@router.delete(
+    "/tenants/{clinic_id}/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_platform_admin_full)],
+)
+async def delete_tenant_user(
+    clinic_id: UUID,
+    user_id: UUID,
+    current: PlatformAdminUser = Depends(get_current_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = TenantUserAdminService(db)
+    await service.delete_user(actor_id=current.id, clinic_id=clinic_id, user_id=user_id)
 
 
 @router.post(

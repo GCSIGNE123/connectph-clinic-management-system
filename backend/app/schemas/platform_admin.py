@@ -131,6 +131,19 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class TenantUserUpdateRequest(BaseModel):
+    """All fields optional (partial update) - a platform admin editing a
+    clinic's own staff account. Deliberately excludes password (use the
+    separate `POST .../reset-password`, which also revokes sessions - a
+    plain field update here shouldn't silently have that side effect)."""
+
+    email: str | None = Field(default=None, min_length=1, max_length=255)
+    username: str | None = Field(default=None, min_length=1, max_length=100)
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    role_id: UUID | None = None
+
+
 class SystemHealthResponse(BaseModel):
     total_clinics: int
     active_clinics: int

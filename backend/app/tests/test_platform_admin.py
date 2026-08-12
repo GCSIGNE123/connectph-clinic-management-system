@@ -306,6 +306,96 @@ async def test_tenant_user_reset_password_lock_unlock(
     assert resp.json()["status"] == "active"
 
 
+async def test_tenant_user_update(client: AsyncClient, platform_admin_factory, make_clinic_with_owner):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, owner, _ = await make_clinic_with_owner()
+
+    resp = await client.patch(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users/{owner.id}",
+        json={"first_name": "Updated", "last_name": "Owner"},
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["first_name"] == "Updated"
+    assert body["last_name"] == "Owner"
+
+    # Persisted, not just echoed back.
+    list_resp = await client.get(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+    updated = next(u for u in list_resp.json() if u["id"] == str(owner.id))
+    assert updated["first_name"] == "Updated"
+
+
+async def test_tenant_user_update_rejects_duplicate_email(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner, db_session: AsyncSession
+):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, owner, _ = await make_clinic_with_owner()
+
+    from app.models.user import User as UserModel
+
+    second_user = UserModel(
+        clinic_id=clinic.id, email="second@example.com", username="second-user",
+        hashed_password=hash_password("SecondPass123!"), first_name="Second", last_name="User",
+        role_id=owner.role_id, is_active=True, is_email_verified=True,
+    )
+    db_session.add(second_user)
+    await db_session.commit()
+    await db_session.refresh(second_user)
+
+    resp = await client.patch(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users/{second_user.id}",
+        json={"email": owner.email},
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_tenant_user_delete_requires_full_platform_admin_role(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner
+):
+    """Delete is gated to PLATFORM_ADMINISTRATOR only - a lesser role like
+    Support Engineer (which CAN edit/lock/reset-password) must not be able
+    to permanently remove a clinic's user account."""
+    support_admin, support_password = await platform_admin_factory(role=PlatformAdminRole.SUPPORT_ENGINEER)
+    pa_token = await _pa_login(client, support_admin.email, support_password)
+    clinic, owner, _ = await make_clinic_with_owner()
+
+    resp = await client.delete(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users/{owner.id}",
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_tenant_user_delete(client: AsyncClient, platform_admin_factory, make_clinic_with_owner):
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    clinic, owner, owner_pw = await make_clinic_with_owner()
+
+    resp = await client.delete(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users/{owner.id}",
+        headers={"Authorization": f"Bearer {pa_token}"},
+    )
+    assert resp.status_code == 204
+
+    # Soft-deleted user no longer appears in the list.
+    list_resp = await client.get(
+        f"/api/v1/platform-admin/tenants/{clinic.id}/users", headers={"Authorization": f"Bearer {pa_token}"}
+    )
+    assert all(u["id"] != str(owner.id) for u in list_resp.json())
+
+    # And can no longer log in.
+    login_resp = await client.post(
+        "/api/v1/auth/login", json={"email_or_username": owner.email, "password": owner_pw}
+    )
+    assert login_resp.status_code == 401
+
+
 # --------------------------------------------------------------------------
 # Platform role gating (Auditor read-only, etc.)
 # --------------------------------------------------------------------------

@@ -51,6 +51,90 @@ class TenantUserAdminService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant user not found")
         return user
 
+    async def _get_user_with_role(self, clinic_id: UUID, user_id: UUID) -> User:
+        """Same lookup as `_get_user`, but eager-loads `.role` - needed by
+        `update_user`'s return value, which the router serializes into
+        `TenantUserRead.role`. Async SQLAlchemy cannot lazy-load a
+        relationship outside an explicit eager-load option, so skipping this
+        would crash with a MissingGreenlet error on that field access."""
+        from sqlalchemy.orm import selectinload  # noqa: PLC0415
+
+        result = await self.session.execute(
+            select(User)
+            .options(selectinload(User.role))
+            .where(User.id == user_id, User.clinic_id == clinic_id, User.is_deleted.is_(False))
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant user not found")
+        return user
+
+    async def update_user(
+        self,
+        *,
+        actor_id: UUID,
+        clinic_id: UUID,
+        user_id: UUID,
+        email: str | None = None,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        role_id: UUID | None = None,
+    ) -> User:
+        user = await self._get_user(clinic_id, user_id)
+
+        if email is not None and email != user.email:
+            existing = await self.session.execute(
+                select(User).where(
+                    User.clinic_id == clinic_id, User.email == email, User.id != user_id, User.is_deleted.is_(False)
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use in this clinic")
+            user.email = email
+
+        if username is not None and username != user.username:
+            existing = await self.session.execute(
+                select(User).where(
+                    User.clinic_id == clinic_id, User.username == username, User.id != user_id, User.is_deleted.is_(False)
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already in use in this clinic")
+            user.username = username
+
+        if first_name is not None:
+            user.first_name = first_name
+        if last_name is not None:
+            user.last_name = last_name
+        if role_id is not None:
+            user.role_id = role_id
+
+        await self.audit.log(
+            actor_id=actor_id, action="tenant_user.update", entity_type="user",
+            entity_id=str(user_id), clinic_id=clinic_id,
+            metadata={
+                "fields": [
+                    k for k, v in {
+                        "email": email, "username": username, "first_name": first_name,
+                        "last_name": last_name, "role_id": str(role_id) if role_id else None,
+                    }.items() if v is not None
+                ]
+            },
+        )
+        await self.session.commit()
+        return await self._get_user_with_role(clinic_id, user_id)
+
+    async def delete_user(self, *, actor_id: UUID, clinic_id: UUID, user_id: UUID) -> None:
+        user = await self._get_user(clinic_id, user_id)
+        user.is_deleted = True
+        await self.refresh_token_repo.revoke_all_for_user(user.id)
+        await self.audit.log(
+            actor_id=actor_id, action="tenant_user.delete", entity_type="user",
+            entity_id=str(user_id), clinic_id=clinic_id,
+        )
+        await self.session.commit()
+
     async def reset_password(self, *, actor_id: UUID, clinic_id: UUID, user_id: UUID, new_password: str) -> None:
         user = await self._get_user(clinic_id, user_id)
         user.hashed_password = hash_password(new_password)
