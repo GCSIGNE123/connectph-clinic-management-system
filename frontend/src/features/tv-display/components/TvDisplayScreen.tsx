@@ -128,12 +128,29 @@ function useWakeLock() {
   }, []);
 }
 
+/** A 24/7 kiosk device (the waiting-room TV itself) should only ever need
+ * "Enable Sound" tapped once, ever - not after every reload/power-cycle/
+ * Wi-Fi reconnect. Persisted per-device via `localStorage`, matching the
+ * pattern already used by `lib/queue-announcer.ts`'s voice/rate/volume
+ * prefs. Read in a `useEffect` (not the `useState` initializer) so the
+ * very first client render still matches the server-rendered markup
+ * (`soundEnabled` starts `false` either way) - avoids a hydration
+ * mismatch, at the cost of one render's delay before a previously-enabled
+ * TV's "Enable Sound" prompt disappears. */
+const SOUND_ENABLED_STORAGE_KEY = "tv-display-sound-enabled";
+
 export function TvDisplayScreen({ slug }: { slug: string }) {
   const searchParams = useSearchParams();
   const autoFullscreen = searchParams.get("fullscreen") === "true";
 
   const now = useClock();
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundEnabled, setSoundEnabledState] = useState(false);
+  const setSoundEnabled = (next: boolean) => {
+    setSoundEnabledState(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SOUND_ENABLED_STORAGE_KEY, next ? "true" : "false");
+    }
+  };
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   // Keyed by queueId -> the `calledAt` timestamp last seen for that ticket,
@@ -179,6 +196,13 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  useEffect(() => {
+    if (window.localStorage.getItem(SOUND_ENABLED_STORAGE_KEY) === "true") {
+      setSoundEnabledState(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleFullscreen = async () => {
@@ -269,7 +293,7 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
         ) : null}
         <button
           type="button"
-          onClick={() => setSoundEnabled((s) => !s)}
+          onClick={() => setSoundEnabled(!soundEnabled)}
           className="rounded-full bg-black/30 p-2 text-white hover:bg-black/50"
           aria-label={soundEnabled ? "Disable sound" : "Enable sound"}
         >
