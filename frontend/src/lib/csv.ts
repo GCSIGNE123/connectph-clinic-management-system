@@ -101,6 +101,20 @@ function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
+/** Parses a numeric CSV field, tolerating thousands-separator commas and
+ * surrounding whitespace/currency symbols (e.g. "1,200.00", "₱ 300", " 400
+ * ") - a common real-world Excel export format that `Number()` alone
+ * rejects outright (`Number("1,200.00")` is `NaN`). Returns `null` for a
+ * blank field, `NaN` for anything else that still isn't a valid number
+ * (the caller is expected to check `Number.isNaN` and surface its own
+ * field-specific error message). */
+export function parseCsvNumber(raw: string | undefined): number | null {
+  if (!raw || !raw.trim()) return null;
+  const cleaned = raw.trim().replace(/[^\d.\-]/g, "");
+  if (cleaned === "") return NaN;
+  return Number(cleaned);
+}
+
 /** Triggers a browser download of the given CSV text. No-ops server-side. */
 export function downloadCsv(filename: string, csvText: string): void {
   if (typeof window === "undefined") return;

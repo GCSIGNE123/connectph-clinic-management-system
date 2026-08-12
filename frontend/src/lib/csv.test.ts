@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toCsv, parseCsv } from "./csv";
+import { toCsv, parseCsv, parseCsvNumber } from "./csv";
 
 describe("toCsv", () => {
   it("builds a header row plus one row per record", () => {
@@ -51,5 +51,33 @@ describe("parseCsv", () => {
     const original = [{ name: 'Says "hi", bye\nnext line' }];
     const csv = toCsv(["name"], original.map((r) => [r.name]));
     expect(parseCsv(csv)).toEqual(original);
+  });
+});
+
+describe("parseCsvNumber", () => {
+  it("parses a plain number", () => {
+    expect(parseCsvNumber("400")).toBe(400);
+    expect(parseCsvNumber("400.50")).toBe(400.5);
+  });
+
+  it("strips thousands-separator commas", () => {
+    expect(parseCsvNumber("1,200.00")).toBe(1200);
+    expect(parseCsvNumber("1,234,567")).toBe(1234567);
+  });
+
+  it("strips currency symbols and surrounding whitespace", () => {
+    expect(parseCsvNumber("₱ 300")).toBe(300);
+    expect(parseCsvNumber("  400  ")).toBe(400);
+    expect(parseCsvNumber("$1,200.00")).toBe(1200);
+  });
+
+  it("returns null for a blank field", () => {
+    expect(parseCsvNumber("")).toBeNull();
+    expect(parseCsvNumber("   ")).toBeNull();
+    expect(parseCsvNumber(undefined)).toBeNull();
+  });
+
+  it("returns NaN for genuinely non-numeric input", () => {
+    expect(Number.isNaN(parseCsvNumber("not a number"))).toBe(true);
   });
 });

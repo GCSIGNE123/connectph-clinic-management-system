@@ -19,4 +19,10 @@ export interface FieldConfig {
 export interface ColumnConfig<T> {
   header: string;
   render: (row: T) => string | number | null | undefined;
+  /** Enables click-to-sort on this column's header. */
+  sortable?: boolean;
+  /** Value used for sort comparison, if different from what `render`
+   * displays (e.g. `render` formats a price as a string, but sorting
+   * should still be numeric). Defaults to `render`'s own return value. */
+  sortValue?: (row: T) => string | number | null | undefined;
 }

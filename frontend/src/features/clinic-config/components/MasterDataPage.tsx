@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Plus, Search, Download, Upload } from "lucide-react";
+import { Plus, Search, Download, Upload, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -78,6 +78,40 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
   const importFileRef = useRef<HTMLInputElement>(null);
 
   const items = data?.items ?? [];
+
+  const [sort, setSort] = useState<{ columnIndex: number; direction: "asc" | "desc" } | null>(null);
+
+  function toggleSort(columnIndex: number) {
+    setSort((prev) => {
+      if (!prev || prev.columnIndex !== columnIndex) return { columnIndex, direction: "asc" };
+      if (prev.direction === "asc") return { columnIndex, direction: "desc" };
+      return null; // third click clears sorting, back to the server's own order
+    });
+  }
+
+  const sortedItems = useMemo(() => {
+    if (!sort) return items;
+    const col = columns[sort.columnIndex];
+    if (!col?.sortable) return items;
+    const getValue = col.sortValue ?? col.render;
+    const withKeys = items.map((row) => ({ row, value: getValue(row) }));
+    withKeys.sort((a, b) => {
+      const av = a.value;
+      const bv = b.value;
+      if (av === null || av === undefined) return bv === null || bv === undefined ? 0 : 1;
+      if (bv === null || bv === undefined) return -1;
+      // Numeric compare when both values parse as numbers (covers prices
+      // like "400.00" that would sort wrong lexicographically as strings -
+      // "1200.00" < "300.00" by string order but not by value), otherwise
+      // fall back to locale-aware string compare.
+      const an = typeof av === "number" ? av : Number(av);
+      const bn = typeof bv === "number" ? bv : Number(bv);
+      const bothNumeric = !Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== "" && String(bv).trim() !== "";
+      const cmp = bothNumeric ? an - bn : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
+      return sort.direction === "asc" ? cmp : -cmp;
+    });
+    return withKeys.map((k) => k.row);
+  }, [items, sort, columns]);
 
   function handleExportCsv() {
     if (!csv) return;
@@ -194,9 +228,30 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
         <Table>
           <TableHeader>
             <TableRow>
-              {columns.map((col) => (
-                <TableHead key={col.header}>{col.header}</TableHead>
-              ))}
+              {columns.map((col, index) =>
+                col.sortable ? (
+                  <TableHead key={col.header}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(index)}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      {col.header}
+                      {sort?.columnIndex === index ? (
+                        sort.direction === "asc" ? (
+                          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3.5 w-3.5 opacity-40" aria-hidden="true" />
+                      )}
+                    </button>
+                  </TableHead>
+                ) : (
+                  <TableHead key={col.header}>{col.header}</TableHead>
+                )
+              )}
               {canManage ? <TableHead className="text-right">Actions</TableHead> : null}
             </TableRow>
           </TableHeader>
@@ -209,14 +264,14 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
                   </TableCell>
                 </TableRow>
               ))
-            ) : items.length === 0 ? (
+            ) : sortedItems.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground">
                   No records found.
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((row) => (
+              sortedItems.map((row) => (
                 <TableRow key={row.id}>
                   {columns.map((col) => (
                     <TableCell key={col.header}>{col.render(row)}</TableCell>

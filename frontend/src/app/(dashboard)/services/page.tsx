@@ -3,6 +3,7 @@
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { MasterDataPage } from "@/features/clinic-config/components/MasterDataPage";
 import type { ClinicServiceItem } from "@/features/clinic-config/types";
+import { parseCsvNumber } from "@/lib/csv";
 import { Role } from "@/types";
 
 const MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator]);
@@ -21,11 +22,11 @@ export default function ServicesPage() {
       searchPlaceholder="Search services"
       rowLabel={(s) => s.service_name}
       columns={[
-        { header: "Code", render: (s) => s.service_code },
-        { header: "Name", render: (s) => s.service_name },
-        { header: "Price", render: (s) => s.default_price },
+        { header: "Code", render: (s) => s.service_code, sortable: true },
+        { header: "Name", render: (s) => s.service_name, sortable: true },
+        { header: "Price", render: (s) => s.default_price, sortable: true, sortValue: (s) => Number(s.default_price) },
         { header: "Duration (min)", render: (s) => s.duration_minutes ?? "-" },
-        { header: "Status", render: (s) => s.status },
+        { header: "Status", render: (s) => s.status, sortable: true },
       ]}
       fields={[
         { name: "service_code", label: "Code", type: "text", required: true },
@@ -51,12 +52,15 @@ export default function ServicesPage() {
         fromRow: (row) => {
           if (!row.service_code?.trim()) throw new Error("service_code is required.");
           if (!row.service_name?.trim()) throw new Error("service_name is required.");
-          const price = Number(row.default_price);
+          // parseCsvNumber tolerates thousands-separator commas/currency
+          // symbols (e.g. "1,200.00", "₱ 300") - a common real-world Excel
+          // export format that plain Number() rejects outright.
+          const price = parseCsvNumber(row.default_price);
           if (row.default_price?.trim() && Number.isNaN(price)) {
             throw new Error(`default_price "${row.default_price}" is not a number.`);
           }
-          const duration = row.duration_minutes?.trim() ? Number(row.duration_minutes) : null;
-          if (duration !== null && Number.isNaN(duration)) {
+          const duration = parseCsvNumber(row.duration_minutes);
+          if (Number.isNaN(duration)) {
             throw new Error(`duration_minutes "${row.duration_minutes}" is not a number.`);
           }
           const status = row.status?.trim() || "Active";
@@ -67,7 +71,7 @@ export default function ServicesPage() {
             service_code: row.service_code.trim(),
             service_name: row.service_name.trim(),
             description: row.description?.trim() || undefined,
-            default_price: row.default_price?.trim() || "0",
+            default_price: String(price ?? 0),
             duration_minutes: duration,
             status,
           } as Partial<ClinicServiceItem>;
