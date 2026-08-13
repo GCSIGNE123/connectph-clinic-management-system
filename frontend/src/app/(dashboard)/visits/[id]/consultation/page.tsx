@@ -27,6 +27,7 @@ import type { AttachmentType, DiagnosisStatus, DiagnosisType, SoapNoteInput } fr
 import { computeBmi } from "@/features/consultation/bmi";
 import { ClinicalOrdersTab } from "@/features/clinical-orders/components/ClinicalOrdersTab";
 import { PrescriptionTab } from "@/features/clinical-orders/components/PrescriptionTab";
+import { ApiError } from "@/lib/api-client";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -50,7 +51,12 @@ export default function ConsultationPage() {
 
   const { data: visit, isLoading: visitLoading } = useVisit(visitId);
   const { data: currentUser } = useCurrentUser();
-  const { data: consultation, isLoading: consultationLoading } = useOpenConsultation(visitId);
+  const {
+    data: consultation,
+    isLoading: consultationLoading,
+    isError: consultationIsError,
+    error: consultationError,
+  } = useOpenConsultation(visitId);
   const { data: patient } = usePatient(visit?.patientId);
 
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
@@ -115,6 +121,25 @@ export default function ConsultationPage() {
 
   if (!visit) {
     return <EmptyState title="Visit not found" description="This visit record may have been removed." />;
+  }
+
+  // Real bug found live: a failed useOpenConsultation() (e.g. 403 "This
+  // account is not linked to a Doctor record.") was previously invisible -
+  // `consultation` just stayed undefined, `canEdit` silently evaluated to
+  // false, and the SOAP/diagnosis/orders form rendered as a normal-looking
+  // but permanently read-only, unexplained shell. Surface the real reason
+  // instead of a mysteriously uneditable page.
+  if (consultationIsError) {
+    return (
+      <EmptyState
+        title="Could not open this consultation"
+        description={
+          consultationError instanceof ApiError
+            ? consultationError.message
+            : "Please try again, or contact an administrator if this keeps happening."
+        }
+      />
+    );
   }
 
   const canActAsDoctor = currentUser ? ["Owner", "Administrator", "Doctor"].includes(currentUser.role) : false;
