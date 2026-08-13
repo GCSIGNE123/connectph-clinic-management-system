@@ -1,5 +1,7 @@
 """Generic repository providing common CRUD + tenant-scoped query helpers."""
 
+from __future__ import annotations
+
 from typing import Any, Generic, TypeVar
 from uuid import UUID
 
