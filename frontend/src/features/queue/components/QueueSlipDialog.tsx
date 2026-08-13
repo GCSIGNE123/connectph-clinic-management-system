@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +15,11 @@ import { ApiError } from "@/lib/api-client";
 export interface QueueSlipDialogProps {
   queueId: string | null;
   onOpenChange: (open: boolean) => void;
+  /** Triggers `window.print()` automatically the first time the slip
+   * finishes loading successfully (not on a blocked/error result) - used
+   * by the "Save and Print" vitals flow so one button does the whole
+   * save-then-print sequence without an extra manual click. */
+  autoPrint?: boolean;
 }
 
 /** Locale-default (browser/clinic setting, not hardcoded) date + time,
@@ -113,7 +119,23 @@ function QueueSlipPrintPortal({ slip }: { slip: QueueSlip }) {
  * there's no paper-size choice to offer here. See the `<style jsx global>`
  * block below for the full rationale on each rule.
  */
-export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps) {
+export function QueueSlipDialog({ queueId, onOpenChange, autoPrint }: QueueSlipDialogProps) {
+  const queryClient = useQueryClient();
+
+  // "Save and Print" opens this dialog immediately after vitals are saved
+  // for this same queueId - if the ticket was ever fetched/blocked before
+  // (e.g. an earlier attempt before vitals existed), a stale cached 400
+  // would otherwise keep showing the "vitals missing" message even though
+  // they were just saved. Only relevant for the auto-print path; the
+  // normal Reprint button opens a queueId that was never blocked-cached
+  // this way in practice, but invalidating is harmless either way.
+  useEffect(() => {
+    if (queueId && autoPrint) {
+      queryClient.invalidateQueries({ queryKey: queueKeys.slip(queueId) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueId, autoPrint]);
+
   const {
     data: slip,
     isLoading,
@@ -128,6 +150,18 @@ export function QueueSlipDialog({ queueId, onOpenChange }: QueueSlipDialogProps)
     // the same 400, so don't burn TanStack Query's default retries on it.
     retry: false,
   });
+
+  const hasAutoPrintedRef = useRef(false);
+  useEffect(() => {
+    if (!queueId) {
+      hasAutoPrintedRef.current = false;
+      return;
+    }
+    if (autoPrint && slip && !hasAutoPrintedRef.current) {
+      hasAutoPrintedRef.current = true;
+      window.print();
+    }
+  }, [autoPrint, slip, queueId]);
 
   // Real backend enforcement (see `QueueService.get_slip`), not just a
   // disabled Print button - the slip request itself is rejected with 400

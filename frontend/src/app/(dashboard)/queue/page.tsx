@@ -55,6 +55,10 @@ export default function QueuePage() {
   const [newQueueOpen, setNewQueueOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [slipId, setSlipId] = useState<string | null>(null);
+  // "Save and Print" (ReceptionVitalsDialog) opens the slip dialog with
+  // auto-print on; the manual Reprint button and New Queue Ticket's own
+  // slip preview keep the existing "preview, then click Print" behavior.
+  const [slipAutoPrint, setSlipAutoPrint] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<QueueListItem | null>(null);
   const [vitalsTarget, setVitalsTarget] = useState<QueueListItem | null>(null);
 
@@ -139,7 +143,10 @@ export default function QueuePage() {
           isLoading={isLoading}
           canManage={canManage}
           onView={(item) => setDetailsId(item.id)}
-          onReprint={(item) => setSlipId(item.id)}
+          onReprint={(item) => {
+            setSlipAutoPrint(false);
+            setSlipId(item.id);
+          }}
           onCancel={(item) => setCancelTarget(item)}
           onEnterVitals={canEnterVitals ? (item) => setVitalsTarget(item) : undefined}
           canTransition={canTransition}
@@ -152,15 +159,26 @@ export default function QueuePage() {
         open={newQueueOpen}
         onOpenChange={setNewQueueOpen}
         defaultBranchId={currentUser?.branchId ?? undefined}
-        onCreated={(id) => setSlipId(id)}
+        onCreated={(id) => {
+          setSlipAutoPrint(false);
+          setSlipId(id);
+        }}
       />
 
       <QueueDetailsDialog queueId={detailsId} onOpenChange={(open) => !open && setDetailsId(null)} canTransition={canTransition} />
-      <QueueSlipDialog queueId={slipId} onOpenChange={(open) => !open && setSlipId(null)} />
+      <QueueSlipDialog
+        queueId={slipId}
+        autoPrint={slipAutoPrint}
+        onOpenChange={(open) => !open && setSlipId(null)}
+      />
       {vitalsTarget && vitalsTarget.visitId ? (
         <ReceptionVitalsDialog
           open={Boolean(vitalsTarget)}
           onOpenChange={(open) => !open && setVitalsTarget(null)}
+          onSaved={() => {
+            setSlipAutoPrint(true);
+            setSlipId(vitalsTarget.id);
+          }}
           visitId={vitalsTarget.visitId}
           patientName={vitalsTarget.patientName}
         />

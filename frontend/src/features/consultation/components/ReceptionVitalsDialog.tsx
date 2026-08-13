@@ -24,17 +24,26 @@ import { cn } from "@/lib/utils";
  * Phase 22: "Save" replaced with "Save and Close" - see
  * `PreQueueVitalsStep` for the sibling pre-queue flow, which mirrors this
  * same required-field/toast/keyboard behavior.
+ *
+ * "Save and Print": on success, `onSaved` fires before the dialog closes -
+ * the caller (`queue/page.tsx`) uses this to open the queue slip print
+ * flow immediately, so one button does all three (save vitals, print the
+ * ticket, close this dialog).
  */
 export function ReceptionVitalsDialog({
   open,
   onOpenChange,
   visitId,
   patientName,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   visitId: string;
   patientName?: string | null;
+  /** Called right after a successful save, before the dialog closes -
+   * lets the caller trigger the queue slip print flow ("Save and Print"). */
+  onSaved?: () => void;
 }) {
   const { toast } = useToast();
   const [consultationId, setConsultationId] = useState<string | null>(null);
@@ -125,6 +134,7 @@ export function ReceptionVitalsDialog({
         oxygenSaturation: oxygenSaturation ? Number(oxygenSaturation) : null,
       });
       toast({ title: "Vitals saved successfully.", variant: "success", durationMs: 3000 });
+      onSaved?.();
       onOpenChange(false);
     } catch {
       setError("Could not save. The consultation may already be signed.");
@@ -250,7 +260,7 @@ export function ReceptionVitalsDialog({
               Close
             </Button>
             <Button type="button" onClick={handleSaveAndClose} disabled={loading || saving || !consultationId}>
-              {saving ? "Saving…" : "Save and Close"}
+              {saving ? "Saving…" : "Save and Print"}
             </Button>
           </DialogFooter>
         </div>
