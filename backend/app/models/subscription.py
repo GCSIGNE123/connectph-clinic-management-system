@@ -31,10 +31,21 @@ class Subscription(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
     __tablename__ = "subscriptions"
 
     plan: Mapped[SubscriptionPlan] = mapped_column(
-        Enum(SubscriptionPlan, name="subscription_plan"), nullable=False, default=SubscriptionPlan.TRIAL
+        Enum(
+            SubscriptionPlan,
+            name="subscription_plan",
+            values_callable=lambda enum_class: [e.value for e in enum_class],
+        ),
+        nullable=False,
+        default=SubscriptionPlan.TRIAL,
     )
+
     status: Mapped[SubscriptionStatus] = mapped_column(
-        Enum(SubscriptionStatus, name="subscription_status"),
+        Enum(
+            SubscriptionStatus,
+            name="subscription_status",
+            values_callable=lambda enum_class: [e.value for e in enum_class],
+        ),
         nullable=False,
         default=SubscriptionStatus.TRIALING,
     )
