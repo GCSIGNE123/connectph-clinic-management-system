@@ -46,6 +46,36 @@ version: "3.9"
 #   Overridable via CLINIC_FRONTEND_ORIGIN / CLINIC_API_BASE_URL env vars so
 #   this file itself never needs editing per-machine.
 #
+# - backend.environment.DATABASE_URL - overrides the base file's hardcoded
+#   connection string (which points at the dev `connectph_dev` database and
+#   embeds its password in plaintext, committed to git) with the real
+#   clinic database name (`canora_clinic`) and a password sourced from
+#   `${POSTGRES_PASSWORD}` - a Compose variable substitution, resolved from
+#   a project-root `.env` file (see `.env.example`) that stays untracked on
+#   each clinic machine. The `:?...` form fails the `docker compose` command
+#   loudly if that `.env` is missing/incomplete, rather than silently
+#   falling back to a wrong or insecure default. This does NOT change the
+#   actual password stored in the already-initialized `postgres_data`
+#   volume - only how the value is supplied to the backend container; the
+#   real password value itself is unchanged.
+#
+# - frontend.environment.HOSTNAME - the Next.js "standalone" server (see
+#   `next.config.ts`'s `output: "standalone"`) binds only to what
+#   `HOSTNAME` tells it to; without this it can default to a loopback-only
+#   bind, unreachable from other clinic machines (reception desk, TV
+#   display) on the LAN. `0.0.0.0` binds all interfaces.
+#
+# - frontend.healthcheck.test: !override [...] - the base file's own
+#   `healthcheck.test` (still `http://localhost:3000/`) takes precedence
+#   over `Dockerfile.frontend`'s baked-in HEALTHCHECK instruction when
+#   running via `docker compose` - so fixing only the Dockerfile has no
+#   effect under Compose. `test` is a sequence field, so (same reasoning as
+#   `backend.volumes` above) a plain override list would just append, not
+#   replace - `!override` here forces a full replacement with the
+#   `127.0.0.1`-based command instead. Every other healthcheck setting
+#   (interval/timeout/retries/start_period) is left to merge normally,
+#   inherited unchanged from the base file.
+#
 # - postgres.ports / redis.ports: !reset [] - removes host-port publishing
 #   (5432/6379) for both. This does NOT affect the backend's connectivity -
 #   it reaches both via the internal Compose network (`postgres:5432`,
@@ -66,6 +96,7 @@ services:
     environment:
       ENV: production
       CORS_ORIGINS: ${CLINIC_FRONTEND_ORIGIN:-http://192.168.68.106:3000}
+      DATABASE_URL: postgresql+asyncpg://connectph:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in a project-root .env - see .env.example}@postgres:5432/canora_clinic
     # Skips the image's default `alembic upgrade head && uvicorn ...` CMD -
     # migrations are run manually/deliberately, never automatically here.
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
@@ -76,6 +107,9 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
+      HOSTNAME: "0.0.0.0"
+    healthcheck:
+      test: !override ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
 
   postgres:
     ports: !reset []
