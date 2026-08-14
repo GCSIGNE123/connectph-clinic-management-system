@@ -1,0 +1,25 @@
+# Docker build context excludes for backend/ (Phase 3 - was missing
+# entirely, see Phase 2 audit finding: Dockerfile.backend does `COPY . .`
+# and would otherwise copy real local secrets (.env) and dev bloat
+# (.venv, __pycache__, tests, coverage) into the built image.
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+.git/
+.gitignore
+
+app/tests/
+var/

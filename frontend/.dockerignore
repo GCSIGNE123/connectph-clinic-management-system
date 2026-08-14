@@ -1,0 +1,19 @@
+# Docker build context excludes for frontend/ (Phase 3 - was missing
+# entirely, see Phase 2 audit finding: Dockerfile.frontend does `COPY . .`
+# and would otherwise copy real local secrets (.env.local) and dev bloat
+# (node_modules, .next) into the build context.
+
+node_modules/
+.next/
+
+.env
+.env.local
+.env.*
+!.env.example
+!.env.*.example
+
+.git/
+.gitignore
+
+npm-debug.log*
+coverage/

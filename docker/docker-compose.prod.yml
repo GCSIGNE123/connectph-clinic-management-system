@@ -1,0 +1,60 @@
+version: "3.9"
+
+# Production override for the clinic Server PC deployment (Phase 3).
+#
+# This file is layered ON TOP of docker/docker-compose.yml, which is
+# unchanged and remains the dev-oriented base (bind mounts, dev CORS
+# default, etc.). Usage (from repo root):
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml build backend frontend
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps backend frontend
+#
+# (deploy.cmd at the repo root runs exactly this.)
+#
+# What this override changes, and why (see docs/PHASE2_DEPLOYMENT_DESIGN
+# notes / Phase 2 audit findings for the full reasoning):
+#
+# - backend.volumes: [] - removes the base file's dev bind mount
+#   (../backend:/app). Without this, the running container serves the HOST
+#   filesystem, not what was actually baked into the image at `build` time -
+#   that defeats the entire point of a Git-pull-then-rebuild deploy. In
+#   production the backend must run ONLY from its built image.
+#
+# - backend.command - overrides the image's default CMD, which runs
+#   `alembic upgrade head` before starting uvicorn. Per Phase 3
+#   requirements, migrations must NEVER run automatically as part of a
+#   deploy - they are a separate, deliberate, manual step. This override
+#   starts uvicorn directly and skips the migration step entirely.
+#
+# - ENVIRONMENT / CORS_ALLOWED_ORIGINS / NEXT_PUBLIC_API_BASE_URL - the
+#   base file hardcodes dev values (`development`, `http://localhost:3000`,
+#   `http://localhost:8000/api/v1`). Those are wrong for a LAN clinic
+#   deployment reachable at the Server PC's own LAN IP, not localhost, from
+#   other machines (reception desk, TV display, etc.) - same pattern
+#   already documented in docs/LOCAL_DEPLOYMENT.md for the non-Docker
+#   Windows-service install. Both are overridable via environment
+#   variables (CLINIC_FRONTEND_ORIGIN / CLINIC_API_BASE_URL) so this file
+#   itself never needs editing per-machine; they default to the current
+#   real clinic Server PC address.
+#
+# Deliberately NOT touched here: postgres and redis stay exactly as
+# defined in the base file - same images, same named volumes
+# (postgres_data/redis_data), never rebuilt or recreated by an app-code
+# deploy. Nothing in this file can delete or reset their data.
+
+services:
+  backend:
+    volumes: []
+    environment:
+      ENVIRONMENT: production
+      CORS_ALLOWED_ORIGINS: ${CLINIC_FRONTEND_ORIGIN:-http://192.168.68.106:3000}
+    # Skips the image's default `alembic upgrade head && uvicorn ...` CMD -
+    # migrations are run manually/deliberately, never automatically here.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
