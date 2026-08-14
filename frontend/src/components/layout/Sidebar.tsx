@@ -42,6 +42,11 @@ import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
  * session never even sees a link to a page it can't use. */
 const ANALYTICS_ROLES = new Set(["Owner", "Administrator"]);
 
+/** TV Displays / TV Info Panel management is Owner/Administrator/Receptionist
+ * - front-desk staff operate the waiting-room screens day to day, unlike
+ * every other config-manage module which stays Owner/Administrator only. */
+const TV_DISPLAY_MANAGE_ROLES = new Set(["Owner", "Administrator", "Receptionist"]);
+
 /**
  * Primary navigation. Pharmacy is intentionally omitted here (rather than
  * linked to a stub page) because that module is out of scope so far - the
@@ -113,10 +118,9 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
   const navItems = canSeeAnalytics
     ? [...NAV_ITEMS, { label: "Owner Dashboard", href: "/analytics", icon: BarChart3 }]
     : NAV_ITEMS;
-  // Phase 13: TV Displays administration is Owner/Administrator only,
-  // same gate/rationale as the Owner Dashboard above - the backend 403s
-  // every /tv-displays* mutation and read for other roles.
-  const canSeeTvDisplays = Boolean(currentUser && ANALYTICS_ROLES.has(currentUser.role ?? ""));
+  // TV Displays / TV Info Panel: Owner/Administrator/Receptionist - see
+  // `require_tv_display_manage_role` in the backend for the same gate.
+  const canSeeTvDisplays = Boolean(currentUser && TV_DISPLAY_MANAGE_ROLES.has(currentUser.role ?? ""));
   const configNavItems = canSeeTvDisplays
     ? [
         ...CONFIG_NAV_ITEMS,

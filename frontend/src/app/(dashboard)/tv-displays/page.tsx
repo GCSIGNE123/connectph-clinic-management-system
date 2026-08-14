@@ -15,7 +15,7 @@ import { TvDisplayFormDialog } from "@/features/tv-display/components/TvDisplayF
 import { AnnouncementsPanel } from "@/features/tv-display/components/AnnouncementsPanel";
 import type { CreateTvDisplayInput, TvDisplayConfig } from "@/features/tv-display/types";
 
-const CONFIG_MANAGE_ROLES = new Set(["Owner", "Administrator"]);
+const TV_DISPLAY_MANAGE_ROLES = new Set(["Owner", "Administrator", "Receptionist"]);
 
 export default function TvDisplaysPage() {
   const { data: currentUser, isLoading: userLoading } = useCurrentUser();
@@ -28,10 +28,10 @@ export default function TvDisplaysPage() {
   const updateMutation = useUpdateTvDisplay(editing?.id ?? "");
   const deleteMutation = useDeleteTvDisplay();
 
-  if (!userLoading && currentUser && !CONFIG_MANAGE_ROLES.has(currentUser.role ?? "")) {
+  if (!userLoading && currentUser && !TV_DISPLAY_MANAGE_ROLES.has(currentUser.role ?? "")) {
     return (
       <div className="rounded-lg border bg-card p-8 text-center">
-        <p className="text-sm text-muted-foreground">Only Owner/Administrator accounts can manage TV displays.</p>
+        <p className="text-sm text-muted-foreground">Only Owner/Administrator/Receptionist accounts can manage TV displays.</p>
       </div>
     );
   }

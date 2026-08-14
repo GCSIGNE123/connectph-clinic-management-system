@@ -151,6 +151,14 @@ CONFIG_MANAGE_ROLES = {"Owner", "Administrator"}
 require_config_view_role = require_roles(*CONFIG_VIEW_ROLES)
 require_config_manage_role = require_roles(*CONFIG_MANAGE_ROLES)
 
+# TV Displays / TV Info Panel: Receptionist has full operational control
+# here (create/update/delete displays, announcements, info content, and
+# uploaded images) - front-desk staff own operating and maintaining the
+# waiting-room screens, deliberately kept off Doctors, unlike other
+# config-manage endpoints which stay Owner/Administrator only.
+TV_DISPLAY_MANAGE_ROLES = {"Owner", "Administrator", "Receptionist"}
+require_tv_display_manage_role = require_roles(*TV_DISPLAY_MANAGE_ROLES)
+
 # Phase 5: Reception & Queue Management.
 # Manage (create/cancel/reassign): front-desk + admin roles that own the
 # daily walk-in workflow.

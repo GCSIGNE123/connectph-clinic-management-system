@@ -25,7 +25,7 @@ import { useToast } from "@/components/ui/toast";
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-const CONFIG_MANAGE_ROLES = new Set(["Owner", "Administrator"]);
+const TV_DISPLAY_MANAGE_ROLES = new Set(["Owner", "Administrator", "Receptionist"]);
 
 const CONTENT_TYPE_OPTIONS: { value: TvInfoContentType; label: string }[] = [
   { value: "ServicePricing", label: "Services & Pricing" },
@@ -61,10 +61,10 @@ export default function TvInfoContentPage() {
 
   const [form, setForm] = useState<CreateTvInfoContentInput>(EMPTY_FORM);
 
-  if (!userLoading && currentUser && !CONFIG_MANAGE_ROLES.has(currentUser.role ?? "")) {
+  if (!userLoading && currentUser && !TV_DISPLAY_MANAGE_ROLES.has(currentUser.role ?? "")) {
     return (
       <div className="rounded-lg border bg-card p-8 text-center">
-        <p className="text-sm text-muted-foreground">Only Owner/Administrator accounts can manage the TV information panel.</p>
+        <p className="text-sm text-muted-foreground">Only Owner/Administrator/Receptionist accounts can manage the TV information panel.</p>
       </div>
     );
   }

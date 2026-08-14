@@ -120,12 +120,25 @@ async def test_create_update_delete_display_config_owner_admin_only(client: Asyn
     del_resp = await client.delete(f"/api/v1/tv-displays/{config['id']}", headers=owner_headers)
     assert del_resp.status_code == 204
 
-    # Other roles get 403 creating.
+    # Receptionist has full management access, including delete (front-desk
+    # owns operating/maintaining the waiting-room screens); other roles
+    # (e.g. Doctor) still get 403 on everything.
     recep_email, _u = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Receptionist")
     recep_token = await _login(client, recep_email, "TestPass123!")
     recep_headers = {"Authorization": f"Bearer {recep_token}"}
+    recep_create = await client.post(
+        "/api/v1/tv-displays", headers=recep_headers, json={"display_name": "Recep TV", "is_public": False}
+    )
+    assert recep_create.status_code == 201, recep_create.text
+
+    recep_delete = await client.delete(f"/api/v1/tv-displays/{recep_create.json()['id']}", headers=recep_headers)
+    assert recep_delete.status_code == 204
+
+    doctor_email, _u2 = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor")
+    doctor_token = await _login(client, doctor_email, "TestPass123!")
+    doctor_headers = {"Authorization": f"Bearer {doctor_token}"}
     forbidden = await client.post(
-        "/api/v1/tv-displays", headers=recep_headers, json={"display_name": "X", "is_public": False}
+        "/api/v1/tv-displays", headers=doctor_headers, json={"display_name": "X", "is_public": False}
     )
     assert forbidden.status_code == 403
 
@@ -364,16 +377,28 @@ async def test_info_content_create_list_update_delete_owner_admin_only(
     list_after = await client.get("/api/v1/tv-info-content", headers=owner_headers)
     assert list_after.json() == []
 
-    # Other roles get 403 creating.
+    # Receptionist has full management access, including delete; other
+    # roles (e.g. Doctor) get 403.
     recep_email, _u = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Receptionist")
     recep_token = await _login(client, recep_email, "TestPass123!")
     recep_headers = {"Authorization": f"Bearer {recep_token}"}
+    recep_create = await client.post(
+        "/api/v1/tv-info-content", headers=recep_headers, json={"title": "Recep Content", "body": "Y"}
+    )
+    assert recep_create.status_code == 201, recep_create.text
+
+    recep_delete = await client.delete(f"/api/v1/tv-info-content/{recep_create.json()['id']}", headers=recep_headers)
+    assert recep_delete.status_code == 204
+
+    doctor_email, _u2 = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor")
+    doctor_token = await _login(client, doctor_email, "TestPass123!")
+    doctor_headers = {"Authorization": f"Bearer {doctor_token}"}
     forbidden = await client.post(
-        "/api/v1/tv-info-content", headers=recep_headers, json={"title": "X", "body": "Y"}
+        "/api/v1/tv-info-content", headers=doctor_headers, json={"title": "X", "body": "Y"}
     )
     assert forbidden.status_code == 403
     # But viewer-tier roles can still read.
-    readable = await client.get("/api/v1/tv-info-content", headers=recep_headers)
+    readable = await client.get("/api/v1/tv-info-content", headers=doctor_headers)
     assert readable.status_code == 200
 
 
@@ -475,12 +500,26 @@ async def test_info_content_image_upload_validation_and_delete(
     gone = await client.get(updated["image_url"])
     assert gone.status_code == 404
 
-    # Other roles get 403 uploading.
+    # Receptionist can also upload and delete the image; other roles (e.g.
+    # Doctor) get 403.
     recep_email, _u = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Receptionist")
     recep_token = await _login(client, recep_email, "TestPass123!")
     recep_headers = {"Authorization": f"Bearer {recep_token}"}
-    forbidden = await client.post(
+    recep_upload = await client.post(
         f"/api/v1/tv-info-content/{content['id']}/image", headers=recep_headers,
+        files={"file": ("photo2.png", png_bytes, "image/png")},
+    )
+    assert recep_upload.status_code == 200, recep_upload.text
+
+    recep_delete_image = await client.delete(f"/api/v1/tv-info-content/{content['id']}/image", headers=recep_headers)
+    assert recep_delete_image.status_code == 200
+    assert recep_delete_image.json()["image_url"] is None
+
+    doctor_email, _u2 = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor")
+    doctor_token = await _login(client, doctor_email, "TestPass123!")
+    doctor_headers = {"Authorization": f"Bearer {doctor_token}"}
+    forbidden = await client.post(
+        f"/api/v1/tv-info-content/{content['id']}/image", headers=doctor_headers,
         files={"file": ("photo.png", png_bytes, "image/png")},
     )
     assert forbidden.status_code == 403

@@ -2,10 +2,14 @@
 
 Two distinct security models on this one router:
 
-- `/tv-displays*` and `/announcements/*` - standard JWT-protected,
-  Owner/Administrator-only (reusing `require_config_manage_role`, the same
-  gate used for every other "clinic configuration" module) for
-  create/update/delete; broader `require_config_view_role` for read/preview.
+- `/tv-displays*` and `/announcements/*` - standard JWT-protected. Every
+  create/update/enable-disable/delete/image-upload operation uses
+  `require_tv_display_manage_role` (Owner/Administrator/Receptionist -
+  Receptionist included here, unlike every other "clinic configuration"
+  module's `require_config_manage_role`, because front-desk staff own
+  operating and maintaining the waiting-room screens day to day, including
+  deleting stale displays/content). Read/preview uses the broader
+  `require_config_view_role`.
 - `GET /public/tv-display/{public_slug}` - **deliberately bypasses
   `get_current_user`/`oauth2_scheme` entirely**. It takes no
   Authorization header at all. Its only "credential" is the unguessable
@@ -46,7 +50,7 @@ from app.core.dependencies import (
     User,
     get_current_user,
     get_db,
-    require_config_manage_role,
+    require_tv_display_manage_role,
     require_config_view_role,
 )
 from app.core.rate_limit import rate_limit_tv_public
@@ -79,7 +83,7 @@ public_router = APIRouter(tags=["tv-display-public"])
 async def create_tv_display(
     payload: TvDisplayConfigCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvDisplayConfigRead:
     service = TvDisplayService(db)
     config = await service.create_config(current_user.clinic_id, payload, current_user.id)
@@ -124,7 +128,7 @@ async def update_tv_display(
     tv_display_id: UUID,
     payload: TvDisplayConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvDisplayConfigRead:
     service = TvDisplayService(db)
     config = await service.update_config(current_user.clinic_id, tv_display_id, payload, current_user.id)
@@ -135,7 +139,7 @@ async def update_tv_display(
 async def delete_tv_display(
     tv_display_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> None:
     service = TvDisplayService(db)
     await service.delete_config(current_user.clinic_id, tv_display_id, current_user.id)
@@ -146,7 +150,7 @@ async def create_announcement(
     tv_display_id: UUID,
     payload: TvAnnouncementCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvAnnouncementRead:
     payload = payload.model_copy(update={"tv_display_config_id": tv_display_id})
     service = TvDisplayService(db)
@@ -173,7 +177,7 @@ async def update_announcement(
     announcement_id: UUID,
     payload: TvAnnouncementUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvAnnouncementRead:
     service = TvDisplayService(db)
     announcement = await service.update_announcement(current_user.clinic_id, announcement_id, payload, current_user.id)
@@ -184,7 +188,7 @@ async def update_announcement(
 async def delete_announcement(
     announcement_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> None:
     service = TvDisplayService(db)
     await service.delete_announcement(current_user.clinic_id, announcement_id, current_user.id)
@@ -194,7 +198,7 @@ async def delete_announcement(
 async def create_info_content(
     payload: TvInfoContentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvInfoContentRead:
     service = TvDisplayService(db)
     content = await service.create_info_content(current_user.clinic_id, payload, current_user.id)
@@ -216,7 +220,7 @@ async def update_info_content(
     content_id: UUID,
     payload: TvInfoContentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvInfoContentRead:
     service = TvDisplayService(db)
     content = await service.update_info_content(current_user.clinic_id, content_id, payload, current_user.id)
@@ -227,7 +231,7 @@ async def update_info_content(
 async def delete_info_content(
     content_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> None:
     service = TvDisplayService(db)
     await service.delete_info_content(current_user.clinic_id, content_id, current_user.id)
@@ -238,7 +242,7 @@ async def upload_info_content_image(
     content_id: UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvInfoContentRead:
     service = TvDisplayService(db)
     await service.get_info_content_or_404(current_user.clinic_id, content_id)
@@ -280,7 +284,7 @@ async def upload_info_content_image(
 async def delete_info_content_image(
     content_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_config_manage_role),
+    current_user: User = Depends(require_tv_display_manage_role),
 ) -> TvInfoContentRead:
     service = TvDisplayService(db)
     existing = await service.get_info_content_or_404(current_user.clinic_id, content_id)
