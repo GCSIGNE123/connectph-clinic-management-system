@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DoctorQueueTable } from "./DoctorQueueTable";
 import type { DoctorQueueItem } from "@/features/doctor-workspace/types";
 import { ToastProvider } from "@/components/ui/toast";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 function buildItem(overrides: Partial<DoctorQueueItem> = {}): DoctorQueueItem {
   return {
@@ -62,6 +66,12 @@ describe("DoctorQueueTable", () => {
     expect(screen.getByRole("button", { name: /^start$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /recall/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^call$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows Open and Complete actions for InConsultation visits", () => {
+    renderWithClient(<DoctorQueueTable items={[buildItem({ status: "InConsultation" })]} />);
+    expect(screen.getByRole("button", { name: /open/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /complete/i })).toBeInTheDocument();
   });
 
   it("renders view-only actions cell when readOnly is set", () => {

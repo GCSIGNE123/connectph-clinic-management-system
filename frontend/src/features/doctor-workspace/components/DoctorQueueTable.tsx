@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Bell, Check, PhoneCall, Play, Lock, X, Ban } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowDown, ArrowUp, ArrowUpDown, Bell, Check, FileText, PhoneCall, Play, Lock, X, Ban } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ function compareValues(a: DoctorQueueItem, b: DoctorQueueItem, key: SortKey): nu
 }
 
 export function DoctorQueueTable({ items, readOnly = false }: { items: DoctorQueueItem[]; readOnly?: boolean }) {
+  const router = useRouter();
   const call = useCallPatient();
   const recall = useRecallPatient();
   const start = useStartConsultation();
@@ -163,9 +165,18 @@ export function DoctorQueueTable({ items, readOnly = false }: { items: DoctorQue
                       </>
                     ) : null}
                     {item.status === "InConsultation" ? (
-                      <Button size="sm" disabled={complete.isPending} onClick={() => complete.mutate(item.visitId)}>
-                        <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Complete
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => router.push(`/visits/${item.visitId}/consultation`)}
+                        >
+                          <FileText className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Open
+                        </Button>
+                        <Button size="sm" disabled={complete.isPending} onClick={() => complete.mutate(item.visitId)}>
+                          <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Complete
+                        </Button>
+                      </>
                     ) : null}
                     {["Waiting", "Called"].includes(item.status) ? (
                       <Button size="sm" variant="ghost" disabled={noShow.isPending} onClick={() => noShow.mutate(item.visitId)}>
