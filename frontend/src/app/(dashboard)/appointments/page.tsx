@@ -20,12 +20,16 @@ import { NewAppointmentDialog } from "@/features/appointments/components/NewAppo
 import { AppointmentTable } from "@/features/appointments/components/AppointmentTable";
 import { AppointmentDetailsDialog } from "@/features/appointments/components/AppointmentDetailsDialog";
 import { AppointmentCalendar } from "@/features/appointments/components/AppointmentCalendar";
-import { APPOINTMENT_STATUS_LABELS, AppointmentStatus, type AppointmentListItem } from "@/features/appointments/types";
+import {
+  APPOINTMENT_MANAGE_ROLES,
+  APPOINTMENT_STATUS_LABELS,
+  AppointmentStatus,
+  type AppointmentListItem,
+} from "@/features/appointments/types";
 import { Role } from "@/types";
 import { useShiftRequiredError } from "@/features/shifts/hooks/use-shift-required-error";
 import { ShiftRequiredDialog } from "@/features/shifts/components/ShiftRequiredDialog";
 
-const MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist]);
 const COMPLETE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Doctor]);
 
 type PageView = "list" | "calendar";
@@ -40,7 +44,7 @@ type PageView = "list" | "calendar";
  */
 export default function AppointmentsPage() {
   const { data: currentUser } = useCurrentUser();
-  const canManage = Boolean(currentUser && MANAGE_ROLES.has(currentUser.role));
+  const canManage = Boolean(currentUser && APPOINTMENT_MANAGE_ROLES.has(currentUser.role));
   const canComplete = Boolean(currentUser && COMPLETE_ROLES.has(currentUser.role));
 
   const [searchInput, setSearchInput] = useState("");

@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { createCrudApi } from "@/features/clinic-config/api/crud-factory";
 import { useAppointmentCalendar } from "@/features/appointments/hooks/use-appointments";
 import { AppointmentStatusBadge } from "@/features/appointments/components/AppointmentStatusBadge";
+import { AppointmentDetailsDialog } from "@/features/appointments/components/AppointmentDetailsDialog";
 import { APPOINTMENT_TYPE_LABELS, AppointmentType, type AppointmentListItem } from "@/features/appointments/types";
 
 interface SimpleOption {
@@ -68,7 +69,7 @@ export function AppointmentCalendar() {
   const [departmentId, setDepartmentId] = useState("");
   const [branchId, setBranchId] = useState("");
   const [appointmentType, setAppointmentType] = useState<AppointmentType | "">("");
-  const [selectedItem, setSelectedItem] = useState<AppointmentListItem | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const doctors = useQuery({ queryKey: ["appointment-calendar", "doctors"], queryFn: () => doctorsApi.list({ status: "Active", limit: 100 }) });
   const departments = useQuery({ queryKey: ["appointment-calendar", "departments"], queryFn: () => departmentsApi.list({ status: "Active", limit: 100 }) });
@@ -186,28 +187,16 @@ export function AppointmentCalendar() {
       {isLoading ? (
         <Card className="p-6 text-sm text-muted-foreground">Loading calendar...</Card>
       ) : viewMode === "month" ? (
-        <MonthGrid rangeStart={rangeStart} anchorDate={anchorDate} byDate={byDate} onSelect={setSelectedItem} />
+        <MonthGrid rangeStart={rangeStart} anchorDate={anchorDate} byDate={byDate} onSelect={(item) => setSelectedId(item.id)} />
       ) : viewMode === "week" ? (
-        <WeekGrid rangeStart={rangeStart} byDate={byDate} onSelect={setSelectedItem} />
+        <WeekGrid rangeStart={rangeStart} byDate={byDate} onSelect={(item) => setSelectedId(item.id)} />
       ) : viewMode === "day" ? (
-        <DayList date={anchorDate} byDate={byDate} onSelect={setSelectedItem} />
+        <DayList date={anchorDate} byDate={byDate} onSelect={(item) => setSelectedId(item.id)} />
       ) : (
-        <AgendaList rangeStart={rangeStart} rangeEnd={rangeEnd} byDate={byDate} onSelect={setSelectedItem} />
+        <AgendaList rangeStart={rangeStart} rangeEnd={rangeEnd} byDate={byDate} onSelect={(item) => setSelectedId(item.id)} />
       )}
 
-      {selectedItem ? (
-        <Card className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-mono text-sm font-semibold">{selectedItem.appointmentNumber}</p>
-              <p className="text-sm text-muted-foreground">
-                {selectedItem.patientName} — Dr. {selectedItem.doctorName} — {selectedItem.appointmentDate} {selectedItem.startTime.slice(0, 5)}
-              </p>
-            </div>
-            <AppointmentStatusBadge status={selectedItem.status} />
-          </div>
-        </Card>
-      ) : null}
+      <AppointmentDetailsDialog appointmentId={selectedId} onOpenChange={(open) => !open && setSelectedId(null)} />
     </div>
   );
 }

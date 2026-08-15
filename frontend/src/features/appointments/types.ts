@@ -1,3 +1,5 @@
+import { Role } from "@/types";
+
 export enum AppointmentType {
   NewConsultation = "NewConsultation",
   FollowUp = "FollowUp",
@@ -20,6 +22,34 @@ export enum AppointmentStatus {
   NoShow = "NoShow",
   Rescheduled = "Rescheduled",
 }
+
+/** Same role set already used to gate the "New Appointment" button and the
+ * List view's Confirm/Cancel row actions (see `app/(dashboard)/appointments/
+ * page.tsx`) - Appointment Details' Edit/Cancel buttons reuse this single
+ * source of truth rather than redefining it, matching what the backend's
+ * `require_appointment_manage_role` (reschedule/cancel/confirm endpoints)
+ * actually enforces. */
+export const APPOINTMENT_MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist]);
+
+/** Mirrors `APPOINTMENT_STATUS_TRANSITIONS` in `backend/app/models/
+ * appointment.py` exactly - the frontend must reflect the backend's actual
+ * rules, not invent its own. Reschedule (`PATCH /{id}/reschedule`) is only
+ * a legal transition from Booked/Confirmed; showing the Edit button
+ * outside those statuses would just produce a guaranteed-failing request. */
+export const APPOINTMENT_RESCHEDULABLE_STATUSES = new Set<AppointmentStatus>([
+  AppointmentStatus.Booked,
+  AppointmentStatus.Confirmed,
+]);
+
+/** Mirrors the same backend transition table's cancel-eligible source
+ * statuses (Booked/Confirmed/CheckedIn/Waiting can move to Cancelled;
+ * InConsultation/Completed/Cancelled/NoShow/Rescheduled cannot). */
+export const APPOINTMENT_CANCELLABLE_STATUSES = new Set<AppointmentStatus>([
+  AppointmentStatus.Booked,
+  AppointmentStatus.Confirmed,
+  AppointmentStatus.CheckedIn,
+  AppointmentStatus.Waiting,
+]);
 
 export const APPOINTMENT_TYPE_LABELS: Record<AppointmentType, string> = {
   [AppointmentType.NewConsultation]: "New Consultation",
