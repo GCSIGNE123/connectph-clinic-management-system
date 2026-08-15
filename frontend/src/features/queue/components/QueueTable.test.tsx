@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueueTable } from "./QueueTable";
 import { QueuePriority, QueueStatus, VisitClassification, type QueueListItem } from "@/features/queue/types";
 
@@ -150,5 +151,48 @@ describe("QueueTable", () => {
     expect(buttons).toHaveLength(2);
     expect(buttons[0].className).toMatch(/bg-green-100/);
     expect(buttons[1].className).toMatch(/bg-red-100/);
+  });
+
+  // Reception Queue - Show Latest Queue at the Top: the actual newest-first
+  // ordering is a backend query change (`QueueRepository.search`'s
+  // `order_by` - real server-side pagination, so it has to be the query
+  // order, not a client-side re-sort of an already-fetched page). These
+  // tests cover what `QueueTable` itself is responsible for: rendering
+  // whatever order it's given by default (no silent client-side re-sort of
+  // its own), while its existing manual per-column sort controls keep
+  // working exactly as before.
+  it("renders rows in the exact order given (no default re-sort) - the backend's newest-first order passes straight through", () => {
+    const items = [
+      buildQueue({ id: "3", queueNumber: "A003" }),
+      buildQueue({ id: "2", queueNumber: "A002" }),
+      buildQueue({ id: "1", queueNumber: "A001" }),
+    ];
+    render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} />);
+
+    const rows = screen.getAllByRole("row").slice(1); // drop the header row
+    expect(within(rows[0]).getByText("A003")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("A002")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("A001")).toBeInTheDocument();
+  });
+
+  it("existing manual column sort still works unchanged - clicking a header re-sorts the fetched page", async () => {
+    const items = [
+      buildQueue({ id: "3", queueNumber: "A003" }),
+      buildQueue({ id: "1", queueNumber: "A001" }),
+      buildQueue({ id: "2", queueNumber: "A002" }),
+    ];
+    render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /sort by queue #/i }));
+    let rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("A001")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("A002")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("A003")).toBeInTheDocument();
+
+    // Clicking the same header again reverses direction (existing toggle behavior).
+    await userEvent.click(screen.getByRole("button", { name: /sort by queue #/i }));
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("A003")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("A001")).toBeInTheDocument();
   });
 });

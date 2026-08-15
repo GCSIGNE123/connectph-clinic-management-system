@@ -345,6 +345,118 @@ async def test_list_queues_reports_vitals_taken_per_ticket(client: AsyncClient, 
     assert item_after["vitals_taken"] is True
 
 
+async def _second_patient(client: AsyncClient, headers: dict, *, first_name: str, mobile: str) -> dict:
+    return (
+        await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json={
+                "first_name": first_name, "last_name": "Test", "birth_date": "1992-03-03",
+                "gender": "Male", "civil_status": "Single", "mobile_number": mobile,
+            },
+        )
+    ).json()["patient"]
+
+
+async def test_queue_list_defaults_to_newest_ticket_first(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Reception Queue - Show Latest Queue at the Top: the default (no
+    explicit sort/filter) list order is newest-created ticket first, not
+    oldest-first - the receptionist should never have to scroll to find a
+    ticket they just created. Real server-side pagination means this has
+    to be the actual query order (not just a client-side reverse of an
+    already-fetched page), so this asserts on the raw response order
+    directly."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    # A001 for the default patient from _setup_queue_deps, then two more
+    # distinct patients (duplicate-active-queue-per-patient/department/date
+    # is otherwise rejected) so three tickets exist in a known creation order.
+    first = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    assert first["queue_number"] == "A001"
+
+    patient2 = await _second_patient(client, headers, first_name="Second", mobile="+639170000010")
+    second = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+    assert second["queue_number"] == "A002"
+
+    patient3 = await _second_patient(client, headers, first_name="Third", mobile="+639170000011")
+    third = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient3["id"]))
+    ).json()
+    assert third["queue_number"] == "A003"
+
+    response = await client.get("/api/v1/queues", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert [item["queue_number"] for item in body["items"]] == ["A003", "A002", "A001"]
+
+
+async def test_newly_created_queue_appears_first_after_refresh(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Creating a new ticket, then re-fetching the list (simulating the
+    frontend's realtime-invalidation-triggered refetch), surfaces the new
+    ticket at index 0 without any explicit sort action."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    first = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    before_refresh = (await client.get("/api/v1/queues", headers=headers)).json()
+    assert before_refresh["items"][0]["id"] == first["id"]
+
+    patient2 = await _second_patient(client, headers, first_name="Fresh", mobile="+639170000012")
+    newest = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    after_refresh = (await client.get("/api/v1/queues", headers=headers)).json()
+    assert after_refresh["items"][0]["id"] == newest["id"]
+    assert after_refresh["items"][0]["queue_number"] == "A002"
+
+
+async def test_newest_first_ordering_does_not_break_existing_filters(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Status/department/classification filters (and vitals_taken
+    reporting) still return the correct, filtered rows under the new
+    default order - the ordering change only changes row order, not which
+    rows match a filter."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    first = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, visit_classification="Yakap"))
+    ).json()
+
+    patient2 = await _second_patient(client, headers, first_name="Filtered", mobile="+639170000013")
+    second = (
+        await client.post(
+            "/api/v1/queues", headers=headers,
+            json=_queue_payload(deps, patient_id=patient2["id"], visit_classification="Regular"),
+        )
+    ).json()
+
+    # Department + status filter still isolates the right ticket, now at
+    # the top of an (irrelevant here, single-item) result.
+    dept_status = await client.get(
+        "/api/v1/queues", headers=headers, params={"department_id": deps["department_id"], "status": "Waiting"}
+    )
+    assert dept_status.status_code == 200
+    assert dept_status.json()["total"] == 2
+    assert [i["id"] for i in dept_status.json()["items"]] == [second["id"], first["id"]]
+
+    # Classification filter still isolates exactly the matching ticket.
+    yakap_only = await client.get("/api/v1/queues", headers=headers, params={"visit_classification": "Yakap"})
+    assert yakap_only.json()["total"] == 1
+    assert yakap_only.json()["items"][0]["id"] == first["id"]
+
+    # vitals_taken still reported correctly per-ticket under the new order.
+    await _enter_vitals(client, headers, first["visit_id"])
+    listed = (await client.get("/api/v1/queues", headers=headers)).json()
+    assert listed["items"][0]["id"] == second["id"]
+    assert listed["items"][0]["vitals_taken"] is False
+    assert listed["items"][1]["id"] == first["id"]
+    assert listed["items"][1]["vitals_taken"] is True
+
+
 async def test_patient_yakap_flag_defaults_false_and_persists(client: AsyncClient, make_clinic_with_owner) -> None:
     """Phase 2.7: `Patient.is_yakap_beneficiary` defaults False for existing-
     style patient creation, and a patient explicitly marked YAKAP persists

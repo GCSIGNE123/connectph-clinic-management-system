@@ -78,7 +78,16 @@ class QueueRepository(BaseRepository[Queue]):
                 selectinload(Queue.doctor),
                 selectinload(Queue.service),
             )
-            .order_by(Queue.created_at.asc())
+            # Reception Queue default ordering: newest-created ticket first.
+            # This is real server-side pagination (offset/limit), so the
+            # order here determines which tickets land on page 1, not just
+            # their order within an already-fetched page - a client-side-
+            # only "reverse the current page" would still show the OLDEST
+            # tickets on page 1 whenever there are more tickets than fit on
+            # one page. `QueueTable`'s own column-sort-by-click (frontend,
+            # unaffected by this) still lets staff re-sort the fetched page
+            # by any column, ascending or descending, same as before.
+            .order_by(Queue.created_at.desc())
             .offset(params.offset)
             .limit(params.limit)
         )
