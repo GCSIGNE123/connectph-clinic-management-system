@@ -85,28 +85,25 @@ async function refreshAccessToken(): Promise<AuthTokens | null> {
 }
 
 /**
- * Fetch wrapper for the CONNECT.PH backend API. Attaches the bearer token,
- * serializes JSON bodies, and transparently refreshes the access token once
- * on a 401 before retrying the original request.
+ * Shared low-level fetch: attaches the bearer token and transparently
+ * refreshes it once on a 401 before retrying - the same auth/retry dance
+ * `apiFetch` has always done, factored out so `apiFetchBlob`/`apiUploadFile`
+ * (below) can reuse it instead of duplicating the refresh logic. Does NOT
+ * set Content-Type or serialize the body - callers own that (JSON body vs.
+ * FormData vs. no body at all all need different handling).
  */
-export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, skipAuth, skipRefresh, headers, ...rest } = options;
-
+async function performAuthedFetch(
+  path: string,
+  init: RequestInit,
+  { skipAuth, skipRefresh }: { skipAuth?: boolean; skipRefresh?: boolean } = {}
+): Promise<Response> {
   const doFetch = async (): Promise<Response> => {
-    const finalHeaders = new Headers(headers);
-    finalHeaders.set("Content-Type", "application/json");
-
+    const finalHeaders = new Headers(init.headers);
     if (!skipAuth) {
       const token = tokenStorage.getAccessToken();
       if (token) finalHeaders.set("Authorization", `Bearer ${token}`);
     }
-
-    return fetch(`${API_URL}${path}`, {
-      ...rest,
-      headers: finalHeaders,
-      credentials: "include",
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    return fetch(`${API_URL}${path}`, { ...init, headers: finalHeaders, credentials: "include" });
   };
 
   let response = await doFetch();
@@ -125,37 +122,90 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     }
   }
 
-  if (!response.ok) {
-    let payload: ApiErrorResponse;
-    try {
-      const body = (await response.json()) as ApiErrorResponse & { detail?: unknown };
-      // FastAPI's default error shape is `{"detail": "..."}` (or, for 422
-      // validation errors, `{"detail": [{"msg": "...", "loc": [...]}, ...]}`),
-      // not `{"message": "..."}`. Without this mapping every ApiError.message
-      // is empty, so the UI silently drops real backend error text (e.g. the
-      // duplicate-active-queue and validation messages) and falls back to a
-      // generic toast.
-      let message = body.message;
-      if (!message && body.detail !== undefined) {
-        message = typeof body.detail === "string"
+  return response;
+}
+
+/** Extracts the same `{message, statusCode, errors?}` shape from a failed
+ * response that `apiFetch` has always produced - shared so `apiFetchBlob`
+ * raises an equally useful `ApiError` on failure, not a generic one. */
+async function toApiError(response: Response): Promise<ApiError> {
+  let payload: ApiErrorResponse;
+  try {
+    const body = (await response.json()) as ApiErrorResponse & { detail?: unknown };
+    // FastAPI's default error shape is `{"detail": "..."}` (or, for 422
+    // validation errors, `{"detail": [{"msg": "...", "loc": [...]}, ...]}`),
+    // not `{"message": "..."}`. Without this mapping every ApiError.message
+    // is empty, so the UI silently drops real backend error text (e.g. the
+    // duplicate-active-queue and validation messages) and falls back to a
+    // generic toast.
+    let message = body.message;
+    if (!message && body.detail !== undefined) {
+      message = typeof body.detail === "string"
+        ? body.detail
+        : Array.isArray(body.detail)
           ? body.detail
-          : Array.isArray(body.detail)
-            ? body.detail
-                .map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
-                .join("; ")
-            : JSON.stringify(body.detail);
-      }
-      payload = { ...body, message: message ?? response.statusText };
-    } catch {
-      payload = { message: response.statusText, statusCode: response.status };
+              .map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
+              .join("; ")
+          : JSON.stringify(body.detail);
     }
-    throw new ApiError({ ...payload, statusCode: payload.statusCode ?? response.status });
+    payload = { ...body, message: message ?? response.statusText };
+  } catch {
+    payload = { message: response.statusText, statusCode: response.status };
   }
+  return new ApiError({ ...payload, statusCode: payload.statusCode ?? response.status });
+}
+
+/**
+ * Fetch wrapper for the CONNECT.PH backend API. Attaches the bearer token,
+ * serializes JSON bodies, and transparently refreshes the access token once
+ * on a 401 before retrying the original request.
+ */
+export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { body, skipAuth, skipRefresh, headers, ...rest } = options;
+
+  const finalHeaders = new Headers(headers);
+  finalHeaders.set("Content-Type", "application/json");
+
+  const response = await performAuthedFetch(
+    path,
+    { ...rest, headers: finalHeaders, body: body !== undefined ? JSON.stringify(body) : undefined },
+    { skipAuth, skipRefresh }
+  );
+
+  if (!response.ok) throw await toApiError(response);
 
   if (response.status === 204) {
     return undefined as T;
   }
 
+  return (await response.json()) as T;
+}
+
+/**
+ * Fetches an authenticated resource as a `Blob` - for content that isn't
+ * JSON (e.g. a consultation attachment's actual image/PDF bytes, served by
+ * an authenticated endpoint rather than a public static URL - see
+ * `features/consultation/api/consultation-api.ts::getAttachmentFileBlob`).
+ * A plain `<img src>` can't send the Authorization header, so viewing an
+ * authenticated image means fetching it as a blob and pointing the `<img>`
+ * at `URL.createObjectURL(blob)` instead.
+ */
+export async function apiFetchBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const { skipAuth, skipRefresh, headers } = options;
+  const response = await performAuthedFetch(path, { method: "GET", headers }, { skipAuth, skipRefresh });
+  if (!response.ok) throw await toApiError(response);
+  return response.blob();
+}
+
+/**
+ * Uploads a real file as `multipart/form-data`. Deliberately does NOT set
+ * Content-Type - the browser sets it (with the correct boundary) only when
+ * given a `FormData` body directly, and setting it manually breaks that.
+ */
+export async function apiUploadFile<T>(path: string, formData: FormData): Promise<T> {
+  const response = await performAuthedFetch(path, { method: "POST", body: formData });
+  if (!response.ok) throw await toApiError(response);
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 

@@ -8,9 +8,13 @@ edit, enforced by simply never including Receptionist in
 `require_consultation_view_role`'s allowed set.
 """
 
+import mimetypes
+import uuid
+from pathlib import Path as FsPath
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,11 +27,12 @@ from app.core.dependencies import (
     require_consultation_view_role,
     require_soap_subjective_objective_role,
 )
+from app.core.upload_validation import validate_document_upload, validate_image_upload
+from app.models.consultation_attachment import AttachmentType
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.schemas.consultation import (
-    AttachmentUploadRequest,
-    AttachmentUploadResponse,
+    AttachmentRead,
     ConsultationCompleteRequest,
     ConsultationDetail,
     ConsultationTimelineResponse,
@@ -38,9 +43,18 @@ from app.schemas.consultation import (
     SoapNoteSubjectiveObjectiveUpsert,
     SoapNoteUpsert,
 )
-from app.services.consultation_service import ConsultationService
+from app.services.consultation_service import ConsultationService, attachment_to_read
 
 router = APIRouter(tags=["consultations"])
+
+# Real, locally-stored consultation attachment files (clinical images, PDFs,
+# referral letters) - unlike TV Info Content's images (see
+# `api/v1/tv_display.py`), these are sensitive patient clinical data, so
+# they are NEVER served via an unauthenticated static mount. Instead
+# `get_attachment_file` below serves them through the same
+# view-permission check as `list_attachments`. Mirrors
+# `TV_INFO_CONTENT_UPLOAD_ROOT`'s parents[3]-from-this-file convention.
+CONSULTATION_ATTACHMENTS_UPLOAD_ROOT = FsPath(__file__).resolve().parents[3] / "var" / "consultation_attachments"
 
 
 def _is_privileged(user: User) -> bool:
@@ -302,33 +316,87 @@ async def sign_consultation(
     )
 
 
-@router.post("/consultations/{consultation_id}/attachments", response_model=AttachmentUploadResponse)
+@router.post("/consultations/{consultation_id}/attachments", response_model=AttachmentRead)
 async def upload_attachment(
     consultation_id: UUID,
-    payload: AttachmentUploadRequest,
+    attachment_type: AttachmentType = Form(...),
+    file: UploadFile = File(...),
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_consultation_edit_role),
-) -> AttachmentUploadResponse:
+) -> AttachmentRead:
+    """Real upload (Feature 2) - unlike the presigned-URL-stub pattern used
+    elsewhere in this app (see `app/core/upload_validation.py`'s module
+    docstring), this relays real file bytes and writes them to local disk,
+    same reasoning as `tv_display.py`'s info-panel image upload: the actual
+    clinic deployment target (a Docker Desktop / on-prem Server PC, see
+    `docs/LOCAL_DEPLOYMENT.md`) has no Supabase project provisioned, so a
+    presigned-URL-to-cloud-storage flow was never actually viewable - the
+    uploaded file simply didn't exist anywhere. Validated the same way the
+    old stub validated declared metadata (`validate_image_upload`/
+    `validate_document_upload`), just against the real bytes now."""
     _, can_edit = await _get_consultation_and_permissions(db, clinic_id, current_user, consultation_id)
+    if not can_edit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have edit access to this consultation.")
+
+    file_name = file.filename or "attachment"
+    content = await file.read()
+    if attachment_type == AttachmentType.CLINICAL_IMAGE:
+        validate_image_upload(file_name=file_name, file_size_bytes=len(content))
+    else:
+        validate_document_upload(file_name=file_name, file_size_bytes=len(content))
+    if len(content) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+
+    ext = FsPath(file_name).suffix.lower()
+    stored_filename = f"{uuid.uuid4().hex}{ext}"
+    clinic_dir = CONSULTATION_ATTACHMENTS_UPLOAD_ROOT / str(clinic_id) / str(consultation_id)
+    clinic_dir.mkdir(parents=True, exist_ok=True)
+    (clinic_dir / stored_filename).write_bytes(content)
+
     service = ConsultationService(db)
-    result = await service.request_attachment_upload(
-        consultation_id, clinic_id=clinic_id, actor_id=current_user.id, file_name=payload.file_name,
-        attachment_type=payload.attachment_type, file_size_bytes=payload.file_size_bytes, can_edit=can_edit,
+    attachment = await service.add_attachment_record(
+        consultation_id, clinic_id=clinic_id, actor_id=current_user.id, attachment_type=attachment_type,
+        file_name=file_name, stored_filename=stored_filename, file_size_bytes=len(content),
     )
-    return AttachmentUploadResponse(**result)
+    return attachment_to_read(attachment)
 
 
-@router.get("/consultations/{consultation_id}/attachments")
+@router.get("/consultations/{consultation_id}/attachments", response_model=list[AttachmentRead])
 async def list_attachments(
     consultation_id: UUID,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_consultation_view_role),
-):
+) -> list[AttachmentRead]:
     await _get_consultation_and_permissions(db, clinic_id, current_user, consultation_id)
     service = ConsultationService(db)
-    return await service.list_attachments(consultation_id, clinic_id=clinic_id)
+    rows = await service.list_attachments(consultation_id, clinic_id=clinic_id)
+    return [attachment_to_read(a) for a in rows]
+
+
+@router.get("/consultations/{consultation_id}/attachments/{attachment_id}/file")
+async def get_attachment_file(
+    consultation_id: UUID,
+    attachment_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_consultation_view_role),
+) -> FileResponse:
+    """Same authorization as `list_attachments` (view role + this specific
+    consultation's own permission check) - a photo/PDF is never reachable
+    by anyone not already authorized to view the consultation it belongs
+    to. Not a public/unauthenticated static mount (contrast
+    `tv_display.py`'s info-panel images, which are deliberately public
+    marketing content, never clinical data)."""
+    await _get_consultation_and_permissions(db, clinic_id, current_user, consultation_id)
+    service = ConsultationService(db)
+    attachment = await service.get_attachment(consultation_id, attachment_id, clinic_id=clinic_id)
+    file_path = CONSULTATION_ATTACHMENTS_UPLOAD_ROOT / str(clinic_id) / str(consultation_id) / attachment.file_url
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    media_type, _ = mimetypes.guess_type(attachment.file_name)
+    return FileResponse(file_path, media_type=media_type or "application/octet-stream", filename=attachment.file_name)
 
 
 @router.get("/consultations/{consultation_id}/timeline", response_model=ConsultationTimelineResponse)

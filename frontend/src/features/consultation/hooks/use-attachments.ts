@@ -14,21 +14,15 @@ export function useAttachments(consultationId: string | null) {
   });
 }
 
-/** Presigned-URL-stub upload flow: requests an upload slot (which records
- * the attachment row server-side), matching the pattern used for patient
- * photo uploads elsewhere in the app - no real file bytes are transferred
- * to a storage provider yet (see backend TODO in `consultation_service.py`). */
+/** Real upload (Feature 2): sends the actual file bytes, so the attachment
+ * is immediately viewable afterward via its returned `fileUrl`. */
 export function useUploadAttachment(consultationId: string | null) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (payload: { attachmentType: AttachmentType; file: File }) => {
       if (!consultationId) throw new Error("No consultation open");
-      return consultationApi.requestAttachmentUpload(consultationId, {
-        attachmentType: payload.attachmentType,
-        fileName: payload.file.name,
-        fileSizeBytes: payload.file.size,
-      });
+      return consultationApi.uploadAttachment(consultationId, payload);
     },
     onSuccess: () => {
       toast({ title: "Attachment uploaded", variant: "success" });

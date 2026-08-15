@@ -1,4 +1,4 @@
-import { apiClient } from "@/lib/api-client";
+import { apiClient, apiFetchBlob, apiUploadFile } from "@/lib/api-client";
 import type { LockInfo } from "@/features/doctor-workspace/types";
 import type {
   Consultation,
@@ -178,19 +178,28 @@ export const consultationApi = {
     const raw = await apiClient.post<any>(`/consultations/${consultationId}/sign`);
     return toConsultation(raw);
   },
-  requestAttachmentUpload: async (
+  /** Real upload (Feature 2) - sends the actual file bytes as
+   * multipart/form-data; the backend writes them to disk and returns the
+   * created attachment (including a real, viewable `file_url`). */
+  uploadAttachment: async (
     consultationId: string,
-    payload: { attachmentType: AttachmentType; fileName: string; fileSizeBytes?: number | null }
-  ) => {
-    return apiClient.post<{ id: string; upload_url: string; file_url: string; expires_in: number }>(
-      `/consultations/${consultationId}/attachments`,
-      { attachment_type: payload.attachmentType, file_name: payload.fileName, file_size_bytes: payload.fileSizeBytes ?? null }
-    );
+    payload: { attachmentType: AttachmentType; file: File }
+  ): Promise<ConsultationAttachment> => {
+    const formData = new FormData();
+    formData.append("attachment_type", payload.attachmentType);
+    formData.append("file", payload.file);
+    const raw = await apiUploadFile<any>(`/consultations/${consultationId}/attachments`, formData);
+    return toAttachment(raw);
   },
   listAttachments: async (consultationId: string): Promise<ConsultationAttachment[]> => {
     const raw = await apiClient.get<any[]>(`/consultations/${consultationId}/attachments`);
     return raw.map(toAttachment);
   },
+  /** Fetches an attachment's real file bytes as a Blob, for display
+   * (`URL.createObjectURL`) or download - the file is served by an
+   * authenticated endpoint (`fileUrl` on the attachment itself), not a
+   * public URL, so a plain `<img src>`/`<a href>` can't reach it directly. */
+  getAttachmentFileBlob: (fileUrl: string): Promise<Blob> => apiFetchBlob(fileUrl),
   // --- Phase 20 (items 3-5): Receptionist/Nurse Subjective/Objective entry ---
   openForReception: async (visitId: string): Promise<Consultation> => {
     const raw = await apiClient.post<any>(`/visits/${visitId}/consultation/open-for-reception`);

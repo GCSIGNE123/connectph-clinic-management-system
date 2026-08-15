@@ -14,16 +14,29 @@ version: "3.9"
 # What this override changes, and why (see docs/PHASE2_DEPLOYMENT_DESIGN
 # notes / Phase 2 audit findings for the full reasoning):
 #
-# - backend.volumes: !reset [] - removes the base file's dev bind mount
-#   (../backend:/app). Plain `volumes: []` does NOT do this - Compose merges
-#   sequence fields by appending, not replacing, so an empty override list
-#   is a no-op against a non-empty base list. The `!reset` tag (Compose
-#   Specification merge control, requires Docker Compose v2.24.0+) is what
-#   actually clears an inherited field instead of merging it. Without this,
-#   the running container serves the HOST filesystem, not what was actually
-#   baked into the image at `build` time - that defeats the entire point of
-#   a Git-pull-then-rebuild deploy. In production the backend must run ONLY
+# - backend.volumes: !override [backend_var_data:/app/var] - removes the
+#   base file's dev bind mount (../backend:/app) and replaces it with a
+#   named volume for /app/var only. `!override` (not the earlier `!reset
+#   []`) since we're replacing the field with a specific new value, not
+#   clearing it - same merge-control reasoning as `frontend.healthcheck.
+#   test` below. Without removing the bind mount, the running container
+#   would serve the HOST filesystem, not what was actually baked into the
+#   image at `build` time - that defeats the entire point of a
+#   Git-pull-then-rebuild deploy. In production the backend must run ONLY
 #   from its built image.
+#
+#   The named volume matters for a separate reason: `/app/var` is where
+#   real uploaded files are written - `POST /consultations/{id}/attachments`
+#   (clinical images/PDFs, see `api/v1/consultations.py`) and TV Info
+#   Content images (`api/v1/tv_display.py`) both store real bytes under
+#   `var/`. Without a volume there, `backend.volumes: !reset []` alone
+#   would leave `/app/var` living only in the container's writable layer -
+#   every `docker compose build backend && up -d --no-deps backend` cycle
+#   (exactly what `deploy.cmd` does on every deploy) discards that layer,
+#   permanently deleting every previously-uploaded attachment/image on
+#   every single deploy. `backend_var_data` (declared below) persists
+#   across rebuilds/recreations the same way `postgres_data`/`redis_data`
+#   already do for the database/cache.
 #
 # - backend.command - overrides the image's default CMD, which runs
 #   `alembic upgrade head` before starting uvicorn. Per Phase 3
@@ -92,7 +105,8 @@ version: "3.9"
 
 services:
   backend:
-    volumes: !reset []
+    volumes: !override
+      - backend_var_data:/app/var
     environment:
       ENV: production
       CORS_ORIGINS: ${CLINIC_FRONTEND_ORIGIN:-http://192.168.68.106:3000}
@@ -116,3 +130,6 @@ services:
 
   redis:
     ports: !reset []
+
+volumes:
+  backend_var_data:

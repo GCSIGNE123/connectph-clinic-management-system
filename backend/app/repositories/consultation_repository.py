@@ -150,3 +150,12 @@ class ConsultationRepository:
         ).order_by(ConsultationAttachment.created_at.desc())
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows)
+
+    async def get_attachment(self, attachment_id: UUID, consultation_id: UUID, clinic_id: UUID) -> ConsultationAttachment | None:
+        stmt = select(ConsultationAttachment).where(
+            ConsultationAttachment.id == attachment_id,
+            ConsultationAttachment.consultation_id == consultation_id,
+            ConsultationAttachment.clinic_id == clinic_id,
+            ConsultationAttachment.is_deleted.is_(False),
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()

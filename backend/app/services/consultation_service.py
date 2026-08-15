@@ -45,8 +45,8 @@ from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.upload_validation import validate_document_upload
 from app.models.consultation import CONSULTATION_STATUS_TRANSITIONS, Consultation, ConsultationStatus
+from app.models.consultation_attachment import ConsultationAttachment
 from app.models.diagnosis import Diagnosis
 from app.models.queue import QUEUE_STATUS_TRANSITIONS, QueueStatus
 from app.models.user import User
@@ -93,6 +93,26 @@ def _compute_bmi(height_cm: float | None, weight_kg: float | None) -> float | No
         return None
     height_m = height_cm / 100
     return round(weight_kg / (height_m * height_m), 2)
+
+
+def attachment_to_read(attachment) -> AttachmentRead:
+    """Builds the API-facing `file_url` as a path into
+    `GET /consultations/{id}/attachments/{id}/file` (see
+    `api/v1/consultations.py::get_attachment_file`), rather than exposing
+    the raw on-disk filename stored in the `file_url` column. Shared by
+    both `list_attachments`/the upload endpoint and `_to_detail` below, so
+    every place a consultation's attachments are serialized resolves to
+    the same real, authenticated, viewable URL."""
+    return AttachmentRead(
+        id=attachment.id,
+        consultation_id=attachment.consultation_id,
+        attachment_type=attachment.attachment_type,
+        file_name=attachment.file_name,
+        file_url=f"/consultations/{attachment.consultation_id}/attachments/{attachment.id}/file",
+        file_size_bytes=attachment.file_size_bytes,
+        uploaded_by=attachment.uploaded_by,
+        created_at=attachment.created_at,
+    )
 
 
 class ConsultationService:
@@ -163,7 +183,7 @@ class ConsultationService:
             visit_number=consultation.visit.visit_number if consultation.visit else None,
             soap_note=SoapNoteRead.model_validate(soap) if soap else None,
             diagnoses=[DiagnosisRead.model_validate(d) for d in diagnoses],
-            attachments=[AttachmentRead.model_validate(a) for a in attachments],
+            attachments=[attachment_to_read(a) for a in attachments],
             lock=lock,
         )
 
@@ -522,36 +542,45 @@ class ConsultationService:
         return await self.get_detail(consultation_id, clinic_id=clinic_id, current_user_id=current_user_id)
 
     # --- Attachments ---
+    #
+    # Feature 2: real file storage (local disk, see
+    # `api/v1/consultations.py`'s module-level `CONSULTATION_ATTACHMENTS_
+    # UPLOAD_ROOT` and its docstring for why - superseded the old
+    # `request_attachment_upload` presigned-URL-stub method below, which
+    # never actually stored any file bytes anywhere).
 
-    async def request_attachment_upload(self, consultation_id: UUID, *, clinic_id: UUID, actor_id: UUID, file_name: str, attachment_type, file_size_bytes: int | None, can_edit: bool) -> dict:
-        self._require_can_edit(can_edit)
-        # Phase 16: this endpoint previously had zero server-side validation
-        # of the client-declared file name/size before minting a presigned
-        # upload URL - a real gap since, unlike the photo/branding upload
-        # endpoints (which take no client-supplied file metadata at all),
-        # this one does. Reject disallowed extensions / oversized files here.
-        validate_document_upload(file_name=file_name, file_size_bytes=file_size_bytes)
-        consultation = await self._require_consultation(consultation_id, clinic_id)
-        import secrets
-        token = secrets.token_urlsafe(24)
-        object_path = f"clinics/{clinic_id}/consultations/{consultation_id}/{attachment_type.value}-{token}-{file_name}"
-        file_url = f"https://stub.supabase.local/storage/v1/object/public/{object_path}"
-        upload_url = f"https://stub.supabase.local/storage/v1/upload/{object_path}"
+    async def add_attachment_record(
+        self, consultation_id: UUID, *, clinic_id: UUID, actor_id: UUID, attachment_type,
+        file_name: str, stored_filename: str, file_size_bytes: int,
+    ) -> ConsultationAttachment:
+        """Inserts the DB row for a file the caller (the API layer) has
+        already validated and written to disk. `stored_filename` is the
+        on-disk filename only (not a URL) - resolving it back to a real
+        path/URL is the API layer's job (`_attachment_to_read`), since this
+        service has no notion of the authenticated file-serving route."""
+        await self._require_consultation(consultation_id, clinic_id)
         attachment = await self.repo.add_attachment(
             consultation_id=consultation_id, clinic_id=clinic_id, uploaded_by=actor_id,
-            attachment_type=attachment_type, file_name=file_name, file_url=file_url, file_size_bytes=file_size_bytes,
+            attachment_type=attachment_type, file_name=file_name, file_url=stored_filename,
+            file_size_bytes=file_size_bytes,
         )
         await self.audit_service.log_event(
             clinic_id=clinic_id, user_id=actor_id, action="consultation.attachment_uploaded",
             entity_type="consultation_attachment", entity_id=str(attachment.id),
         )
         await self.session.commit()
-        return {"id": attachment.id, "upload_url": upload_url, "file_url": file_url, "expires_in": 600}
+        return attachment
 
-    async def list_attachments(self, consultation_id: UUID, *, clinic_id: UUID) -> list[AttachmentRead]:
+    async def list_attachments(self, consultation_id: UUID, *, clinic_id: UUID) -> list[ConsultationAttachment]:
         await self._require_consultation(consultation_id, clinic_id)
-        rows = await self.repo.list_attachments(consultation_id, clinic_id)
-        return [AttachmentRead.model_validate(a) for a in rows]
+        return await self.repo.list_attachments(consultation_id, clinic_id)
+
+    async def get_attachment(self, consultation_id: UUID, attachment_id: UUID, *, clinic_id: UUID) -> ConsultationAttachment:
+        await self._require_consultation(consultation_id, clinic_id)
+        attachment = await self.repo.get_attachment(attachment_id, consultation_id, clinic_id)
+        if attachment is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+        return attachment
 
     # --- Timeline (reuses the Visit timeline) ---
 

@@ -23,6 +23,7 @@ import { useOpenConsultation, useCompleteConsultation } from "@/features/consult
 import { useSoapAutosave } from "@/features/consultation/hooks/use-soap-autosave";
 import { useAddDiagnosis } from "@/features/consultation/hooks/use-diagnoses";
 import { useAttachments, useUploadAttachment } from "@/features/consultation/hooks/use-attachments";
+import { AttachmentList } from "@/features/consultation/components/AttachmentList";
 import type { AttachmentType, DiagnosisStatus, DiagnosisType, SoapNoteInput } from "@/features/consultation/types";
 import { computeBmi } from "@/features/consultation/bmi";
 import { ClinicalOrdersTab } from "@/features/clinical-orders/components/ClinicalOrdersTab";
@@ -431,20 +432,7 @@ export default function ConsultationPage() {
             <CardTitle>Attachments</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {attachmentsQuery.data && attachmentsQuery.data.length > 0 ? (
-              <ul className="space-y-2 text-sm">
-                {attachmentsQuery.data.map((a) => (
-                  <li key={a.id} className="flex items-center justify-between rounded-md border border-border p-2">
-                    <span>
-                      <Badge variant="secondary" className="mr-2">{a.attachmentType}</Badge>
-                      {a.fileName}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState title="No attachments yet" description="Upload clinical images, PDFs, or referral letters below." />
-            )}
+            <AttachmentList attachments={attachmentsQuery.data ?? []} />
             {canEdit ? (
               <AttachmentUploadForm
                 onUpload={(type, file) => uploadAttachment.mutate({ attachmentType: type, file })}

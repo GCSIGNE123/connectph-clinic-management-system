@@ -132,19 +132,6 @@ class DiagnosisRead(BaseModel):
     updated_at: datetime
 
 
-class AttachmentUploadRequest(BaseModel):
-    attachment_type: AttachmentType
-    file_name: str = Field(max_length=255)
-    file_size_bytes: int | None = None
-
-
-class AttachmentUploadResponse(BaseModel):
-    id: UUID
-    upload_url: str
-    file_url: str
-    expires_in: int
-
-
 class AttachmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

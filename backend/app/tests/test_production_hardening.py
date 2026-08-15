@@ -171,10 +171,12 @@ async def test_consultation_attachment_upload_rejects_oversized_file(
     clinic, owner, headers = await _owner_headers(client, make_clinic_with_owner)
     visit_id, consultation_id, doctor_headers = await _make_open_consultation(client, db_session, clinic, owner, headers)
 
+    oversized = b"x" * (20 * 1024 * 1024 + 1)  # MAX_DOCUMENT_SIZE_BYTES + 1
     response = await client.post(
         f"/api/v1/consultations/{consultation_id}/attachments",
         headers=doctor_headers,
-        json={"attachment_type": "PDF", "file_name": "scan.pdf", "file_size_bytes": 100 * 1024 * 1024},
+        data={"attachment_type": "PDF"},
+        files={"file": ("scan.pdf", oversized, "application/pdf")},
     )
     assert response.status_code == 400
     assert "too large" in response.json()["detail"].lower()
@@ -189,7 +191,8 @@ async def test_consultation_attachment_upload_rejects_disallowed_extension(
     response = await client.post(
         f"/api/v1/consultations/{consultation_id}/attachments",
         headers=doctor_headers,
-        json={"attachment_type": "PDF", "file_name": "malware.exe", "file_size_bytes": 1000},
+        data={"attachment_type": "PDF"},
+        files={"file": ("malware.exe", b"not-a-real-file", "application/octet-stream")},
     )
     assert response.status_code == 400
     assert "not allowed" in response.json()["detail"].lower()
@@ -204,9 +207,101 @@ async def test_consultation_attachment_upload_accepts_valid_file(
     response = await client.post(
         f"/api/v1/consultations/{consultation_id}/attachments",
         headers=doctor_headers,
-        json={"attachment_type": "PDF", "file_name": "scan.pdf", "file_size_bytes": 1000},
+        data={"attachment_type": "PDF"},
+        files={"file": ("scan.pdf", b"%PDF-1.4 fake but nonzero", "application/pdf")},
     )
     assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["file_name"] == "scan.pdf"
+    # Feature 2: the returned file_url is a real, resolvable, authenticated
+    # path (not the old presigned-URL-stub's fake stub.supabase.local URL).
+    assert body["file_url"] == f"/consultations/{consultation_id}/attachments/{body['id']}/file"
+
+
+# --- Feature 2: uploaded attachments are actually viewable afterward -------
+
+
+# A real, valid, tiny (1x1 pixel) PNG - needed because the upload endpoint
+# now validates/stores real bytes, not just declared metadata.
+_TINY_PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108020000009077"
+    "53de0000000c4944415478da6360000002000155a8f3580000000049454e44ae426082"
+)
+
+
+async def test_consultation_attachment_upload_and_view_image_immediately(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+):
+    """Feature 2's core requirement: after a successful upload, the file is
+    immediately retrievable and its bytes match what was uploaded - not a
+    dead presigned-URL-stub link."""
+    clinic, owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    visit_id, consultation_id, doctor_headers = await _make_open_consultation(client, db_session, clinic, owner, headers)
+
+    upload = await client.post(
+        f"/api/v1/consultations/{consultation_id}/attachments",
+        headers=doctor_headers,
+        data={"attachment_type": "ClinicalImage"},
+        files={"file": ("wound.png", _TINY_PNG_BYTES, "image/png")},
+    )
+    assert upload.status_code == 200, upload.text
+    attachment = upload.json()
+
+    # Shows up in the list immediately, with the same viewable file_url.
+    listed = await client.get(f"/api/v1/consultations/{consultation_id}/attachments", headers=doctor_headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["file_url"] == attachment["file_url"]
+
+    fetched = await client.get(f"/api/v1{attachment['file_url']}", headers=doctor_headers)
+    assert fetched.status_code == 200
+    assert fetched.content == _TINY_PNG_BYTES
+    assert fetched.headers["content-type"] == "image/png"
+
+
+async def test_consultation_attachment_pdf_is_not_served_with_an_image_content_type(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+):
+    """A non-image attachment must never be mistakenly treated as an
+    image - the served content-type must reflect the real file type."""
+    clinic, owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    visit_id, consultation_id, doctor_headers = await _make_open_consultation(client, db_session, clinic, owner, headers)
+
+    upload = await client.post(
+        f"/api/v1/consultations/{consultation_id}/attachments",
+        headers=doctor_headers,
+        data={"attachment_type": "PDF"},
+        files={"file": ("referral.pdf", b"%PDF-1.4 fake but nonzero", "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    attachment = upload.json()
+    assert attachment["attachment_type"] == "PDF"
+
+    fetched = await client.get(f"/api/v1{attachment['file_url']}", headers=doctor_headers)
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"] == "application/pdf"
+    assert not fetched.headers["content-type"].startswith("image/")
+
+
+async def test_consultation_attachment_file_requires_authentication(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+):
+    """Preserves existing authorization: the real file is not reachable by
+    an unauthenticated request, same as `list_attachments` already
+    required a valid session."""
+    clinic, owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    visit_id, consultation_id, doctor_headers = await _make_open_consultation(client, db_session, clinic, owner, headers)
+
+    upload = await client.post(
+        f"/api/v1/consultations/{consultation_id}/attachments",
+        headers=doctor_headers,
+        data={"attachment_type": "ClinicalImage"},
+        files={"file": ("wound.png", _TINY_PNG_BYTES, "image/png")},
+    )
+    assert upload.status_code == 200, upload.text
+    file_url = upload.json()["file_url"]
+
+    unauthenticated = await client.get(f"/api/v1{file_url}")
+    assert unauthenticated.status_code == 401
 
 
 async def _make_open_consultation(client, db_session, clinic, owner, headers):
