@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
+import { formatDateTime } from "@/lib/utils";
 
 const SYSTEM_STATUS_ROLES = new Set(["Owner", "Administrator"]);
 
@@ -55,7 +56,7 @@ function StatusBadge({ ok, label }: { ok: boolean | null; label: string }) {
 
 function formatTimestamp(value: string | null): string {
   if (!value) return "Never";
-  return new Date(value).toLocaleString();
+  return formatDateTime(value);
 }
 
 function formatDuration(ms: number | null): string {

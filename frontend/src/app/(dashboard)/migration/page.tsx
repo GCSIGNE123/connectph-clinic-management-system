@@ -22,6 +22,7 @@ import type {
   MigrationValidationIssue,
 } from "@/features/migration/types";
 import { IMPLEMENTED_ENTITY_TYPES } from "@/features/migration/types";
+import { formatDateTime } from "@/lib/utils";
 
 const STEPS = ["Choose Source", "Connect", "Analyze", "Map Fields", "Preview", "Validate", "Import", "Verify"] as const;
 
@@ -500,7 +501,7 @@ export default function MigrationWizardPage() {
                   <TableCell>{b.source_type} - {b.source_description || "-"}</TableCell>
                   <TableCell><Badge variant="outline">{b.status}</Badge></TableCell>
                   <TableCell>{b.total_records_imported}</TableCell>
-                  <TableCell>{new Date(b.created_at).toLocaleString()}</TableCell>
+                  <TableCell>{formatDateTime(b.created_at)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

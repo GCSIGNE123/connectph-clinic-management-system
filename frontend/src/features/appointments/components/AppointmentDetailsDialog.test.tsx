@@ -84,7 +84,7 @@ describe("AppointmentDetailsDialog", () => {
     expect(screen.getByText("Jose Rizal")).toBeInTheDocument();
     expect(screen.getByText("General Medicine")).toBeInTheDocument();
     expect(screen.getByText("Main Branch")).toBeInTheDocument();
-    expect(screen.getByText("2026-08-20")).toBeInTheDocument();
+    expect(screen.getByText("08/20/2026")).toBeInTheDocument();
     expect(screen.getByText("14:00 – 14:30")).toBeInTheDocument();
     expect(screen.getByText("Follow-up on lab results")).toBeInTheDocument();
     expect(screen.getByText("Booked")).toBeInTheDocument();

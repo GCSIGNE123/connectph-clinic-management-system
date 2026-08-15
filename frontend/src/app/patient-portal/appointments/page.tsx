@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { patientApiFetch, PatientApiError } from "@/features/patient-portal/api/client";
 import { cancelAppointment, getAvailableSlots, rescheduleAppointment, TimeSlot } from "@/features/patient-portal/api/appointments";
+import { formatDate } from "@/lib/utils";
 
 interface Appt {
   id: string; appointment_number: string; appointment_type: string; appointment_date: string;
@@ -115,7 +116,7 @@ export default function AppointmentsPage() {
           <div key={a.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12 }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>{a.appointment_type} - {a.appointment_number}</div>
             <div style={{ fontSize: 13, color: "#475569" }}>
-              {a.appointment_date} {a.start_time}-{a.end_time} | Dr. {a.doctor_name ?? "TBD"} | {a.department_name ?? "-"}
+              {formatDate(a.appointment_date)} {a.start_time}-{a.end_time} | Dr. {a.doctor_name ?? "TBD"} | {a.department_name ?? "-"}
             </div>
             <div style={{ fontSize: 12, color: "#0f766e", marginTop: 4 }}>{a.status}</div>
 

@@ -22,6 +22,7 @@ import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { PatientStatus } from "@/features/patients/types";
 import type { PatientListItem } from "@/features/patients/types";
+import { formatDate } from "@/lib/utils";
 
 export interface PatientsTableProps {
   patients: PatientListItem[];
@@ -119,7 +120,7 @@ export function PatientsTable({
                 <TableCell className="text-muted-foreground">{patient.gender}</TableCell>
                 <TableCell className="text-muted-foreground">{patient.mobileNumber}</TableCell>
                 <TableCell className="text-muted-foreground">
-                  {patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString() : "—"}
+                  {patient.lastVisit ? formatDate(patient.lastVisit) : "—"}
                 </TableCell>
                 <TableCell>
                   <Badge variant={status.variant}>{status.label}</Badge>

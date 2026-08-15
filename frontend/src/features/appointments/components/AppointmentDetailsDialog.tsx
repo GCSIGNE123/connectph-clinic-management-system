@@ -10,6 +10,7 @@ import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useAppointmentDetail, useAvailableSlots } from "@/features/appointments/hooks/use-appointments";
 import { useCancelAppointment, useRescheduleAppointment } from "@/features/appointments/hooks/use-appointment-mutations";
 import { AppointmentStatusBadge } from "@/features/appointments/components/AppointmentStatusBadge";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import {
   APPOINTMENT_CANCELLABLE_STATUSES,
   APPOINTMENT_MANAGE_ROLES,
@@ -169,7 +170,7 @@ export function AppointmentDetailsDialog({ appointmentId, onOpenChange }: Appoin
               <Field label="Doctor" value={data.doctorName ?? "—"} />
               <Field label="Department" value={data.departmentName ?? "—"} />
               <Field label="Service" value={data.serviceName ?? "—"} />
-              <Field label="Date" value={data.appointmentDate} />
+              <Field label="Date" value={formatDate(data.appointmentDate)} />
               <Field label="Time" value={`${data.startTime.slice(0, 5)} – ${data.endTime.slice(0, 5)}`} />
               <Field label="Branch" value={data.branchName ?? "—"} />
               <Field label="Notes" value={data.notes ?? "—"} />
@@ -188,7 +189,7 @@ export function AppointmentDetailsDialog({ appointmentId, onOpenChange }: Appoin
                   <li key={h.id} className="text-sm">
                     <div className="font-medium">{h.action}</div>
                     <div className="text-xs text-muted-foreground">
-                      {new Date(h.changedAt).toLocaleString()}
+                      {formatDateTime(h.changedAt)}
                       {h.note ? ` — ${h.note}` : ""}
                     </div>
                     {h.fromValue || h.toValue ? (

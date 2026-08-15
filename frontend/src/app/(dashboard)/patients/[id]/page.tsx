@@ -20,6 +20,7 @@ import { PatientBillingHistory } from "@/features/billing/components/PatientBill
 import { PatientPrescriptionsHistory } from "@/features/clinical-orders/components/PatientPrescriptionsHistory";
 import { PatientLaboratoryHistory } from "@/features/laboratory/components/PatientLaboratoryHistory";
 import { PatientAppointmentsHistory } from "@/features/appointments/components/PatientAppointmentsHistory";
+import { formatDate } from "@/lib/utils";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -148,10 +149,10 @@ export default function PatientProfilePage() {
               <InfoRow label="Civil status" value={patient.civilStatus} />
               <InfoRow label="Mobile" value={patient.mobileNumber} />
               <InfoRow label="Email" value={patient.email ?? "—"} />
-              <InfoRow label="Date registered" value={new Date(patient.dateRegistered).toLocaleDateString()} />
+              <InfoRow label="Date registered" value={formatDate(patient.dateRegistered)} />
               <InfoRow
                 label="Last visit"
-                value={patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString() : "No visits yet"}
+                value={patient.lastVisit ? formatDate(patient.lastVisit) : "No visits yet"}
               />
             </CardContent>
           </Card>
@@ -189,7 +190,7 @@ export default function PatientProfilePage() {
             <InfoRow label="Middle name" value={patient.middleName ?? "—"} />
             <InfoRow label="Last name" value={patient.lastName} />
             <InfoRow label="Suffix" value={patient.suffix ?? "—"} />
-            <InfoRow label="Birth date" value={new Date(patient.birthDate).toLocaleDateString()} />
+            <InfoRow label="Birth date" value={formatDate(patient.birthDate)} />
             <InfoRow label="Nationality" value={patient.nationality} />
             <InfoRow label="Address" value={patient.addressLine ?? "—"} />
             <InfoRow label="Barangay" value={patient.barangay ?? "—"} />

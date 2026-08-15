@@ -1,5 +1,6 @@
 import { Clock } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { formatDateTime } from "@/lib/utils";
 import { VISIT_TIMELINE_EVENT_LABELS, type VisitTimelineEntry } from "@/features/visits/types";
 
 export function VisitTimeline({ events }: { events: VisitTimelineEntry[] }) {
@@ -24,7 +25,7 @@ export function VisitTimeline({ events }: { events: VisitTimelineEntry[] }) {
               {VISIT_TIMELINE_EVENT_LABELS[event.eventType] ?? event.eventType}
             </p>
             <p className="text-xs text-muted-foreground">
-              {new Date(event.occurredAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+              {formatDateTime(event.occurredAt)}
             </p>
             {event.note ? <p className="mt-1 text-sm text-muted-foreground">{event.note}</p> : null}
           </div>

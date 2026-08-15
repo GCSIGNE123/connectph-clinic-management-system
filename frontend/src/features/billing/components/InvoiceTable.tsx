@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { InvoiceStatusBadge } from "@/features/billing/components/InvoiceStatusBadge";
 import type { InvoiceListItem } from "@/features/billing/types";
+import { formatDate } from "@/lib/utils";
 
 export function InvoiceTable({ items, isLoading }: { items: InvoiceListItem[]; isLoading: boolean }) {
   const router = useRouter();
@@ -45,7 +46,7 @@ export function InvoiceTable({ items, isLoading }: { items: InvoiceListItem[]; i
             <TableCell>{inv.patientName ?? "-"}</TableCell>
             <TableCell>{inv.visitNumber ?? "-"}</TableCell>
             <TableCell>{inv.doctorName ?? "-"}</TableCell>
-            <TableCell>{inv.invoiceDate}</TableCell>
+            <TableCell>{formatDate(inv.invoiceDate)}</TableCell>
             <TableCell>
               <InvoiceStatusBadge status={inv.status} />
             </TableCell>

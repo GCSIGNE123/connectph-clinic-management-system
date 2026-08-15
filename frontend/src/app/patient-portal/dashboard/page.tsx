@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { patientApiFetch } from "@/features/patient-portal/api/client";
+import { formatDate, formatDateTime } from "@/lib/utils";
 
 interface Dashboard {
   upcoming_appointments: { id: string; appointment_number: string; appointment_date: string; start_time: string; status: string; doctor_name: string | null }[];
@@ -56,7 +57,7 @@ export default function DashboardPage() {
         {data.upcoming_appointments.length === 0 && <div style={{ fontSize: 13, color: "#64748b" }}>No upcoming appointments.</div>}
         {data.upcoming_appointments.map((a) => (
           <div key={a.id} style={{ fontSize: 13, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
-            {a.appointment_date} {a.start_time} - Dr. {a.doctor_name ?? "TBD"} ({a.status})
+            {formatDate(a.appointment_date)} {a.start_time} - Dr. {a.doctor_name ?? "TBD"} ({a.status})
           </div>
         ))}
       </div>
@@ -66,7 +67,7 @@ export default function DashboardPage() {
         {data.recent_visits.length === 0 && <div style={{ fontSize: 13, color: "#64748b" }}>No visit history yet.</div>}
         {data.recent_visits.map((v) => (
           <div key={v.id} style={{ fontSize: 13, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
-            {v.visit_date} - {v.visit_number} ({v.status})
+            {formatDate(v.visit_date)} - {v.visit_number} ({v.status})
           </div>
         ))}
       </div>
@@ -76,7 +77,7 @@ export default function DashboardPage() {
         {data.latest_lab_results.length === 0 && <div style={{ fontSize: 13, color: "#64748b" }}>No released lab results yet.</div>}
         {data.latest_lab_results.map((l) => (
           <div key={l.id} style={{ fontSize: 13, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
-            {l.test_type} - released {l.released_at ?? "-"}
+            {l.test_type} - released {l.released_at ? formatDateTime(l.released_at) : "-"}
           </div>
         ))}
       </div>

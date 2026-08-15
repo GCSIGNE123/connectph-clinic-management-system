@@ -20,6 +20,7 @@ import { VisitOrdersCard } from "@/features/clinical-orders/components/VisitOrde
 import { VisitPrescriptionsCard } from "@/features/clinical-orders/components/VisitPrescriptionsCard";
 import { VisitLaboratoryCard } from "@/features/laboratory/components/VisitLaboratoryCard";
 import type { DoctorQueueItem, LockInfo } from "@/features/doctor-workspace/types";
+import { formatDateTime } from "@/lib/utils";
 
 /** Heartbeat interval for the visit lock while this page stays mounted -
  * well inside `LOCK_TTL_MINUTES` (15) on the backend so an active viewer's
@@ -139,7 +140,7 @@ export default function VisitDetailsPage() {
             <InfoRow label="Priority" value={VISIT_PRIORITY_LABELS[visit.priority]} />
             <InfoRow
               label="Arrival time"
-              value={visit.arrivalTime ? new Date(visit.arrivalTime).toLocaleString() : "—"}
+              value={visit.arrivalTime ? formatDateTime(visit.arrivalTime) : "—"}
             />
             <InfoRow label="Branch" value={visit.branchName ?? "—"} />
             {visit.remarks ? <InfoRow label="Remarks" value={visit.remarks} /> : null}

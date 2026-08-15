@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { InvoiceStatusBadge } from "@/features/billing/components/InvoiceStatusBadge";
 import { useBillingHistory } from "@/features/billing/hooks/use-invoices";
+import { formatDate } from "@/lib/utils";
 
 /** Real "Billing History" tab for the Patient Profile page (Phase 9),
  * replacing the Phase 3 "coming soon" placeholder. */
@@ -43,7 +44,7 @@ export function PatientBillingHistory({ patientId }: { patientId: string }) {
           <TableRow key={item.id} className="cursor-pointer" onClick={() => router.push(`/billing/${item.id}`)}>
             <TableCell className="font-medium">{item.invoiceNumber}</TableCell>
             <TableCell>{item.visitNumber ?? "-"}</TableCell>
-            <TableCell>{item.invoiceDate}</TableCell>
+            <TableCell>{formatDate(item.invoiceDate)}</TableCell>
             <TableCell>
               <InvoiceStatusBadge status={item.status} />
             </TableCell>

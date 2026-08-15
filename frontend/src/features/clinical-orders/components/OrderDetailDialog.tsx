@@ -2,6 +2,7 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import type { Order, OrderStatus } from "@/features/clinical-orders/types";
 
 const STATUS_VARIANT: Record<OrderStatus, "default" | "secondary" | "success" | "destructive"> = {
@@ -37,8 +38,8 @@ export function OrderDetailDialog({
               <Badge variant={order.priority === "STAT" ? "destructive" : "secondary"}>{order.priority}</Badge>
               <Badge variant={STATUS_VARIANT[order.status]}>{order.status}</Badge>
             </div>
-            <DetailRow label="Date" value={new Date(order.createdAt).toLocaleString()} />
-            {order.scheduledDate ? <DetailRow label="Scheduled date" value={order.scheduledDate} /> : null}
+            <DetailRow label="Date" value={formatDateTime(order.createdAt)} />
+            {order.scheduledDate ? <DetailRow label="Scheduled date" value={formatDate(order.scheduledDate)} /> : null}
             <div>
               <p className="text-xs font-medium text-muted-foreground">Items</p>
               <ul className="mt-1 list-disc space-y-1 pl-4">

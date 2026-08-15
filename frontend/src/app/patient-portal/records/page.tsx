@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { patientApiFetch } from "@/features/patient-portal/api/client";
+import { formatDate } from "@/lib/utils";
 
 interface Diagnosis { id: string; diagnosis_type: string; status: string; notes: string | null; icd10_code: string | null; icd10_description: string | null; }
 interface Attachment { id: string; attachment_type: string; file_name: string; file_url: string; }
@@ -26,7 +27,7 @@ export default function RecordsPage() {
       {rows && rows.length === 0 && <div style={{ fontSize: 13, color: "#64748b" }}>No shared records yet.</div>}
       {rows?.map((r) => (
         <div key={r.consultation_id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginBottom: 10 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{r.visit_date} - Dr. {r.doctor_name ?? "-"}</div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{formatDate(r.visit_date)} - Dr. {r.doctor_name ?? "-"}</div>
           {r.diagnoses.map((d) => (
             <div key={d.id} style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
               <strong>{d.diagnosis_type}</strong> ({d.status}) {d.icd10_code ? `[${d.icd10_code}]` : ""} {d.notes}

@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useVaccinationsWorklist, useCancelVaccination } from "@/features/vaccinations/hooks/use-vaccinations";
 import { AdministerVaccinationDialog } from "@/features/vaccinations/components/AdministerVaccinationDialog";
 import type { VaccinationAdministration, VaccinationStatus } from "@/features/vaccinations/types";
+import { formatDateTime } from "@/lib/utils";
 
 const STATUS_VARIANT: Record<VaccinationStatus, "default" | "success" | "secondary" | "destructive"> = {
   Requested: "default",
@@ -87,7 +88,7 @@ export default function VaccinationsPage() {
                     </td>
                     <td className="p-3 text-muted-foreground">{v.lotNumber ?? "-"}</td>
                     <td className="p-3 text-muted-foreground">
-                      {v.administeredAt ? new Date(v.administeredAt).toLocaleString() : "-"}
+                      {v.administeredAt ? formatDateTime(v.administeredAt) : "-"}
                     </td>
                     <td className="p-3 text-muted-foreground">{v.administeredByName ?? "-"}</td>
                     <td className="p-3">

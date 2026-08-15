@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { patientApiFetch } from "@/features/patient-portal/api/client";
+import { formatDate } from "@/lib/utils";
 
 interface InvItem { description: string; quantity: string; unit_price: string; line_total: string; }
 interface Payment { id: string; payment_method: string; amount: string; status: string; paid_at: string; }
@@ -32,7 +33,7 @@ export default function BillingPage() {
       {data.invoices.length === 0 && <div style={{ fontSize: 13, color: "#64748b" }}>No invoices yet.</div>}
       {data.invoices.map((inv) => (
         <div key={inv.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginBottom: 10 }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>{inv.invoice_number} - {inv.invoice_date} ({inv.status})</div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>{inv.invoice_number} - {formatDate(inv.invoice_date)} ({inv.status})</div>
           <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>
             Subtotal PHP {Number(inv.subtotal).toFixed(2)} | Discount PHP {Number(inv.discount_total).toFixed(2)} | Total PHP {Number(inv.grand_total).toFixed(2)} | Paid PHP {Number(inv.amount_paid).toFixed(2)} | Balance PHP {Number(inv.balance_due).toFixed(2)}
           </div>

@@ -11,6 +11,7 @@ import { queueApi } from "@/features/queue/api/queue-api";
 import { queueKeys } from "@/features/queue/hooks/use-queues";
 import { QUEUE_PRIORITY_LABELS, type QueueSlip } from "@/features/queue/types";
 import { ApiError } from "@/lib/api-client";
+import { formatDate } from "@/lib/utils";
 
 export interface QueueSlipDialogProps {
   queueId: string | null;
@@ -22,15 +23,14 @@ export interface QueueSlipDialogProps {
   autoPrint?: boolean;
 }
 
-/** Locale-default (browser/clinic setting, not hardcoded) date + time,
- * without the seconds or the comma `toLocaleString()` includes by default -
- * matches the compact single-line format a thermal ticket needs (e.g.
- * "8/11/2026 8:58 AM"). No explicit locale argument, same as every other
- * date/time display in this app - it follows whatever locale the browser
- * (and thus the clinic's own machine) is configured for. */
+/** Date + time, without the seconds or the comma `toLocaleString()` includes
+ * by default - matches the compact single-line format a thermal ticket
+ * needs (e.g. "08/11/2026 8:58 AM"). The date portion is the app-wide
+ * MM/DD/YYYY standard (`formatDate`); the time portion stays local-time,
+ * same as every other time display in this app. */
 function formatSlipDateTime(iso: string): string {
   const d = new Date(iso);
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${formatDate(d)} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 /** One label/value line on the ticket. The value truncates with an ellipsis

@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQueueDetail } from "@/features/queue/hooks/use-queues";
 import { useChangeQueueStatus, useReannounceQueue } from "@/features/queue/hooks/use-queue-mutations";
 import { QueueStatusBadge } from "@/features/queue/components/QueueStatusBadge";
+import { formatDateTime } from "@/lib/utils";
 import {
   QUEUE_PRIORITY_LABELS,
   QUEUE_STATUS_LABELS,
@@ -49,7 +50,7 @@ export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: Que
               <Field label="Priority" value={QUEUE_PRIORITY_LABELS[queue.priority]} />
               <Field label="Classification" value={VISIT_CLASSIFICATION_LABELS[queue.visitClassification]} />
               <Field label="Branch" value={queue.branchName ?? "—"} />
-              <Field label="Created" value={new Date(queue.createdAt).toLocaleString()} />
+              <Field label="Created" value={formatDateTime(queue.createdAt)} />
             </div>
 
             {canTransition && ((QUEUE_STATUS_TRANSITIONS[queue.status]?.length ?? 0) > 0 || queue.status === QueueStatus.Called) ? (
@@ -95,7 +96,7 @@ export function QueueDetailsDialog({ queueId, onOpenChange, canTransition }: Que
                       {h.fromStatus ? `${QUEUE_STATUS_LABELS[h.fromStatus]} → ` : ""}
                       {QUEUE_STATUS_LABELS[h.toStatus]}
                     </p>
-                    <p className="text-xs text-muted-foreground">{new Date(h.changedAt).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">{formatDateTime(h.changedAt)}</p>
                     {h.note ? <p className="text-xs text-muted-foreground">{h.note}</p> : null}
                   </li>
                 ))}

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { AppointmentStatusBadge } from "@/features/appointments/components/AppointmentStatusBadge";
 import { APPOINTMENT_TYPE_LABELS, AppointmentStatus, type AppointmentListItem } from "@/features/appointments/types";
+import { formatDate } from "@/lib/utils";
 
 /** Client Acceptance Revisions - Round 3 (item 1): sortable columns, same
  * client-side-sort-over-fetched-page pattern as
@@ -131,7 +132,7 @@ export function AppointmentTable({
               </TableCell>
               <TableCell>{item.doctorName ?? "—"}</TableCell>
               <TableCell>
-                {item.appointmentDate} {item.startTime.slice(0, 5)}
+                {formatDate(item.appointmentDate)} {item.startTime.slice(0, 5)}
               </TableCell>
               <TableCell>
                 <AppointmentStatusBadge status={item.status} />

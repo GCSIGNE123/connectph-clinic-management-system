@@ -16,6 +16,7 @@ import {
   listDoctors,
 } from "@/features/patient-portal/api/appointments";
 import { PatientApiError } from "@/features/patient-portal/api/client";
+import { formatDate } from "@/lib/utils";
 
 // Step order per spec: Branch -> Department -> Doctor -> Type -> Date -> Time -> Confirm.
 const STEPS = ["Branch", "Department", "Doctor", "Type", "Date", "Time", "Confirm"] as const;
@@ -205,7 +206,7 @@ export default function BookAppointmentPage() {
                   style={{ ...(date === d ? optionRowSelected : optionRow), marginBottom: 0, textAlign: "center", minWidth: 96 }}
                   onClick={() => setDate(d)}
                 >
-                  {d}
+                  {formatDate(d)}
                 </div>
               ))}
             </div>
@@ -237,7 +238,7 @@ export default function BookAppointmentPage() {
               <div><strong>Department:</strong> {departments?.find((d) => d.id === departmentId)?.name ?? "Any"}</div>
               <div><strong>Doctor:</strong> Dr. {doctors?.find((d) => d.id === doctorId)?.full_name}</div>
               <div><strong>Type:</strong> {appointmentType}</div>
-              <div><strong>Date:</strong> {date}</div>
+              <div><strong>Date:</strong> {date ? formatDate(date) : ""}</div>
               <div><strong>Time:</strong> {startTime?.slice(0, 5)}</div>
             </div>
             <textarea

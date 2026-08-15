@@ -12,6 +12,7 @@ import { useDoctorDashboard } from "@/features/doctor-workspace/hooks/use-doctor
 import { useDoctorQueue, useDoctorWorkspaceRealtime } from "@/features/doctor-workspace/hooks/use-doctor-queue";
 import { useDoctorSession, useNextPatient, useStartDoctorSession } from "@/features/doctor-workspace/hooks/use-doctor-session";
 import { DoctorQueueTable } from "@/features/doctor-workspace/components/DoctorQueueTable";
+import { formatDate } from "@/lib/utils";
 
 function StatCard({
   label,
@@ -59,7 +60,7 @@ export default function DoctorWorkspacePage() {
   const { data: session } = useDoctorSession(undefined, isDoctor);
   const startSession = useStartDoctorSession(undefined);
   const nextPatient = useNextPatient(undefined);
-  const today = new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const today = formatDate(new Date());
 
   if (userLoading) {
     return <SkeletonList rows={6} />;

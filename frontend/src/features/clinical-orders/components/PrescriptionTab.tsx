@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { apiClient } from "@/lib/api-client";
+import { formatDate } from "@/lib/utils";
 import { useCreatePrescription, usePrescriptionsForConsultation } from "@/features/clinical-orders/hooks/use-clinical-orders";
 import { COMMON_MEDICINES, validatePrescriptionItems, type Prescription, type PrescriptionItemInput } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
@@ -233,7 +234,7 @@ export function PrescriptionTab({
 
             <div className="border-t border-dashed pt-2 space-y-1">
               <div className="flex justify-between"><span className="text-muted-foreground">Doctor</span><span>{doctorName ? `Dr. ${doctorName}` : "-"}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Date</span><span>{new Date(printRx.createdAt).toLocaleDateString()}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Date</span><span>{formatDate(printRx.createdAt)}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Visit #</span><span>{visitNumber ?? "-"}</span></div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Patient</span>

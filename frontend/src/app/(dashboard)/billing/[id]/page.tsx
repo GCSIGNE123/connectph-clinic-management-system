@@ -16,6 +16,7 @@ import { AddItemDialog } from "@/features/billing/components/AddItemDialog";
 import { DiscountDialog } from "@/features/billing/components/DiscountDialog";
 import { PaymentDialog } from "@/features/billing/components/PaymentDialog";
 import { ReceiptDialog } from "@/features/billing/components/ReceiptDialog";
+import { formatDateTime } from "@/lib/utils";
 
 const EDITABLE_STATUSES = new Set(["Draft", "PendingPayment"]);
 
@@ -167,7 +168,7 @@ export default function InvoiceDetailPage() {
                         <TableCell>{p.paymentMethod}</TableCell>
                         <TableCell>{p.referenceNumber ?? "-"}</TableCell>
                         <TableCell>{p.status}</TableCell>
-                        <TableCell>{new Date(p.paidAt).toLocaleString()}</TableCell>
+                        <TableCell>{formatDateTime(p.paidAt)}</TableCell>
                         <TableCell className="text-right">₱{p.amount.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
                           {p.status === "Completed" ? (

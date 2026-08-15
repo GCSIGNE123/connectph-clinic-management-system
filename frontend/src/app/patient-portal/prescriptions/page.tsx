@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { patientApiFetch } from "@/features/patient-portal/api/client";
+import { formatDate } from "@/lib/utils";
 
 interface Item {
   medicine: string; generic_name: string | null; brand_name: string | null; strength: string | null;
@@ -31,7 +32,7 @@ export default function PrescriptionsPage() {
         {list.map((p) => (
           <div key={p.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginBottom: 8 }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>
-              {p.prescription_number} - {new Date(p.created_at).toLocaleDateString()} - Dr. {p.doctor_name ?? "-"}
+              {p.prescription_number} - {formatDate(p.created_at)} - Dr. {p.doctor_name ?? "-"}
             </div>
             {p.items.map((i, idx) => (
               <div key={idx} style={{ fontSize: 12, color: "#475569", padding: "4px 0", borderTop: idx > 0 ? "1px solid #f1f5f9" : undefined }}>

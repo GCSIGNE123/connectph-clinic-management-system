@@ -12,6 +12,7 @@ import { appointmentsApi } from "@/features/appointments/api/appointments-api";
 import { useDoctorSchedule } from "@/features/appointments/hooks/use-appointments";
 import { useQueryClient } from "@tanstack/react-query";
 import { appointmentKeys } from "@/features/appointments/hooks/use-appointments";
+import { formatDate } from "@/lib/utils";
 
 const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -251,7 +252,7 @@ export function DoctorScheduleForm({ doctorId }: { doctorId: string }) {
               {data?.blocks.map((b) => (
                 <li key={b.id} className="flex items-center justify-between px-3 py-2 text-sm">
                   <span>
-                    {b.blockDate} — {b.blockType}
+                    {formatDate(b.blockDate)} — {b.blockType}
                     {b.reason ? ` (${b.reason})` : ""}
                   </span>
                   <button type="button" className="text-xs text-destructive underline" onClick={() => onRemoveBlock(b.id)}>

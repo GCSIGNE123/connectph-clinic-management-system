@@ -16,6 +16,7 @@ import {
 } from "@/features/clinical-orders/hooks/use-clinical-orders";
 import type { Order, OrderCategory, OrderItemInput, OrderPriority, OrderStatus, Referral } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
+import { formatDateTime } from "@/lib/utils";
 
 const ORDER_CATEGORIES: OrderCategory[] = ["Laboratory", "Radiology", "Vaccination", "Custom"];
 const ORDER_STATUSES: OrderStatus[] = ["Requested", "Collected", "Processing", "Completed", "Cancelled"];
@@ -288,7 +289,7 @@ export function ClinicalOrdersTab({
               <PrintRow label="Patient" value={patientName ?? "-"} />
               <PrintRow label="Ordering doctor" value={doctorName ?? "-"} />
               <PrintRow label="Priority" value={printOrder.priority} />
-              <PrintRow label="Date" value={new Date(printOrder.createdAt).toLocaleString()} />
+              <PrintRow label="Date" value={formatDateTime(printOrder.createdAt)} />
             </div>
             <div className="border-t border-dashed pt-2 space-y-1">
               <p className="font-medium">Requested tests</p>
@@ -324,7 +325,7 @@ export function ClinicalOrdersTab({
               <PrintRow label="Patient" value={patientName ?? "-"} />
               <PrintRow label="Referring doctor" value={doctorName ?? "-"} />
               <PrintRow label="Referred to" value={printReferral.referredTo} />
-              <PrintRow label="Date" value={new Date(printReferral.createdAt).toLocaleString()} />
+              <PrintRow label="Date" value={formatDateTime(printReferral.createdAt)} />
             </div>
             {printReferral.reason ? (
               <div className="border-t border-dashed pt-2">

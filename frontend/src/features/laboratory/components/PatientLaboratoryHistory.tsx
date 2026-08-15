@@ -5,6 +5,7 @@ import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { useLaboratoryForPatient } from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
 import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
+import { formatDate } from "@/lib/utils";
 
 /** Patient Profile "Laboratory" tab (Phase 10) - read-only history of every
  * laboratory order/result across all of the patient's visits, mirroring
@@ -33,7 +34,7 @@ export function PatientLaboratoryHistory({ patientId }: { patientId: string }) {
         <tbody>
           {labOrders.map((lo) => (
             <tr key={lo.id} className="border-b border-border/50 last:border-0">
-              <td className="px-3 py-2 whitespace-nowrap">{new Date(lo.createdAt).toLocaleDateString()}</td>
+              <td className="px-3 py-2 whitespace-nowrap">{formatDate(lo.createdAt)}</td>
               <td className="px-3 py-2 font-mono text-xs">{lo.orderNumber ?? "-"}</td>
               <td className="px-3 py-2">{lo.testType}</td>
               <td className="px-3 py-2 text-muted-foreground">{lo.doctorName ?? "-"}</td>

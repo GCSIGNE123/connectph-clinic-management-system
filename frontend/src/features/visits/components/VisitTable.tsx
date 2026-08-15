@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { formatDateTime } from "@/lib/utils";
 import { VisitStatusBadge } from "@/features/visits/components/VisitStatusBadge";
 import { VISIT_TYPE_LABELS, type VisitListItem } from "@/features/visits/types";
 
@@ -119,7 +120,7 @@ export function VisitTable({ items, isLoading }: VisitTableProps) {
               <div>{item.patientName ?? "—"}</div>
               <div className="text-xs text-muted-foreground">{item.patientNumber}</div>
             </TableCell>
-            <TableCell>{new Date(item.createdAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</TableCell>
+            <TableCell>{formatDateTime(item.createdAt)}</TableCell>
             <TableCell>{item.doctorName ?? "Unassigned"}</TableCell>
             <TableCell>
               <VisitStatusBadge status={item.status} />

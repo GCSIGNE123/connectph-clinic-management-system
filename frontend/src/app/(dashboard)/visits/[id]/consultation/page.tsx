@@ -29,6 +29,7 @@ import { computeBmi } from "@/features/consultation/bmi";
 import { ClinicalOrdersTab } from "@/features/clinical-orders/components/ClinicalOrdersTab";
 import { PrescriptionTab } from "@/features/clinical-orders/components/PrescriptionTab";
 import { ApiError } from "@/lib/api-client";
+import { formatDateTime } from "@/lib/utils";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -219,9 +220,9 @@ export default function ConsultationPage() {
           <CardContent className="space-y-2 text-sm">
             <SummaryField label="Doctor" value={consultation?.doctorName ?? "—"} />
             <SummaryField label="Status" value={consultation?.status ?? "—"} />
-            <SummaryField label="Started" value={consultation ? new Date(consultation.startedAt).toLocaleString() : "—"} />
-            <SummaryField label="Completed" value={consultation?.completedAt ? new Date(consultation.completedAt).toLocaleString() : "—"} />
-            <SummaryField label="Signed" value={consultation?.signedAt ? new Date(consultation.signedAt).toLocaleString() : "—"} />
+            <SummaryField label="Started" value={consultation ? formatDateTime(consultation.startedAt) : "—"} />
+            <SummaryField label="Completed" value={consultation?.completedAt ? formatDateTime(consultation.completedAt) : "—"} />
+            <SummaryField label="Signed" value={consultation?.signedAt ? formatDateTime(consultation.signedAt) : "—"} />
             <div className="flex flex-wrap items-end gap-2 pt-3">
               {canEdit && consultation && consultation.status !== "Completed" && consultation.status !== "Signed" ? (
                 <>

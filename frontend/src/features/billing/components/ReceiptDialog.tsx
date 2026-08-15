@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { billingApi } from "@/features/billing/api/billing-api";
+import { formatDateTime } from "@/lib/utils";
 import type { ReceiptPayload } from "@/features/billing/types";
 
 /** Print-friendly receipt preview - follows the same
@@ -63,7 +64,7 @@ export function ReceiptDialog({
                 <Row label="Visit #" value={receipt.visitNumber ?? "-"} />
                 <Row label="Patient" value={receipt.patientName ?? "-"} />
                 <Row label="Cashier" value={receipt.cashierName ?? "-"} />
-                <Row label="Date" value={new Date(receipt.printedAt).toLocaleString()} />
+                <Row label="Date" value={formatDateTime(receipt.printedAt)} />
               </div>
               <div className="border-t border-dashed pt-2 space-y-1">
                 {receipt.items.map((item, idx) => (

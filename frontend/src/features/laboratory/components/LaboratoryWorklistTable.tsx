@@ -10,6 +10,7 @@ import { ResultEntryDialog } from "@/features/laboratory/components/ResultEntryD
 import { useCollectSpecimen, useStartProcessing, useReleaseResults } from "@/features/laboratory/hooks/use-laboratory";
 import { nextActionFor } from "@/features/laboratory/types";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
+import { formatDate } from "@/lib/utils";
 
 interface LaboratoryWorklistTableProps {
   orders: LaboratoryOrder[];
@@ -64,7 +65,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
                 <TableCell>{order.doctorName ?? "-"}</TableCell>
                 <TableCell>{order.testType}</TableCell>
                 <TableCell>{order.priority ?? "-"}</TableCell>
-                <TableCell>{new Date(order.createdAt).toLocaleDateString()}</TableCell>
+                <TableCell>{formatDate(order.createdAt)}</TableCell>
                 <TableCell>
                   <LaboratoryStatusBadge status={order.status} />
                 </TableCell>

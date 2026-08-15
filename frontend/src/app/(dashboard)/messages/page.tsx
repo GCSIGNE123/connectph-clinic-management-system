@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useConversation, useSendMessage, useStaffDirectory } from "@/features/messages/hooks/use-messages";
+import { formatDateTime } from "@/lib/utils";
 
 /**
  * Phase 20 (item 14): a minimal Receptionist <-> Doctor internal message
@@ -104,7 +105,7 @@ function MessagesPageInner() {
                       }`}
                     >
                       <p>{m.body}</p>
-                      <p className="mt-1 text-[10px] opacity-70">{new Date(m.createdAt).toLocaleString()}</p>
+                      <p className="mt-1 text-[10px] opacity-70">{formatDateTime(m.createdAt)}</p>
                     </div>
                   ))
                 ) : (

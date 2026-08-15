@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { DuplicateCandidate } from "@/features/patients/types";
+import { formatDate } from "@/lib/utils";
 
 export interface DuplicateWarningDialogProps {
   open: boolean;
@@ -52,7 +53,7 @@ export function DuplicateWarningDialog({
                 <span className="font-mono text-xs text-muted-foreground">({dup.patientNumber})</span>
               </p>
               <p className="text-muted-foreground">
-                DOB: {new Date(dup.birthDate).toLocaleDateString()} · Mobile: {dup.mobileNumber}
+                DOB: {formatDate(dup.birthDate)} · Mobile: {dup.mobileNumber}
               </p>
               <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{dup.matchReason}</p>
             </li>

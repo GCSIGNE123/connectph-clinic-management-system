@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { patientApiFetch } from "@/features/patient-portal/api/client";
+import { formatDateTime } from "@/lib/utils";
 
 interface Notif { id: string; notification_type: string; title: string; body: string | null; is_read: boolean; created_at: string; }
 
@@ -35,7 +36,7 @@ export default function NotificationsPage() {
         >
           <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title} {!n.is_read && <span style={{ color: "#0f766e", fontSize: 11 }}>NEW</span>}</div>
           {n.body && <div style={{ fontSize: 12, color: "#475569" }}>{n.body}</div>}
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{n.notification_type} - {new Date(n.created_at).toLocaleString()}</div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{n.notification_type} - {formatDateTime(n.created_at)}</div>
         </div>
       ))}
     </div>

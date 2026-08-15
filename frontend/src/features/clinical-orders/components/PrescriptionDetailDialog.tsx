@@ -2,6 +2,7 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { formatDateTime } from "@/lib/utils";
 import type { Prescription } from "@/features/clinical-orders/types";
 
 /** Feature 5 Part B: read-only prescription details, opened by clicking a
@@ -31,7 +32,7 @@ export function PrescriptionDetailDialog({
           <div className="space-y-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={prescription.status === "Finalized" ? "success" : "secondary"}>{prescription.status}</Badge>
-              <span className="text-xs text-muted-foreground">{new Date(prescription.createdAt).toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">{formatDateTime(prescription.createdAt)}</span>
             </div>
             <div className="space-y-2">
               {prescription.items.map((item, i) => (

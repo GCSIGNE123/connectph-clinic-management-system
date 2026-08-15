@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { usePrescriptionsForPatient } from "@/features/clinical-orders/hooks/use-clinical-orders";
+import { formatDate } from "@/lib/utils";
 
 /** Patient Profile "Prescriptions" tab (Phase 9) - read-only history across
  * all of the patient's visits, per spec: Date/Doctor/Visit/Medicine/Status. */
@@ -29,7 +30,7 @@ export function PatientPrescriptionsHistory({ patientId }: { patientId: string }
         <tbody>
           {prescriptions.map((rx) => (
             <tr key={rx.id} className="border-b border-border/50 last:border-0">
-              <td className="px-3 py-2 whitespace-nowrap">{new Date(rx.createdAt).toLocaleDateString()}</td>
+              <td className="px-3 py-2 whitespace-nowrap">{formatDate(rx.createdAt)}</td>
               <td className="px-3 py-2 font-mono text-xs">{rx.prescriptionNumber}</td>
               <td className="px-3 py-2 text-muted-foreground">{rx.items.map((i) => i.medicine).join(", ")}</td>
               <td className="px-3 py-2">

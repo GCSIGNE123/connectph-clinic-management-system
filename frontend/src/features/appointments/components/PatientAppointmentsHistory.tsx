@@ -5,6 +5,7 @@ import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { usePatientAppointments } from "@/features/appointments/hooks/use-appointments";
 import { AppointmentStatusBadge } from "@/features/appointments/components/AppointmentStatusBadge";
 import type { AppointmentListItem } from "@/features/appointments/types";
+import { formatDate } from "@/lib/utils";
 
 /** Patient Profile "Appointments" tab (Phase 11) - Upcoming/Completed/
  * Cancelled/No-show buckets, mirroring `PatientLaboratoryHistory`'s shape. */
@@ -55,7 +56,7 @@ function Table({ items }: { items: AppointmentListItem[] }) {
         <tbody>
           {items.map((a) => (
             <tr key={a.id} className="border-b border-border/50 last:border-0">
-              <td className="px-3 py-2 whitespace-nowrap">{a.appointmentDate} {a.startTime.slice(0, 5)}</td>
+              <td className="px-3 py-2 whitespace-nowrap">{formatDate(a.appointmentDate)} {a.startTime.slice(0, 5)}</td>
               <td className="px-3 py-2 font-mono text-xs">{a.appointmentNumber}</td>
               <td className="px-3 py-2 text-muted-foreground">{a.doctorName ?? "-"}</td>
               <td className="px-3 py-2 text-muted-foreground">{a.departmentName ?? "-"}</td>
