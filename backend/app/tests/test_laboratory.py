@@ -100,12 +100,23 @@ def _queue_payload(deps: dict) -> dict:
     }
 
 
-async def _setup_with_lab_order(client: AsyncClient, make_clinic_with_owner, db_session, *, template_price="350.00"):
+_DEFAULT_TEMPLATE_PARAMETERS = [
+    {"parameter_name": "Hemoglobin", "unit": "g/dL", "normal_range": "12.0-16.0", "result_type": "Numeric"},
+    {"parameter_name": "Remarks", "result_type": "Text"},
+]
+
+
+async def _setup_with_lab_order(client: AsyncClient, make_clinic_with_owner, db_session, *, template_price="350.00", template_parameters=None):
     """Sets up a clinic, doctor, patient, queue->visit, opens a consultation,
     creates a priced Laboratory template, then creates a Laboratory-category
     Order via the unchanged Phase 9 endpoint (which auto-attaches a
     laboratory_orders row matching the template by test name). Returns
-    headers for Owner/Doctor/Laboratory/Receptionist roles plus ids."""
+    headers for Owner/Doctor/Laboratory/Receptionist roles plus ids.
+
+    `template_parameters` defaults to the original two-parameter fixture
+    (unchanged, so every pre-existing test keeps working identically) -
+    Feature 3 tests pass their own parameter list (with range_low/
+    range_high/expected_normal_text) without touching this default."""
     clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, owner_headers)
 
@@ -114,10 +125,7 @@ async def _setup_with_lab_order(client: AsyncClient, make_clinic_with_owner, db_
         json={
             "test_name": "CBC", "test_category": "Hematology", "specimen_type": "Whole Blood",
             "default_price": template_price, "turnaround_time_hours": 4,
-            "parameters": [
-                {"parameter_name": "Hemoglobin", "unit": "g/dL", "normal_range": "12.0-16.0", "result_type": "Numeric"},
-                {"parameter_name": "Remarks", "result_type": "Text"},
-            ],
+            "parameters": template_parameters if template_parameters is not None else _DEFAULT_TEMPLATE_PARAMETERS,
         },
     )
     assert template_resp.status_code == 201, template_resp.text
@@ -386,3 +394,237 @@ async def test_tenant_isolation(client: AsyncClient, make_clinic_with_owner, db_
     list_resp = await client.get(f"/api/v1/laboratory/orders?visit_id={ctx['visit_id']}", headers=owner_b_headers)
     assert list_resp.status_code == 200
     assert list_resp.json() == []
+
+
+# --- Feature 3: template-driven result entry, structured ranges, automatic
+# interpretation. Uses a template whose parameters carry range_low/
+# range_high/expected_normal_text - `_setup_with_lab_order`'s DEFAULT
+# parameters (no ranges) are covered separately by
+# `test_backward_compatible_with_pre_feature3_template_and_results` below. ---
+
+_RANGED_TEMPLATE_PARAMETERS = [
+    {
+        "parameter_name": "Hemoglobin", "unit": "g/dL", "normal_range": "12.0-16.0",
+        "result_type": "Numeric", "range_low": "12.0", "range_high": "16.0",
+    },
+    {
+        "parameter_name": "Protein", "normal_range": "Negative",
+        "result_type": "Text", "expected_normal_text": "Negative",
+    },
+]
+
+
+async def _advance_to_processing(client, lab_id, headers) -> None:
+    """`enter_results` legitimately requires the order to already be past
+    `Requested` (see `LaboratoryService.enter_results`'s status guard, and
+    `test_illegal_transition_rejected` which verifies that guard). Uses the
+    real `/collect` -> `/start-processing` endpoints - the same transitions
+    `test_full_lifecycle_with_timeline_events` exercises - rather than
+    mutating `laboratory_orders.status` directly, so this stays a genuine
+    end-to-end path through the unchanged workflow, not a shortcut around
+    it."""
+    collect = await client.post(f"/api/v1/laboratory/orders/{lab_id}/collect", headers=headers)
+    assert collect.status_code == 200, collect.text
+    processing = await client.post(f"/api/v1/laboratory/orders/{lab_id}/start-processing", headers=headers)
+    assert processing.status_code == 200, processing.text
+
+
+async def _enter_one_result(client, lab_id, headers, **overrides) -> dict:
+    await _advance_to_processing(client, lab_id, headers)
+    result = {
+        "parameter_name": "Hemoglobin", "result_type": "Numeric",
+        "numeric_value": 14.0, "range_low": "12.0", "range_high": "16.0",
+    }
+    result.update(overrides)
+    resp = await client.post(f"/api/v1/laboratory/orders/{lab_id}/results", headers=headers, json={"results": [result]})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["results"][0]
+
+
+async def test_numeric_result_below_range_is_low(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=10.0)
+    assert result["interpretation"] == "Low"
+
+
+async def test_numeric_result_within_range_is_normal(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=14.0)
+    assert result["interpretation"] == "Normal"
+
+
+async def test_numeric_result_above_range_is_high(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=18.0)
+    assert result["interpretation"] == "High"
+
+
+async def test_numeric_result_missing_lower_bound_stays_uninterpreted(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=14.0, range_low=None, range_high="16.0")
+    assert result["interpretation"] is None
+
+
+async def test_numeric_result_missing_upper_bound_stays_uninterpreted(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=14.0, range_low="12.0", range_high=None)
+    assert result["interpretation"] is None
+
+
+async def test_numeric_result_missing_range_entirely_stays_uninterpreted(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=14.0, range_low=None, range_high=None)
+    assert result["interpretation"] is None
+
+
+async def test_numeric_result_missing_value_stays_uninterpreted(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Missing value never gets an interpretation - even with a fully
+    configured range, there's nothing to compare it against. FastAPI/
+    Pydantic itself rejects a genuinely *invalid* (non-numeric-string)
+    value at request-validation time (422, before this service code even
+    runs) - this test covers the "left blank" case."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=None)
+    assert result["interpretation"] is None
+
+
+async def test_invalid_non_numeric_value_rejected_before_reaching_interpretation(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "Hemoglobin", "result_type": "Numeric", "numeric_value": "not-a-number", "range_low": "12.0", "range_high": "16.0"}]},
+    )
+    assert resp.status_code == 422
+
+
+async def test_qualitative_result_matching_expected_value_is_normal(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(
+        client, ctx["lab_order"]["id"], ctx["lab_headers"],
+        parameter_name="Protein", result_type="Text", text_value="Negative", numeric_value=None,
+        range_low=None, range_high=None, expected_normal_text="Negative",
+    )
+    assert result["interpretation"] == "Normal"
+
+
+async def test_qualitative_result_mismatching_expected_value_is_abnormal(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(
+        client, ctx["lab_order"]["id"], ctx["lab_headers"],
+        parameter_name="Protein", result_type="Text", text_value="Trace", numeric_value=None,
+        range_low=None, range_high=None, expected_normal_text="Negative",
+    )
+    assert result["interpretation"] == "Abnormal"
+
+
+async def test_qualitative_result_with_no_expected_value_stays_uninterpreted(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    result = await _enter_one_result(
+        client, ctx["lab_order"]["id"], ctx["lab_headers"],
+        parameter_name="Color", result_type="Text", text_value="Straw", numeric_value=None,
+        range_low=None, range_high=None, expected_normal_text=None,
+    )
+    assert result["interpretation"] is None
+
+
+async def test_explicit_manual_interpretation_override_is_preserved(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """A clinician-supplied interpretation always wins, even when it
+    disagrees with what the range would compute - the software's
+    computed value is a suggestion, never authoritative."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    # 14.0 is squarely within 12.0-16.0 (would auto-compute "Normal"), but
+    # the lab tech explicitly flags it "Abnormal" (e.g. trending/clinical
+    # context the software doesn't know about).
+    result = await _enter_one_result(client, ctx["lab_order"]["id"], ctx["lab_headers"], numeric_value=14.0, interpretation="Abnormal")
+    assert result["interpretation"] == "Abnormal"
+
+
+async def test_template_parameters_with_ranges_surfaced_on_order_for_result_entry_prefill(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Fixes the pre-Feature-3 gap: the order's linked template (with its
+    parameters' ranges) must be present on GET so the frontend can
+    pre-populate Result Entry rows from it."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_parameters=_RANGED_TEMPLATE_PARAMETERS)
+    resp = await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])
+    assert resp.status_code == 200
+    order = resp.json()
+    assert order["template"] is not None
+    assert order["template"]["test_name"] == "CBC"
+    param_names = {p["parameter_name"] for p in order["template"]["parameters"]}
+    assert param_names == {"Hemoglobin", "Protein"}
+    hemoglobin = next(p for p in order["template"]["parameters"] if p["parameter_name"] == "Hemoglobin")
+    assert hemoglobin["range_low"] == "12.0000"
+    assert hemoglobin["range_high"] == "16.0000"
+    protein = next(p for p in order["template"]["parameters"] if p["parameter_name"] == "Protein")
+    assert protein["expected_normal_text"] == "Negative"
+
+
+async def test_backward_compatible_with_pre_feature3_template_and_results(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """A template/result created with none of the new range fields (the
+    exact pre-Feature-3 shape) keeps working identically: range columns
+    are simply null, and an explicitly-supplied interpretation (the only
+    way results worked before this feature) is preserved unchanged."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)  # default (rangeless) parameters
+    lab_id = ctx["lab_order"]["id"]
+
+    order = (await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])).json()
+    hemoglobin_param = next(p for p in order["template"]["parameters"] if p["parameter_name"] == "Hemoglobin")
+    assert hemoglobin_param["range_low"] is None
+    assert hemoglobin_param["range_high"] is None
+    assert hemoglobin_param["expected_normal_text"] is None
+
+    await _advance_to_processing(client, lab_id, ctx["lab_headers"])
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/results", headers=ctx["lab_headers"],
+        json={
+            "results": [
+                {"parameter_name": "Hemoglobin", "result_type": "Numeric", "numeric_value": 14.2, "normal_range": "12.0-16.0", "units": "g/dL", "interpretation": "Normal"},
+                {"parameter_name": "Remarks", "result_type": "Text", "text_value": "No abnormal cells seen"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    hemoglobin_result = next(r for r in results if r["parameter_name"] == "Hemoglobin")
+    assert hemoglobin_result["interpretation"] == "Normal"  # explicitly supplied, unchanged behavior
+    assert hemoglobin_result["range_low"] is None
+    assert hemoglobin_result["range_high"] is None
+    remarks_result = next(r for r in results if r["parameter_name"] == "Remarks")
+    assert remarks_result["interpretation"] is None  # never supplied, no expected_normal_text either -> stays null
+
+
+# --- Feature 3: starter templates (structure only, no clinical ranges) ---
+
+async def test_seed_default_templates_creates_cbc_and_urinalysis_structure_only(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+
+    resp = await client.post("/api/v1/laboratory/templates/seed-defaults", headers=owner_headers)
+    assert resp.status_code == 200, resp.text
+    created = resp.json()
+    names = {t["test_name"] for t in created}
+    assert names == {"CBC", "Urinalysis"}
+
+    for template in created:
+        for param in template["parameters"]:
+            # Structure only - no clinical reference range values seeded.
+            assert param["range_low"] is None
+            assert param["range_high"] is None
+            assert param["expected_normal_text"] is None
+
+    # Idempotent: calling again does not duplicate.
+    resp2 = await client.post("/api/v1/laboratory/templates/seed-defaults", headers=owner_headers)
+    assert resp2.status_code == 200
+    assert resp2.json() == []
+    list_resp = await client.get("/api/v1/laboratory/templates", headers=owner_headers)
+    all_names = [t["test_name"] for t in list_resp.json()]
+    assert all_names.count("CBC") == 1
+    assert all_names.count("Urinalysis") == 1
+
+
+async def test_seed_default_templates_requires_administrator_role(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    resp = await client.post("/api/v1/laboratory/templates/seed-defaults", headers=ctx["lab_headers"])
+    assert resp.status_code == 403

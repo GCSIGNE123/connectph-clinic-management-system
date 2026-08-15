@@ -180,6 +180,18 @@ async def update_template(
     return await LaboratoryService(db).update_template(template_id, payload.model_dump(exclude_unset=True), clinic_id=clinic_id)
 
 
+@router.post("/templates/seed-defaults", response_model=list[LaboratoryTemplateRead])
+async def seed_default_templates(
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> list[LaboratoryTemplateRead]:
+    """Feature 3 starter templates (CBC, Urinalysis structure - no
+    reference ranges) - same opt-in pattern as `POST /services/seed-
+    defaults`/`POST /departments/seed-defaults`, not auto-run."""
+    return await LaboratoryService(db).seed_default_templates(clinic_id=clinic_id, actor_id=current_user.id)
+
+
 # --- Visit / Patient laboratory history (mounted under their own path prefixes) ---
 
 visit_router = APIRouter(tags=["laboratory"])

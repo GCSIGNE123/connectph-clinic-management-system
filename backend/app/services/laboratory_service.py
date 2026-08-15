@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.upload_validation import validate_document_upload
 from app.models.invoice_item import InvoiceItemType
 from app.models.laboratory_order import LABORATORY_ORDER_STATUS_TRANSITIONS, LaboratoryOrder, LaboratoryOrderStatus
+from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES
 from app.models.order import Order, OrderCategory, OrderStatus
 from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
@@ -34,6 +35,7 @@ from app.repositories.visit_repository import VisitRepository
 from app.schemas.laboratory import LaboratoryOrderRead, LaboratoryResultRead, LaboratoryTemplateRead
 from app.services.audit_service import AuditService
 from app.services.invoice_service import InvoiceService
+from app.services.laboratory_interpretation import interpret_result
 from app.services import sync_queue_service
 
 # Maps LaboratoryOrderStatus -> the underlying Phase 9 Order's OrderStatus.
@@ -80,6 +82,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         doctor_id=lab_order.doctor_id,
         doctor_name=_full_name(lab_order.doctor),
         template_id=lab_order.template_id,
+        template=LaboratoryTemplateRead.model_validate(lab_order.template, from_attributes=True) if lab_order.template else None,
         test_type=lab_order.test_type,
         priority=order.priority.value if order else None,
         status=lab_order.status,
@@ -239,6 +242,28 @@ class LaboratoryService:
         await self.session.commit()
         return await self.get(laboratory_order_id, clinic_id=clinic_id)
 
+    @staticmethod
+    def _resolve_interpretation(result: dict) -> dict:
+        """Feature 3: fills in `interpretation` via `interpret_result()`
+        when the client left it unset (None) - an explicit client-supplied
+        value (whether it matches what would've been computed, or is a
+        deliberate clinician override) is always respected as-is and never
+        recalculated/overwritten here. `expected_normal_text` is popped
+        off regardless of outcome - it's a transient input only, not a
+        column on `LaboratoryResult` (see schema docstring)."""
+        result = dict(result)
+        expected_normal_text = result.pop("expected_normal_text", None)
+        if result.get("interpretation") is None:
+            result["interpretation"] = interpret_result(
+                result_type=result.get("result_type"),
+                numeric_value=result.get("numeric_value"),
+                text_value=result.get("text_value"),
+                range_low=result.get("range_low"),
+                range_high=result.get("range_high"),
+                expected_normal_text=expected_normal_text,
+            )
+        return result
+
     async def enter_results(
         self, laboratory_order_id: UUID, results: list[dict], *, clinic_id: UUID, actor_id: UUID
     ) -> LaboratoryOrderRead:
@@ -249,6 +274,7 @@ class LaboratoryService:
                 detail=f"Cannot enter results while the order is {lab_order.status.value}.",
             )
         now = datetime.now(UTC)
+        results = [self._resolve_interpretation(r) for r in results]
         await self.repo.upsert_results(laboratory_order_id, clinic_id, results, actor_id=actor_id)
         # The `results` relationship on the already-loaded `lab_order`
         # instance is stale after the delete+recreate in `upsert_results`
@@ -422,3 +448,28 @@ class LaboratoryService:
         template = await self.repo.update_template(template, parameters=parameters, **updates)
         await self.session.commit()
         return LaboratoryTemplateRead.model_validate(template, from_attributes=True)
+
+    async def seed_default_templates(self, *, clinic_id: UUID, actor_id: UUID) -> list[LaboratoryTemplateRead]:
+        """Feature 3 starter templates (CBC, Urinalysis) - same opt-in,
+        explicitly-invoked-per-clinic pattern as `DEFAULT_SERVICES`/
+        `ClinicServiceCatalogService.seed_defaults` (never auto-run).
+        Structure only (parameter names/units) - no reference ranges are
+        seeded; skips any test_name that already exists for this clinic so
+        it's safe to call more than once."""
+        existing = await self.repo.list_templates(clinic_id, active_only=False)
+        existing_names = {t.test_name.strip().lower() for t in existing}
+        created = []
+        for entry in DEFAULT_LABORATORY_TEMPLATES:
+            if entry["test_name"].strip().lower() in existing_names:
+                continue
+            parameters = entry["parameters"]
+            fields = {k: v for k, v in entry.items() if k != "parameters"}
+            template = await self.repo.create_template(clinic_id=clinic_id, parameters=parameters, **fields)
+            created.append(template)
+        if created:
+            await self.audit_service.log_event(
+                clinic_id=clinic_id, user_id=actor_id, action="laboratory.default_templates_seeded",
+                entity_type="laboratory_template", metadata={"count": len(created), "test_names": [t.test_name for t in created]},
+            )
+            await self.session.commit()
+        return [LaboratoryTemplateRead.model_validate(t, from_attributes=True) for t in created]

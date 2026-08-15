@@ -15,7 +15,7 @@ interface LaboratoryTemplateFormDialogProps {
 }
 
 function emptyParameter(): LaboratoryTemplateParameter {
-  return { parameterName: "", unit: "", normalRange: "", resultType: "Numeric" };
+  return { parameterName: "", unit: "", normalRange: "", resultType: "Numeric", rangeLow: null, rangeHigh: null, expectedNormalText: "" };
 }
 
 /** Administrator-only CRUD for the configurable test catalog - the piece
@@ -79,7 +79,9 @@ export function LaboratoryTemplateFormDialog({ open, onOpenChange, template }: L
       defaultPrice: Number(defaultPrice) || 0,
       turnaroundTimeHours: turnaroundHours ? Number(turnaroundHours) : null,
       isActive,
-      parameters: parameters.filter((p) => p.parameterName.trim().length > 0),
+      parameters: parameters
+        .filter((p) => p.parameterName.trim().length > 0)
+        .map((p) => ({ ...p, expectedNormalText: p.expectedNormalText?.trim() ? p.expectedNormalText.trim() : null })),
     };
     try {
       if (isEdit && template) {
@@ -156,6 +158,35 @@ export function LaboratoryTemplateFormDialog({ open, onOpenChange, template }: L
                     &times;
                   </Button>
                 </div>
+                {p.resultType === "Numeric" ? (
+                  <div className="col-span-12 grid grid-cols-2 gap-2 sm:col-span-8">
+                    <div>
+                      <label className="text-[11px] text-muted-foreground">Reference Low (optional)</label>
+                      <Input
+                        type="number" step="any" placeholder="Not yet configured"
+                        value={p.rangeLow ?? ""}
+                        onChange={(e) => updateParam(index, { rangeLow: e.target.value === "" ? null : Number(e.target.value) })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-muted-foreground">Reference High (optional)</label>
+                      <Input
+                        type="number" step="any" placeholder="Not yet configured"
+                        value={p.rangeHigh ?? ""}
+                        onChange={(e) => updateParam(index, { rangeHigh: e.target.value === "" ? null : Number(e.target.value) })}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="col-span-12 sm:col-span-8">
+                    <label className="text-[11px] text-muted-foreground">Expected Normal Value (optional)</label>
+                    <Input
+                      placeholder="e.g. Negative - not yet configured if blank"
+                      value={p.expectedNormalText ?? ""}
+                      onChange={(e) => updateParam(index, { expectedNormalText: e.target.value })}
+                    />
+                  </div>
+                )}
               </div>
             ))}
             <Button type="button" variant="outline" size="sm" onClick={addParam}>

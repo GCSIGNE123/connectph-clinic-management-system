@@ -1,6 +1,16 @@
 """Laboratory Results (Phase 10) - one row per result parameter. A single
 lab order (e.g. CBC) produces multiple parameter rows (Hemoglobin, WBC
-Count, ...), each independently numeric- or text-valued."""
+Count, ...), each independently numeric- or text-valued.
+
+Feature 3 (Automatic Interpretation): `range_low`/`range_high` below are
+copied from the matched `LaboratoryTemplateParameter` at submission time
+(same denormalization pattern already used for `normal_range`/`units` on
+this same model) - so a result's interpretation basis stays stable and
+reviewable even if the template's ranges are edited later. Both nullable;
+an existing result row (or a newly-entered one with no configured range)
+simply has both null, and `interpretation` stays whatever was explicitly
+set (manual) or null (never guessed) - see
+`app/services/laboratory_interpretation.py`."""
 
 import enum
 import uuid
@@ -47,6 +57,8 @@ class LaboratoryResult(UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, LegacyM
     text_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     normal_range: Mapped[str | None] = mapped_column(String(100), nullable=True)
     units: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    range_low: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    range_high: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     interpretation: Mapped[LaboratoryInterpretation | None] = mapped_column(
         SAEnum(LaboratoryInterpretation, name="laboratory_interpretation", values_callable=_enum_values, native_enum=False),
         nullable=True,

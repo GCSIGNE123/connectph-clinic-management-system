@@ -18,6 +18,14 @@ class LaboratoryTemplateParameterCreate(BaseModel):
     normal_range: str | None = Field(default=None, max_length=100)
     result_type: LaboratoryResultType = LaboratoryResultType.NUMERIC
     display_order: int = 0
+    # Feature 3: structured, optional - see laboratory_template.py's module
+    # docstring. Numeric parameters use range_low/range_high; qualitative
+    # (Text) parameters use expected_normal_text. Left unset (the default
+    # for every existing template), auto-interpretation never activates
+    # for that parameter.
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
+    expected_normal_text: str | None = Field(default=None, max_length=100)
 
 
 class LaboratoryTemplateParameterRead(BaseModel):
@@ -29,6 +37,9 @@ class LaboratoryTemplateParameterRead(BaseModel):
     normal_range: str | None = None
     result_type: LaboratoryResultType
     display_order: int
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
+    expected_normal_text: str | None = None
 
 
 class LaboratoryTemplateCreate(BaseModel):
@@ -76,6 +87,15 @@ class LaboratoryResultInput(BaseModel):
     units: str | None = Field(default=None, max_length=50)
     interpretation: LaboratoryInterpretation | None = None
     remarks: str | None = None
+    # Feature 3: range_low/range_high are persisted on LaboratoryResult
+    # (denormalized from the template parameter, same pattern as
+    # normal_range/units above). expected_normal_text is NOT persisted -
+    # it's only used transiently, server-side, to compute `interpretation`
+    # for qualitative (Text) results when the client leaves interpretation
+    # unset - see LaboratoryService.enter_results.
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
+    expected_normal_text: str | None = Field(default=None, max_length=100)
 
 
 class LaboratoryResultRead(BaseModel):
@@ -90,6 +110,8 @@ class LaboratoryResultRead(BaseModel):
     units: str | None = None
     interpretation: LaboratoryInterpretation | None = None
     remarks: str | None = None
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
     entered_by: UUID | None = None
     entered_at: datetime | None = None
 
@@ -133,6 +155,13 @@ class LaboratoryOrderRead(BaseModel):
     doctor_id: UUID | None = None
     doctor_name: str | None = None
     template_id: UUID | None = None
+    # Feature 3: the linked template's full definition (including
+    # parameters with their configured ranges) - lets the frontend
+    # pre-populate Result Entry rows from the template in a single fetch,
+    # instead of a second round-trip. None when no template is linked
+    # (test_type didn't match any active template's name), unchanged from
+    # before.
+    template: LaboratoryTemplateRead | None = None
     test_type: str
     priority: str | None = None
     status: LaboratoryOrderStatus

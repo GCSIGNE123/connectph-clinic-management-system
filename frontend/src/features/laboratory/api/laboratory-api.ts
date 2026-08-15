@@ -22,6 +22,8 @@ function toResult(raw: any): LaboratoryResult {
     units: raw.units ?? null,
     interpretation: raw.interpretation ?? null,
     remarks: raw.remarks ?? null,
+    rangeLow: raw.range_low === null || raw.range_low === undefined ? null : Number(raw.range_low),
+    rangeHigh: raw.range_high === null || raw.range_high === undefined ? null : Number(raw.range_high),
     enteredBy: raw.entered_by ?? null,
     enteredAt: raw.entered_at ?? null,
   };
@@ -51,6 +53,7 @@ function toOrder(raw: any): LaboratoryOrder {
     doctorId: raw.doctor_id ?? null,
     doctorName: raw.doctor_name ?? null,
     templateId: raw.template_id ?? null,
+    template: raw.template ? toTemplate(raw.template) : null,
     testType: raw.test_type,
     priority: raw.priority ?? null,
     status: raw.status,
@@ -76,6 +79,9 @@ function toTemplateParameter(raw: any): LaboratoryTemplateParameter {
     normalRange: raw.normal_range ?? null,
     resultType: raw.result_type,
     displayOrder: raw.display_order ?? 0,
+    rangeLow: raw.range_low === null || raw.range_low === undefined ? null : Number(raw.range_low),
+    rangeHigh: raw.range_high === null || raw.range_high === undefined ? null : Number(raw.range_high),
+    expectedNormalText: raw.expected_normal_text ?? null,
   };
 }
 
@@ -111,6 +117,9 @@ function fromTemplateParameterInput(p: LaboratoryTemplateParameter) {
     normal_range: p.normalRange ?? null,
     result_type: p.resultType,
     display_order: p.displayOrder ?? 0,
+    range_low: p.rangeLow ?? null,
+    range_high: p.rangeHigh ?? null,
+    expected_normal_text: p.expectedNormalText ?? null,
   };
 }
 
@@ -144,6 +153,9 @@ export const laboratoryApi = {
           units: r.units ?? null,
           interpretation: r.interpretation ?? null,
           remarks: r.remarks ?? null,
+          range_low: r.rangeLow ?? null,
+          range_high: r.rangeHigh ?? null,
+          expected_normal_text: r.expectedNormalText ?? null,
         })),
       })
       .then(toOrder),

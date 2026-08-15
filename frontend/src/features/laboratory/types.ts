@@ -19,6 +19,10 @@ export interface LaboratoryResult {
   units: string | null;
   interpretation: LaboratoryInterpretation | null;
   remarks: string | null;
+  // Feature 3: structured numeric bounds, denormalized from the template
+  // parameter at submission time (same pattern as normalRange/units).
+  rangeLow: number | null;
+  rangeHigh: number | null;
   enteredBy: string | null;
   enteredAt: string | null;
 }
@@ -32,6 +36,11 @@ export interface LaboratoryResultInput {
   units?: string | null;
   interpretation?: LaboratoryInterpretation | null;
   remarks?: string | null;
+  rangeLow?: number | null;
+  rangeHigh?: number | null;
+  // Transient only - used server-side to compute `interpretation` for
+  // qualitative (Text) results, never persisted on LaboratoryResult.
+  expectedNormalText?: string | null;
 }
 
 export interface LaboratoryAttachment {
@@ -55,6 +64,10 @@ export interface LaboratoryOrder {
   doctorId: string | null;
   doctorName: string | null;
   templateId: string | null;
+  // Feature 3: the linked template's full definition (with per-parameter
+  // ranges), letting Result Entry pre-populate rows in a single fetch.
+  // Null when no template is linked, unchanged from before.
+  template: LaboratoryTemplate | null;
   testType: string;
   priority: string | null;
   status: LaboratoryOrderStatus;
@@ -87,6 +100,13 @@ export interface LaboratoryTemplateParameter {
   normalRange?: string | null;
   resultType: LaboratoryResultType;
   displayOrder?: number;
+  // Feature 3: structured, optional. Numeric parameters use
+  // rangeLow/rangeHigh; qualitative (Text) parameters use
+  // expectedNormalText. Left unset, auto-interpretation never activates
+  // for that parameter - see `interpretResult` below.
+  rangeLow?: number | null;
+  rangeHigh?: number | null;
+  expectedNormalText?: string | null;
 }
 
 export interface LaboratoryTemplate {
@@ -125,6 +145,38 @@ export function nextActionFor(status: LaboratoryOrderStatus): { label: string; a
     default:
       return null;
   }
+}
+
+/** Feature 3: client-side mirror of the backend's pure
+ * `interpret_result()` (app/services/laboratory_interpretation.py) - used
+ * for live, per-keystroke interpretation preview in Result Entry without a
+ * server round-trip. Must stay behaviorally identical to the backend
+ * function; the backend's computation on submit is always authoritative. */
+export function interpretResult(params: {
+  resultType: LaboratoryResultType;
+  numericValue: number | null | undefined;
+  textValue: string | null | undefined;
+  rangeLow: number | null | undefined;
+  rangeHigh: number | null | undefined;
+  expectedNormalText: string | null | undefined;
+}): LaboratoryInterpretation | null {
+  const { resultType, numericValue, textValue, rangeLow, rangeHigh, expectedNormalText } = params;
+
+  if (resultType === "Numeric") {
+    if (rangeLow === null || rangeLow === undefined || rangeHigh === null || rangeHigh === undefined) return null;
+    if (numericValue === null || numericValue === undefined || Number.isNaN(numericValue)) return null;
+    if (numericValue < rangeLow) return "Low";
+    if (numericValue > rangeHigh) return "High";
+    return "Normal";
+  }
+
+  if (resultType === "Text") {
+    if (!expectedNormalText?.trim()) return null;
+    if (!textValue?.trim()) return null;
+    return textValue.trim().toLowerCase() === expectedNormalText.trim().toLowerCase() ? "Normal" : "Abnormal";
+  }
+
+  return null;
 }
 
 /** Client-side validation for the Result Entry form, mirroring the shape

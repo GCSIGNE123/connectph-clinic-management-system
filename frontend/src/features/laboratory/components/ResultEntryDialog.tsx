@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useEnterResults } from "@/features/laboratory/hooks/use-laboratory";
+import { interpretResult } from "@/features/laboratory/types";
 import type { LaboratoryOrder, LaboratoryResultInput } from "@/features/laboratory/types";
+import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
 
 interface ResultEntryDialogProps {
   order: LaboratoryOrder | null;
@@ -15,16 +17,26 @@ interface ResultEntryDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function emptyRow(): LaboratoryResultInput {
-  return { parameterName: "", resultType: "Numeric", numericValue: null, textValue: null, normalRange: "", units: "", interpretation: null, remarks: "" };
+/** Row state extends the submit payload with a local-only flag: once the
+ * lab tech explicitly picks an interpretation from the dropdown, live
+ * recomputation (while typing the value) must stop overwriting it - the
+ * manual choice always wins, per spec. Stripped before submit. */
+type RowState = LaboratoryResultInput & { manualOverride: boolean };
+
+function emptyRow(): RowState {
+  return {
+    parameterName: "", resultType: "Numeric", numericValue: null, textValue: null,
+    normalRange: "", units: "", interpretation: null, remarks: "",
+    rangeLow: null, rangeHigh: null, expectedNormalText: null, manualOverride: false,
+  };
 }
 
-/** Pre-populates one row per matched template parameter (if the order was
- * created against a configured template) or per already-entered result
- * (editing an existing submission); otherwise starts with a single blank
- * row the lab tech can fill in freely, per spec's "editable/addable if not
- * [using a template]". */
-function initialRows(order: LaboratoryOrder | null): LaboratoryResultInput[] {
+/** Pre-populates one row per already-entered result (editing an existing
+ * submission); otherwise, if the order has a linked template, one row per
+ * template parameter (name/unit/reference range pre-filled, value left
+ * blank for the lab tech to fill in - never inventing a range); otherwise
+ * starts with a single blank row. */
+function initialRows(order: LaboratoryOrder | null): RowState[] {
   if (!order) return [emptyRow()];
   if (order.results.length > 0) {
     return order.results.map((r) => ({
@@ -36,13 +48,33 @@ function initialRows(order: LaboratoryOrder | null): LaboratoryResultInput[] {
       units: r.units ?? "",
       interpretation: r.interpretation,
       remarks: r.remarks ?? "",
+      rangeLow: r.rangeLow,
+      rangeHigh: r.rangeHigh,
+      expectedNormalText: null,
+      manualOverride: r.interpretation !== null,
+    }));
+  }
+  if (order.template && order.template.parameters.length > 0) {
+    return order.template.parameters.map((p) => ({
+      parameterName: p.parameterName,
+      resultType: p.resultType,
+      numericValue: null,
+      textValue: null,
+      normalRange: p.normalRange ?? "",
+      units: p.unit ?? "",
+      interpretation: null,
+      remarks: "",
+      rangeLow: p.rangeLow ?? null,
+      rangeHigh: p.rangeHigh ?? null,
+      expectedNormalText: p.expectedNormalText ?? null,
+      manualOverride: false,
     }));
   }
   return [emptyRow()];
 }
 
 export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDialogProps) {
-  const [rows, setRows] = useState<LaboratoryResultInput[]>(() => initialRows(order));
+  const [rows, setRows] = useState<RowState[]>(() => initialRows(order));
   const mutation = useEnterResults();
 
   useEffect(() => {
@@ -51,8 +83,27 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
 
   if (!order) return null;
 
-  function updateRow(index: number, patch: Partial<LaboratoryResultInput>) {
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  function updateRow(index: number, patch: Partial<RowState>) {
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        const next = { ...r, ...patch };
+        // Live-recompute the suggestion into the Interpretation dropdown as
+        // the lab tech types the value - but never once they've manually
+        // overridden it themselves.
+        if (!next.manualOverride) {
+          next.interpretation = interpretResult({
+            resultType: next.resultType,
+            numericValue: next.numericValue,
+            textValue: next.textValue,
+            rangeLow: next.rangeLow,
+            rangeHigh: next.rangeHigh,
+            expectedNormalText: next.expectedNormalText,
+          });
+        }
+        return next;
+      }),
+    );
   }
 
   function addRow() {
@@ -66,7 +117,7 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
   async function handleSubmit() {
     const cleaned = rows
       .filter((r) => r.parameterName.trim().length > 0)
-      .map((r) => ({
+      .map(({ manualOverride: _manualOverride, ...r }) => ({
         ...r,
         numericValue: r.resultType === "Numeric" ? (r.numericValue === null || Number.isNaN(r.numericValue) ? null : r.numericValue) : null,
         textValue: r.resultType === "Text" ? r.textValue || null : null,
@@ -124,11 +175,20 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
                 <label className="text-xs text-muted-foreground">Normal Range</label>
                 <Input value={row.normalRange ?? ""} onChange={(e) => updateRow(index, { normalRange: e.target.value })} />
               </div>
+              <div className="col-span-4 sm:col-span-2 flex flex-col justify-end">
+                <label className="text-xs text-muted-foreground">Suggested</label>
+                <InterpretationBadge value={row.interpretation} />
+              </div>
               <div className="col-span-3 sm:col-span-2">
                 <label className="text-xs text-muted-foreground">Interpretation</label>
                 <Select
                   value={row.interpretation ?? ""}
-                  onChange={(e) => updateRow(index, { interpretation: (e.target.value || null) as LaboratoryResultInput["interpretation"] })}
+                  onChange={(e) =>
+                    updateRow(index, {
+                      interpretation: (e.target.value || null) as LaboratoryResultInput["interpretation"],
+                      manualOverride: true,
+                    })
+                  }
                 >
                   <option value="">-</option>
                   <option value="Normal">Normal</option>
@@ -137,7 +197,7 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
                   <option value="Abnormal">Abnormal</option>
                 </Select>
               </div>
-              <div className="col-span-9 sm:col-span-9">
+              <div className="col-span-9 sm:col-span-8">
                 <label className="text-xs text-muted-foreground">Remarks</label>
                 <Input value={row.remarks ?? ""} onChange={(e) => updateRow(index, { remarks: e.target.value })} />
               </div>

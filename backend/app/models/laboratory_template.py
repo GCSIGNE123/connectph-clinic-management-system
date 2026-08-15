@@ -10,6 +10,19 @@ single `normal_range` free-text field per parameter (e.g. "12.0-16.0" or
 clinic lab slips print one range per parameter and doctors are used to
 reading a combined range; splitting it out is scope creep for this phase
 and can be added additively later without a breaking migration.
+
+Feature 3 (Automatic Interpretation): `normal_range` above stays exactly
+as-is (the human-readable display string, e.g. on a printed slip) - it is
+NOT parsed. `range_low`/`range_high`/`expected_normal_text` below are a
+separate, structured, OPTIONAL source of truth an Administrator can
+additionally fill in per parameter, which `laboratory_interpretation.
+interpret_result()` reads to auto-compute BELOW/NORMAL/ABOVE (numeric) or
+NORMAL/ABNORMAL (qualitative). All three are nullable and default to
+unset - an existing template with only a free-text `normal_range` keeps
+working exactly as before, just without auto-interpretation until an
+Administrator opts a parameter in by filling these in too. No clinical
+range values are seeded anywhere in this codebase; only the parameter
+catalog structure (name/unit) is - see `DEFAULT_LABORATORY_TEMPLATES`.
 """
 
 import enum
@@ -63,7 +76,65 @@ class LaboratoryTemplateParameter(UUIDPrimaryKeyMixin, TenantMixin, LegacyMixin,
     )
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
+    # Feature 3: structured, optional. Numeric parameters use range_low/
+    # range_high; qualitative (Text) parameters use expected_normal_text.
+    # Left unset, auto-interpretation simply never activates for that
+    # parameter - see module docstring.
+    range_low: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    range_high: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    expected_normal_text: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     template: Mapped["LaboratoryTemplate"] = relationship(back_populates="parameters")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<LaboratoryTemplateParameter id={self.id} parameter_name={self.parameter_name!r}>"
+
+
+# Feature 3: starter template STRUCTURE only (parameter names + units, both
+# objective/standardized, not clinical judgment calls) - deliberately no
+# `range_low`/`range_high`/`expected_normal_text` here. Reference ranges
+# vary by lab/analyzer/methodology and must be entered by clinic/medical
+# staff via the Template admin UI before auto-interpretation activates for
+# any of these parameters; until then they behave exactly as an
+# already-existing template with only a free-text `normal_range` does
+# today (interpretation stays manual). Seeded via
+# `LaboratoryService.seed_default_templates` (same opt-in,
+# call-explicitly-per-clinic pattern as `DEFAULT_SERVICES`/
+# `ClinicServiceCatalogService.seed_defaults` - never auto-run).
+DEFAULT_LABORATORY_TEMPLATES: list[dict] = [
+    {
+        "test_name": "CBC",
+        "test_category": "Hematology",
+        "specimen_type": "Whole Blood",
+        "parameters": [
+            {"parameter_name": "Hemoglobin", "unit": "g/dL", "result_type": "Numeric"},
+            {"parameter_name": "Hematocrit", "unit": "%", "result_type": "Numeric"},
+            {"parameter_name": "WBC Count", "unit": "x10^9/L", "result_type": "Numeric"},
+            {"parameter_name": "RBC Count", "unit": "x10^12/L", "result_type": "Numeric"},
+            {"parameter_name": "Platelet Count", "unit": "x10^9/L", "result_type": "Numeric"},
+            {"parameter_name": "MCV", "unit": "fL", "result_type": "Numeric"},
+            {"parameter_name": "MCH", "unit": "pg", "result_type": "Numeric"},
+            {"parameter_name": "MCHC", "unit": "g/dL", "result_type": "Numeric"},
+            {"parameter_name": "Neutrophils", "unit": "%", "result_type": "Numeric"},
+            {"parameter_name": "Lymphocytes", "unit": "%", "result_type": "Numeric"},
+        ],
+    },
+    {
+        "test_name": "Urinalysis",
+        "test_category": "Clinical Microscopy",
+        "specimen_type": "Urine",
+        "parameters": [
+            {"parameter_name": "Color", "unit": None, "result_type": "Text"},
+            {"parameter_name": "Appearance", "unit": None, "result_type": "Text"},
+            {"parameter_name": "Specific Gravity", "unit": None, "result_type": "Numeric"},
+            {"parameter_name": "pH", "unit": None, "result_type": "Numeric"},
+            {"parameter_name": "Protein", "unit": None, "result_type": "Text"},
+            {"parameter_name": "Glucose", "unit": None, "result_type": "Text"},
+            {"parameter_name": "Ketones", "unit": None, "result_type": "Text"},
+            {"parameter_name": "Blood", "unit": None, "result_type": "Text"},
+            {"parameter_name": "RBC", "unit": "/hpf", "result_type": "Numeric"},
+            {"parameter_name": "WBC", "unit": "/hpf", "result_type": "Numeric"},
+            {"parameter_name": "Bacteria", "unit": None, "result_type": "Text"},
+        ],
+    },
+]

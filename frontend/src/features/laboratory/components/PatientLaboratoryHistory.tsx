@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { useLaboratoryForPatient } from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
+import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
 
 /** Patient Profile "Laboratory" tab (Phase 10) - read-only history of every
  * laboratory order/result across all of the patient's visits, mirroring
@@ -40,9 +41,20 @@ export function PatientLaboratoryHistory({ patientId }: { patientId: string }) {
                 <LaboratoryStatusBadge status={lo.status} />
               </td>
               <td className="px-3 py-2 text-muted-foreground">
-                {lo.results.length > 0
-                  ? lo.results.map((r) => `${r.parameterName}: ${r.resultType === "Numeric" ? r.numericValue : r.textValue}`).join(", ")
-                  : "-"}
+                {lo.results.length > 0 ? (
+                  <ul className="space-y-1">
+                    {lo.results.map((r) => (
+                      <li key={r.id} className="flex items-center gap-2 whitespace-nowrap">
+                        <span>
+                          {r.parameterName}: {r.resultType === "Numeric" ? r.numericValue : r.textValue}
+                        </span>
+                        {r.interpretation && <InterpretationBadge value={r.interpretation} />}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  "-"
+                )}
               </td>
             </tr>
           ))}
