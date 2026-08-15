@@ -74,7 +74,22 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy application source
 COPY . .
 
-RUN chown -R app:app /app
+# `var/` is excluded from the build context (see .dockerignore) so real
+# uploaded files (consultation attachments, TV info content images - both
+# write here at runtime, see api/v1/consultations.py and api/v1/
+# tv_display.py) never get baked into the image - but that means /app/var
+# does not exist yet at this point either. It MUST exist here, owned by
+# `app`, before docker-compose.prod.yml's `backend_var_data` named volume
+# is ever mounted at /app/var: Docker only copies a mount path's existing
+# ownership into a fresh, empty named volume on its first mount if that
+# path already exists in the image. Without this, the volume's mount
+# point defaults to root:root (Docker creates it itself, independent of
+# USER below), and the non-root `app` user gets a PermissionError trying
+# to create subdirectories under it at runtime. Only needs to happen once
+# per named volume's lifetime - an already-initialized volume keeps its
+# ownership across every later `docker compose build`/container recreation,
+# it's never re-copied-into on subsequent mounts.
+RUN mkdir -p /app/var && chown -R app:app /app
 USER app
 
 EXPOSE 8000
