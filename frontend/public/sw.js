@@ -15,7 +15,7 @@ self.addEventListener("fetch", (event) => {
   // fetch handler existing at all is what browsers check for "Add to Home
   // Screen" eligibility, but proxying EVERY request through the service
   // worker, including cross-origin API calls to the backend (a different
-  // port - localhost:8010 vs this app's localhost:3000/<LAN-IP>:3000),
+  // port - localhost:8000 vs this app's localhost:3000/<LAN-IP>:3000),
   // adds a fragile extra network hop with no benefit (no caching strategy
   // exists here anyway). Confirmed live: real-world "Failed to fetch"
   // errors on a large sequential CSV import persisted even after a hard

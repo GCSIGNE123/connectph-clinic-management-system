@@ -30,8 +30,11 @@ COPY . .
 
 # Public/build-time env vars can be passed with --build-arg and re-exported
 # here as ENV so Next.js inlines them into the client bundle at build time.
-ARG NEXT_PUBLIC_API_BASE_URL
-ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+# Must be NEXT_PUBLIC_API_URL - that's the only name `getApiBaseUrl()`
+# (frontend/src/lib/api-url.ts) actually reads; NEXT_PUBLIC_API_BASE_URL
+# was a naming mismatch that silently fell back to a hardcoded dev default.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 ENV NEXT_TELEMETRY_DISABLED=1
 

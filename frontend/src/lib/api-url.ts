@@ -8,7 +8,7 @@
  * two different ways from the SAME machine - `http://localhost:3000` (this
  * machine itself) and `http://<LAN-IP>:3000` (a LAN device, e.g. the
  * waiting-room TV) - and each needs the API calls to go to a DIFFERENT
- * backend hostname (`localhost:8010` vs `<LAN-IP>:8010`). A single baked
+ * backend hostname (`localhost:8000` vs `<LAN-IP>:8000`). A single baked
  * `NEXT_PUBLIC_API_URL` can only ever be right for one of the two: pointing
  * it at the LAN IP (needed for the TV to work at all) means `localhost`
  * access now depends on this machine's own LAN-facing network adapter
@@ -38,7 +38,7 @@ function isLocalNetworkHost(hostname: string): boolean {
   );
 }
 
-const DEFAULT_API_URL = "http://localhost:8010/api/v1";
+const DEFAULT_API_URL = "http://localhost:8000/api/v1";
 
 export function getApiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;

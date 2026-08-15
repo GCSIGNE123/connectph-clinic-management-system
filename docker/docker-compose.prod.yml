@@ -39,7 +39,7 @@ version: "3.9"
 #   (the base file's dead `ENVIRONMENT`/`CORS_ALLOWED_ORIGINS` keys remain
 #   in docker-compose.yml itself, untouched, per instructions not to modify
 #   that file - they're simply ignored by the app either way).
-#   `CORS_ORIGINS`/`NEXT_PUBLIC_API_BASE_URL` point at the Server PC's own
+#   `CORS_ORIGINS`/`NEXT_PUBLIC_API_URL` point at the Server PC's own
 #   LAN IP, not localhost, since other machines (reception desk, TV
 #   display) reach it that way - same pattern already documented in
 #   docs/LOCAL_DEPLOYMENT.md for the non-Docker Windows-service install.
@@ -104,9 +104,9 @@ services:
   frontend:
     build:
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
+        NEXT_PUBLIC_API_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
+      NEXT_PUBLIC_API_URL: ${CLINIC_API_BASE_URL:-http://192.168.68.106:8000/api/v1}
       HOSTNAME: "0.0.0.0"
     healthcheck:
       test: !override ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
