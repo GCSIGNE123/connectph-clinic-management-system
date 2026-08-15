@@ -43,9 +43,16 @@ export interface LaboratoryResultInput {
   expectedNormalText?: string | null;
 }
 
+// Feature 4: matches backend `LaboratoryAttachmentType` exactly. The new
+// upload control (Result Entry workflow) only ever sends "Image" - the
+// other two members exist for schema completeness/future use (e.g. a
+// scanned PDF report), same as the backend endpoint's conditional
+// validation.
+export type LaboratoryAttachmentType = "PDFReport" | "Image" | "ScannedResult";
+
 export interface LaboratoryAttachment {
   id: string;
-  attachmentType: string;
+  attachmentType: LaboratoryAttachmentType;
   fileName: string;
   fileUrl: string;
   fileSizeBytes: number | null;

@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
+from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.role import Role
 
 pytestmark = pytest.mark.asyncio
@@ -628,3 +629,171 @@ async def test_seed_default_templates_requires_administrator_role(client: AsyncC
     ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
     resp = await client.post("/api/v1/laboratory/templates/seed-defaults", headers=ctx["lab_headers"])
     assert resp.status_code == 403
+
+
+# --- Feature 4: laboratory result image attachments ---
+
+_FAKE_JPEG_BYTES = b"\xff\xd8\xff\xe0fake-jpeg-bytes-for-testing\xff\xd9"
+
+
+async def _upload_attachment(client, lab_id, headers, *, filename="cbc-result.jpg", content=_FAKE_JPEG_BYTES, content_type="image/jpeg", attachment_type=None):
+    data = {"attachment_type": attachment_type} if attachment_type else {}
+    return await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/attachments", headers=headers,
+        data=data, files={"file": (filename, content, content_type)},
+    )
+
+
+async def test_upload_laboratory_attachment_sends_real_file_bytes_not_just_metadata(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    resp = await _upload_attachment(client, ctx["lab_order"]["id"], ctx["lab_headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["attachment_type"] == "Image"
+    assert body["file_name"] == "cbc-result.jpg"
+    assert body["file_size_bytes"] == len(_FAKE_JPEG_BYTES)
+    # Real, authenticated, viewable URL - never the old fake
+    # "https://storage.stub.connectph.dev/..." presigned-URL stub.
+    assert body["file_url"] == f"/laboratory/orders/{ctx['lab_order']['id']}/attachments/{body['id']}/file"
+    assert "storage.stub" not in body["file_url"]
+
+    # Immediately listed.
+    list_resp = await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}/attachments", headers=ctx["lab_headers"])
+    assert list_resp.status_code == 200
+    assert len(list_resp.json()) == 1
+    assert list_resp.json()[0]["id"] == body["id"]
+
+    # Also surfaced on the order itself (fixes the pre-Feature-4 gap where
+    # LaboratoryOrderRead.attachments was hardcoded to []).
+    order_resp = await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])
+    assert len(order_resp.json()["attachments"]) == 1
+    assert order_resp.json()["attachments"][0]["id"] == body["id"]
+
+
+async def test_attachment_file_is_written_under_the_persistent_var_directory(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Verifies the actual bytes land under the same `var/` root
+    `consultations.py` uses for its own persistent attachments - the
+    directory that `backend_var_data`'s Docker volume mount covers in
+    production (`docker/docker-compose.prod.yml`), so uploads survive a
+    backend container recreation."""
+    from app.api.v1.laboratory import LABORATORY_ATTACHMENTS_UPLOAD_ROOT
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    lab_id = ctx["lab_order"]["id"]
+    resp = await _upload_attachment(client, lab_id, ctx["lab_headers"], filename="scan.png", content=b"\x89PNGfake-png-bytes", content_type="image/png")
+    assert resp.status_code == 200, resp.text
+
+    list_resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/attachments", headers=ctx["lab_headers"])
+    attachment = list_resp.json()[0]
+    row = (await db_session.execute(select(LaboratoryAttachment).where(LaboratoryAttachment.id == uuid.UUID(attachment["id"])))).scalar_one()
+    file_path = LABORATORY_ATTACHMENTS_UPLOAD_ROOT / str(ctx["clinic"].id) / lab_id / row.file_url
+    assert file_path.is_file()
+    assert file_path.read_bytes() == b"\x89PNGfake-png-bytes"
+
+
+async def test_get_attachment_file_returns_correct_bytes_and_content_type(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    lab_id = ctx["lab_order"]["id"]
+    upload_resp = await _upload_attachment(client, lab_id, ctx["lab_headers"])
+    attachment_id = upload_resp.json()["id"]
+
+    file_resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/attachments/{attachment_id}/file", headers=ctx["lab_headers"])
+    assert file_resp.status_code == 200
+    assert file_resp.content == _FAKE_JPEG_BYTES
+    assert file_resp.headers["content-type"] == "image/jpeg"
+
+
+async def test_get_attachment_file_requires_authentication(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    lab_id = ctx["lab_order"]["id"]
+    upload_resp = await _upload_attachment(client, lab_id, ctx["lab_headers"])
+    attachment_id = upload_resp.json()["id"]
+
+    resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/attachments/{attachment_id}/file")
+    assert resp.status_code == 401
+
+
+async def test_get_attachment_file_rejects_role_with_no_laboratory_view_access(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Enforces the exact same LAB_VIEW_ROLES boundary already used for
+    viewing the laboratory order/results (Owner/Administrator/Laboratory/
+    Doctor/Receptionist) - a role outside that set (e.g. Cashier) must not
+    be able to view a laboratory attachment either."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    lab_id = ctx["lab_order"]["id"]
+    upload_resp = await _upload_attachment(client, lab_id, ctx["lab_headers"])
+    attachment_id = upload_resp.json()["id"]
+
+    cashier_email, _cashier_user = await _make_role_login(db_session, clinic_id=ctx["clinic"].id, role_name="Cashier")
+    cashier_token = await _login(client, cashier_email, "TestPass123!")
+    cashier_headers = {"Authorization": f"Bearer {cashier_token}"}
+
+    resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/attachments/{attachment_id}/file", headers=cashier_headers)
+    assert resp.status_code == 403
+
+
+async def test_upload_attachment_requires_lab_manage_role_not_just_view(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Receptionist can view (LAB_VIEW_ROLES) but must not be able to
+    upload (LAB_MANAGE_ROLES) - same manage-vs-view boundary already
+    enforced for collect/process/enter-results/release/cancel."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    resp = await _upload_attachment(client, ctx["lab_order"]["id"], ctx["recep_headers"])
+    assert resp.status_code == 403
+
+
+async def test_get_attachment_file_missing_from_disk_returns_404_not_a_crash(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Handles a missing/broken file gracefully (e.g. the DB row survived
+    but the on-disk bytes didn't, or were manually removed) - a clean 404,
+    never an unhandled exception/500."""
+    from app.api.v1.laboratory import LABORATORY_ATTACHMENTS_UPLOAD_ROOT
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    lab_id = ctx["lab_order"]["id"]
+    upload_resp = await _upload_attachment(client, lab_id, ctx["lab_headers"])
+    attachment_id = upload_resp.json()["id"]
+
+    row = (await db_session.execute(select(LaboratoryAttachment).where(LaboratoryAttachment.id == uuid.UUID(attachment_id)))).scalar_one()
+    file_path = LABORATORY_ATTACHMENTS_UPLOAD_ROOT / str(ctx["clinic"].id) / lab_id / row.file_url
+    file_path.unlink()
+
+    resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/attachments/{attachment_id}/file", headers=ctx["lab_headers"])
+    assert resp.status_code == 404
+
+
+async def test_upload_attachment_rejects_disallowed_extension(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    resp = await _upload_attachment(client, ctx["lab_order"]["id"], ctx["lab_headers"], filename="malware.exe", content=b"not-an-image", content_type="application/octet-stream")
+    assert resp.status_code == 400
+
+
+async def test_upload_attachment_rejects_oversized_image(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    oversized = b"\xff\xd8\xff" + b"x" * (5 * 1024 * 1024 + 1)  # MAX_IMAGE_SIZE_BYTES + 1
+    resp = await _upload_attachment(client, ctx["lab_order"]["id"], ctx["lab_headers"], content=oversized)
+    assert resp.status_code == 400
+    assert "too large" in resp.json()["detail"].lower()
+
+
+async def test_attachment_tenant_isolation(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx_a = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    upload_resp = await _upload_attachment(client, ctx_a["lab_order"]["id"], ctx_a["lab_headers"])
+    attachment_id = upload_resp.json()["id"]
+
+    ctx_b = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+
+    # Clinic B's own headers can't see clinic A's order/attachment at all.
+    resp = await client.get(
+        f"/api/v1/laboratory/orders/{ctx_a['lab_order']['id']}/attachments/{attachment_id}/file", headers=ctx_b["lab_headers"]
+    )
+    assert resp.status_code == 404

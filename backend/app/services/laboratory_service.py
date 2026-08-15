@@ -23,8 +23,8 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.upload_validation import validate_document_upload
 from app.models.invoice_item import InvoiceItemType
+from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.laboratory_order import LABORATORY_ORDER_STATUS_TRANSITIONS, LaboratoryOrder, LaboratoryOrderStatus
 from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES
 from app.models.order import Order, OrderCategory, OrderStatus
@@ -32,7 +32,7 @@ from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
 from app.repositories.laboratory_repository import LaboratoryRepository
 from app.repositories.visit_repository import VisitRepository
-from app.schemas.laboratory import LaboratoryOrderRead, LaboratoryResultRead, LaboratoryTemplateRead
+from app.schemas.laboratory import LaboratoryAttachmentRead, LaboratoryOrderRead, LaboratoryResultRead, LaboratoryTemplateRead
 from app.services.audit_service import AuditService
 from app.services.invoice_service import InvoiceService
 from app.services.laboratory_interpretation import interpret_result
@@ -69,6 +69,26 @@ def _full_name(entity) -> str | None:
     return " ".join(p for p in parts if p)
 
 
+def attachment_to_read(attachment: LaboratoryAttachment) -> LaboratoryAttachmentRead:
+    """Feature 4: builds the API-facing `file_url` as a path into
+    `GET /laboratory/orders/{id}/attachments/{id}/file` (see
+    `api/v1/laboratory.py::get_attachment_file`), rather than exposing the
+    raw on-disk stored filename kept in the `file_url` column - same
+    reasoning/shape as `consultation_service.py`'s `attachment_to_read`.
+    Shared by `_to_read`, `list_attachments`, and the upload endpoint so
+    every place a laboratory order's attachments are serialized resolves
+    to the same real, authenticated, viewable URL."""
+    return LaboratoryAttachmentRead(
+        id=attachment.id,
+        attachment_type=attachment.attachment_type,
+        file_name=attachment.file_name,
+        file_url=f"/laboratory/orders/{attachment.laboratory_order_id}/attachments/{attachment.id}/file",
+        file_size_bytes=attachment.file_size_bytes,
+        uploaded_by=attachment.uploaded_by,
+        created_at=attachment.created_at,
+    )
+
+
 def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
     order: Order | None = lab_order.order
     return LaboratoryOrderRead(
@@ -96,7 +116,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         invoice_item_id=lab_order.invoice_item_id,
         created_at=lab_order.created_at,
         results=[LaboratoryResultRead.model_validate(r, from_attributes=True) for r in lab_order.results],
-        attachments=[],
+        attachments=[attachment_to_read(a) for a in lab_order.attachments],
     )
 
 
@@ -401,31 +421,39 @@ class LaboratoryService:
 
     # --- Attachments ---
 
-    async def add_attachment(
-        self, laboratory_order_id: UUID, payload: dict, *, clinic_id: UUID, actor_id: UUID | None
-    ) -> LaboratoryOrder:
+    async def add_attachment_record(
+        self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID | None, attachment_type,
+        file_name: str, stored_filename: str, file_size_bytes: int,
+    ) -> LaboratoryAttachment:
+        """Feature 4: inserts the DB row for a file the caller (the API
+        layer) has already validated and written to disk under the
+        existing persistent `/app/var` volume - same split of
+        responsibility as `ConsultationService.add_attachment_record`.
+        `stored_filename` is the on-disk filename only (not a URL);
+        resolving it to a real authenticated URL is `attachment_to_read`'s
+        job, since this service has no notion of the file-serving route."""
         lab_order = await self._require(laboratory_order_id, clinic_id)
-        # Phase 16: same real gap as consultation attachments - no
-        # server-side validation of the client-declared file name/size
-        # existed before this. Lab result scans/attachments are documents,
-        # not photos, so use the document allow-list/size limit.
-        validate_document_upload(file_name=payload["file_name"], file_size_bytes=payload.get("file_size_bytes"))
-        file_url = f"https://storage.stub.connectph.dev/laboratory/{laboratory_order_id}/{payload['file_name']}"
-        await self.repo.add_attachment(
-            clinic_id=clinic_id, laboratory_order_id=lab_order.id, attachment_type=payload["attachment_type"],
-            file_name=payload["file_name"], file_url=file_url, file_size_bytes=payload.get("file_size_bytes"),
-            uploaded_by=actor_id,
+        attachment = await self.repo.add_attachment(
+            clinic_id=clinic_id, laboratory_order_id=lab_order.id, attachment_type=attachment_type,
+            file_name=file_name, file_url=stored_filename, file_size_bytes=file_size_bytes, uploaded_by=actor_id,
         )
         await self.audit_service.log_event(
             clinic_id=clinic_id, user_id=actor_id, action="laboratory.attachment_added",
             entity_type="laboratory_order", entity_id=str(lab_order.id),
         )
         await self.session.commit()
-        return await self._require(laboratory_order_id, clinic_id)
+        return attachment
 
-    async def list_attachments(self, laboratory_order_id: UUID, *, clinic_id: UUID) -> list:
+    async def list_attachments(self, laboratory_order_id: UUID, *, clinic_id: UUID) -> list[LaboratoryAttachment]:
         await self._require(laboratory_order_id, clinic_id)
         return await self.repo.list_attachments(laboratory_order_id, clinic_id)
+
+    async def get_attachment(self, laboratory_order_id: UUID, attachment_id: UUID, *, clinic_id: UUID) -> LaboratoryAttachment:
+        await self._require(laboratory_order_id, clinic_id)
+        attachment = await self.repo.get_attachment(attachment_id, laboratory_order_id, clinic_id)
+        if attachment is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+        return attachment
 
     # --- Templates ---
 

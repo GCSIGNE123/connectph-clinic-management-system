@@ -121,12 +121,10 @@ class LaboratoryResultsSubmit(BaseModel):
 
 
 # --- Attachments ---
-
-class LaboratoryAttachmentCreate(BaseModel):
-    attachment_type: str
-    file_name: str = Field(min_length=1, max_length=255)
-    file_size_bytes: int | None = None
-
+# Feature 4: real multipart upload (Form + File), same reasoning as
+# `ConsultationAttachment`'s Feature 2 fix - no JSON "Create" schema, since
+# the request body is `multipart/form-data`, not JSON. See
+# `api/v1/laboratory.py::add_attachment`.
 
 class LaboratoryAttachmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

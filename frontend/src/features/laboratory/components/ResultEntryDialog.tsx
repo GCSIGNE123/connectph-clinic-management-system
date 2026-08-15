@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useEnterResults } from "@/features/laboratory/hooks/use-laboratory";
+import { useEnterResults, useLaboratoryAttachments, useUploadLaboratoryAttachment } from "@/features/laboratory/hooks/use-laboratory";
 import { interpretResult } from "@/features/laboratory/types";
 import type { LaboratoryOrder, LaboratoryResultInput } from "@/features/laboratory/types";
 import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
+import { LaboratoryAttachmentList } from "@/features/laboratory/components/LaboratoryAttachmentList";
 
 interface ResultEntryDialogProps {
   order: LaboratoryOrder | null;
@@ -76,6 +77,8 @@ function initialRows(order: LaboratoryOrder | null): RowState[] {
 export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDialogProps) {
   const [rows, setRows] = useState<RowState[]>(() => initialRows(order));
   const mutation = useEnterResults();
+  const attachmentsQuery = useLaboratoryAttachments(order?.id);
+  const uploadAttachment = useUploadLaboratoryAttachment(order?.id);
 
   useEffect(() => {
     if (open) setRows(initialRows(order));
@@ -211,6 +214,25 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
           <Button type="button" variant="outline" size="sm" onClick={addRow}>
             + Add parameter
           </Button>
+
+          <div className="space-y-2 border-t border-border pt-4">
+            <p className="text-sm font-medium">Result Image</p>
+            <LaboratoryAttachmentList attachments={attachmentsQuery.data ?? []} />
+            <div>
+              <label className="text-xs text-muted-foreground">Attach the actual laboratory result image</label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="mt-1 block text-sm"
+                disabled={uploadAttachment.isPending}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadAttachment.mutate({ file, attachmentType: "Image" });
+                  e.target.value = "";
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         <DialogFooter>

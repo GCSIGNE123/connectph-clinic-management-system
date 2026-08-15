@@ -1,6 +1,7 @@
-import { apiClient } from "@/lib/api-client";
+import { apiClient, apiFetchBlob, apiUploadFile } from "@/lib/api-client";
 import type {
   LaboratoryAttachment,
+  LaboratoryAttachmentType,
   LaboratoryDashboardStats,
   LaboratoryOrder,
   LaboratoryResult,
@@ -164,14 +165,31 @@ export const laboratoryApi = {
 
   cancelOrder: (id: string) => apiClient.post<any>(`/laboratory/orders/${id}/cancel`).then(toOrder),
 
-  addAttachment: (id: string, payload: { attachmentType: string; fileName: string; fileSizeBytes?: number }) =>
-    apiClient
-      .post<any>(`/laboratory/orders/${id}/attachments`, {
-        attachment_type: payload.attachmentType,
-        file_name: payload.fileName,
-        file_size_bytes: payload.fileSizeBytes ?? null,
-      })
-      .then(toOrder),
+  /** Feature 4: real upload - sends the actual file bytes as
+   * `multipart/form-data`, so the attachment is immediately viewable
+   * afterward via its returned `fileUrl`. Defaults to "Image" (the
+   * primary ask: attaching the clinic's actual laboratory result image). */
+  uploadAttachment: async (
+    laboratoryOrderId: string,
+    payload: { file: File; attachmentType?: LaboratoryAttachmentType }
+  ): Promise<LaboratoryAttachment> => {
+    const formData = new FormData();
+    formData.append("attachment_type", payload.attachmentType ?? "Image");
+    formData.append("file", payload.file);
+    const raw = await apiUploadFile<any>(`/laboratory/orders/${laboratoryOrderId}/attachments`, formData);
+    return toAttachment(raw);
+  },
+
+  listAttachments: async (laboratoryOrderId: string): Promise<LaboratoryAttachment[]> => {
+    const raw = await apiClient.get<any[]>(`/laboratory/orders/${laboratoryOrderId}/attachments`);
+    return raw.map(toAttachment);
+  },
+
+  /** Fetches an attachment's real file bytes as a Blob, for display
+   * (`URL.createObjectURL`) or download - the file is served by an
+   * authenticated endpoint (`fileUrl` on the attachment itself), not a
+   * public URL, so a plain `<img src>` can't reach it directly. */
+  getAttachmentFileBlob: (fileUrl: string): Promise<Blob> => apiFetchBlob(fileUrl),
 
   listTemplates: (activeOnly = false) =>
     apiClient.get<any[]>(`/laboratory/templates${activeOnly ? "?active_only=true" : ""}`).then((rows) => rows.map(toTemplate)),

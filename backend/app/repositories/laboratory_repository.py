@@ -212,6 +212,15 @@ class LaboratoryRepository:
         ).order_by(LaboratoryAttachment.created_at.desc())
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def get_attachment(self, attachment_id: UUID, laboratory_order_id: UUID, clinic_id: UUID) -> LaboratoryAttachment | None:
+        stmt = select(LaboratoryAttachment).where(
+            LaboratoryAttachment.id == attachment_id,
+            LaboratoryAttachment.laboratory_order_id == laboratory_order_id,
+            LaboratoryAttachment.clinic_id == clinic_id,
+            LaboratoryAttachment.is_deleted.is_(False),
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     # --- Templates ---
 
     async def create_template(self, *, parameters: list[dict], **fields) -> LaboratoryTemplate:
