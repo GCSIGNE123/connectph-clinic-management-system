@@ -15,6 +15,10 @@ class VaccinationAdministrationRead(BaseModel):
     order_id: UUID
     visit_id: UUID
     patient_id: UUID
+    # Feature 5: real display names, resolved from the already-eager-loaded
+    # `patient`/`administered_by_user` relationships (see
+    # `VaccinationRepository._options()`) - no new columns, no migration.
+    patient_name: str | None = None
     doctor_id: UUID | None = None
     vaccine_name: str
     status: VaccinationStatus
@@ -25,6 +29,7 @@ class VaccinationAdministrationRead(BaseModel):
     notes: str | None = None
     administered_at: datetime | None = None
     administered_by: UUID | None = None
+    administered_by_name: str | None = None
     created_at: datetime
 
 

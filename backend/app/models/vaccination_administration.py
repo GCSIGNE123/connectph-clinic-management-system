@@ -75,6 +75,13 @@ class VaccinationAdministration(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteM
     order: Mapped["Order"] = relationship()
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["Doctor"] = relationship()
+    # Feature 5: resolves `administered_by` (the personnel who gave the
+    # vaccine) to a real name for display - every other "who did X" FK in
+    # this codebase (LaboratoryResult.entered_by, Payment.received_by,
+    # etc.) is left as a raw UUID with no relationship, but this feature
+    # specifically needs the name shown, so it's added here rather than
+    # system-wide.
+    administered_by_user: Mapped["User | None"] = relationship()
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<VaccinationAdministration id={self.id} vaccine_name={self.vaccine_name!r} status={self.status!r}>"

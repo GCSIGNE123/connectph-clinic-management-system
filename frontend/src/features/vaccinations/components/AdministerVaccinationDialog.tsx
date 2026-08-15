@@ -61,6 +61,9 @@ export function AdministerVaccinationDialog({
         {vaccination ? (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
+              Patient: <span className="font-medium text-foreground">{vaccination.patientName ?? "-"}</span>
+            </p>
+            <p className="text-sm text-muted-foreground">
               Ordered: <span className="font-medium text-foreground">{vaccination.vaccineName}</span>
             </p>
 

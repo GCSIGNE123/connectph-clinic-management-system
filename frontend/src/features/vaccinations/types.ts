@@ -5,6 +5,7 @@ export interface VaccinationAdministration {
   orderId: string;
   visitId: string;
   patientId: string;
+  patientName: string | null;
   doctorId: string | null;
   vaccineName: string;
   status: VaccinationStatus;
@@ -15,6 +16,7 @@ export interface VaccinationAdministration {
   notes: string | null;
   administeredAt: string | null;
   administeredBy: string | null;
+  administeredByName: string | null;
   createdAt: string;
 }
 

@@ -25,7 +25,10 @@ from app.services.audit_service import AuditService
 
 
 def _to_read(record: VaccinationAdministration) -> VaccinationAdministrationRead:
-    return VaccinationAdministrationRead.model_validate(record)
+    read = VaccinationAdministrationRead.model_validate(record)
+    read.patient_name = record.patient.full_name if record.patient else None
+    read.administered_by_name = record.administered_by_user.full_name if record.administered_by_user else None
+    return read
 
 
 class VaccinationService:

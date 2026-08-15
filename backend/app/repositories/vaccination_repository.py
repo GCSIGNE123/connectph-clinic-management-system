@@ -14,6 +14,7 @@ def _options():
         selectinload(VaccinationAdministration.order),
         selectinload(VaccinationAdministration.patient),
         selectinload(VaccinationAdministration.doctor),
+        selectinload(VaccinationAdministration.administered_by_user),
     )
 
 
@@ -25,7 +26,7 @@ class VaccinationRepository:
         record = VaccinationAdministration(**fields)
         self.session.add(record)
         await self.session.flush()
-        await self.session.refresh(record, attribute_names=["order", "patient", "doctor"])
+        await self.session.refresh(record, attribute_names=["order", "patient", "doctor", "administered_by_user"])
         return record
 
     async def get_by_id(self, vaccination_id: UUID, clinic_id: UUID) -> VaccinationAdministration | None:
@@ -81,4 +82,17 @@ class VaccinationRepository:
         for key, value in fields.items():
             setattr(record, key, value)
         await self.session.flush()
+        if "administered_by" in fields:
+            # `record` is already identity-mapped from an earlier fetch in
+            # this same request (typically with `administered_by_user`
+            # eagerly loaded as None, since `administered_by` was still
+            # null then) - `selectinload` does not re-populate an
+            # already-loaded relationship on re-query by default, so a
+            # later re-fetch would still show a stale null name unless
+            # this one relationship is explicitly refreshed here, scoped
+            # to just this attribute on just this object (not a
+            # session-wide `populate_existing`, which was tried and
+            # cascaded into unrelated in-flight ORM objects elsewhere in
+            # the same request, causing an unrelated `MissingGreenlet`).
+            await self.session.refresh(record, attribute_names=["administered_by_user"])
         return record

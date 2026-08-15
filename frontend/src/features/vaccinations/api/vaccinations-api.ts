@@ -9,6 +9,7 @@ function toVaccination(raw: any): VaccinationAdministration {
     orderId: raw.order_id,
     visitId: raw.visit_id,
     patientId: raw.patient_id,
+    patientName: raw.patient_name ?? null,
     doctorId: raw.doctor_id ?? null,
     vaccineName: raw.vaccine_name,
     status: raw.status,
@@ -19,6 +20,7 @@ function toVaccination(raw: any): VaccinationAdministration {
     notes: raw.notes ?? null,
     administeredAt: raw.administered_at ?? null,
     administeredBy: raw.administered_by ?? null,
+    administeredByName: raw.administered_by_name ?? null,
     createdAt: raw.created_at,
   };
 }

@@ -16,10 +16,9 @@ import { LockBanner } from "@/features/doctor-workspace/components/LockBanner";
 import { useOpenVisit, useReleaseLock } from "@/features/doctor-workspace/hooks/use-doctor-actions";
 import { DoctorQueueTable } from "@/features/doctor-workspace/components/DoctorQueueTable";
 import { VisitBillingCard } from "@/features/billing/components/VisitBillingCard";
-import { Badge } from "@/components/ui/badge";
-import { useOrdersForVisit, usePrescriptionsForVisit } from "@/features/clinical-orders/hooks/use-clinical-orders";
-import { useLaboratoryForVisit } from "@/features/laboratory/hooks/use-laboratory";
-import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
+import { VisitOrdersCard } from "@/features/clinical-orders/components/VisitOrdersCard";
+import { VisitPrescriptionsCard } from "@/features/clinical-orders/components/VisitPrescriptionsCard";
+import { VisitLaboratoryCard } from "@/features/laboratory/components/VisitLaboratoryCard";
 import type { DoctorQueueItem, LockInfo } from "@/features/doctor-workspace/types";
 
 /** Heartbeat interval for the visit lock while this page stays mounted -
@@ -189,120 +188,3 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Read-only Orders summary, matching the Phase 6-8 placeholder-card
- * pattern now made real (Phase 9). Editing happens on the Consultation
- * page's Orders tab, not here. */
-function VisitOrdersCard({ visitId }: { visitId: string }) {
-  const { data: orders, isLoading } = useOrdersForVisit(visitId);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Orders</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : orders && orders.length > 0 ? (
-          <ul className="space-y-2 text-sm">
-            {orders.map((order) => (
-              <li key={order.id} className="flex items-center justify-between border-b border-border/50 py-1 last:border-0">
-                <span>
-                  <span className="font-mono text-xs text-muted-foreground">{order.orderNumber}</span>{" "}
-                  <Badge variant="secondary">{order.orderCategory}</Badge>
-                </span>
-                <Badge variant={order.status === "Completed" ? "success" : order.status === "Cancelled" ? "destructive" : "secondary"}>
-                  {order.status}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState title="No orders yet" description="Orders created during this visit's consultation will appear here." />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Read-only Prescriptions summary for the Visit Details page. */
-function VisitPrescriptionsCard({ visitId }: { visitId: string }) {
-  const { data: prescriptions, isLoading } = usePrescriptionsForVisit(visitId);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Prescriptions</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : prescriptions && prescriptions.length > 0 ? (
-          <ul className="space-y-2 text-sm">
-            {prescriptions.map((rx) => (
-              <li key={rx.id} className="border-b border-border/50 py-1 last:border-0">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs text-muted-foreground">{rx.prescriptionNumber}</span>
-                  <Badge variant={rx.status === "Finalized" ? "success" : "secondary"}>{rx.status}</Badge>
-                </div>
-                <p className="text-muted-foreground">{rx.items.map((i) => i.medicine).join(", ")}</p>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState title="No prescriptions yet" description="Prescriptions written during this visit's consultation will appear here." />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Visit-level Laboratory tab/card (Phase 10) - distinct from the read-only
- * `VisitOrdersCard` above (which shows the generic Phase 9 Order rows for
- * every category): this shows the fuller lab-specific detail (status
- * lifecycle, entered results, attachment count) that only exists once a
- * Laboratory-category order has its `laboratory_orders` workflow record
- * attached. */
-function VisitLaboratoryCard({ visitId }: { visitId: string }) {
-  const { data: labOrders, isLoading } = useLaboratoryForVisit(visitId);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Laboratory</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : labOrders && labOrders.length > 0 ? (
-          <ul className="space-y-3 text-sm">
-            {labOrders.map((lo) => (
-              <li key={lo.id} className="border-b border-border/50 pb-2 last:border-0">
-                <div className="flex items-center justify-between">
-                  <span>
-                    <span className="font-mono text-xs text-muted-foreground">{lo.orderNumber}</span> {lo.testType}
-                  </span>
-                  <LaboratoryStatusBadge status={lo.status} />
-                </div>
-                {lo.results.length > 0 && (
-                  <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                    {lo.results.map((r) => (
-                      <li key={r.id}>
-                        {r.parameterName}: {r.resultType === "Numeric" ? r.numericValue : r.textValue}
-                        {r.units ? ` ${r.units}` : ""}
-                        {r.normalRange ? ` (Normal: ${r.normalRange})` : ""}
-                        {r.interpretation ? ` — ${r.interpretation}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {lo.attachments.length > 0 && (
-                  <p className="mt-1 text-xs text-muted-foreground">{lo.attachments.length} attachment(s)</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState title="No laboratory orders yet" description="Laboratory orders created during this visit's consultation will appear here." />
-        )}
-      </CardContent>
-    </Card>
-  );
-}

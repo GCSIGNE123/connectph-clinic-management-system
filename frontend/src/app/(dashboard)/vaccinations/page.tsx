@@ -64,17 +64,20 @@ export default function VaccinationsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="p-3 font-medium">Patient</th>
                   <th className="p-3 font-medium">Vaccine</th>
                   <th className="p-3 font-medium">Status</th>
                   <th className="p-3 font-medium">Dose / Site / Route</th>
                   <th className="p-3 font-medium">Lot #</th>
                   <th className="p-3 font-medium">Administered At</th>
+                  <th className="p-3 font-medium">Administered By</th>
                   <th className="p-3 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((v) => (
                   <tr key={v.id} className="border-b last:border-0">
+                    <td className="p-3 font-medium">{v.patientName ?? "-"}</td>
                     <td className="p-3">{v.vaccineName}</td>
                     <td className="p-3">
                       <Badge variant={STATUS_VARIANT[v.status]}>{v.status}</Badge>
@@ -86,6 +89,7 @@ export default function VaccinationsPage() {
                     <td className="p-3 text-muted-foreground">
                       {v.administeredAt ? new Date(v.administeredAt).toLocaleString() : "-"}
                     </td>
+                    <td className="p-3 text-muted-foreground">{v.administeredByName ?? "-"}</td>
                     <td className="p-3">
                       {v.status === "Requested" ? (
                         <div className="flex gap-2">
