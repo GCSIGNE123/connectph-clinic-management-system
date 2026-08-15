@@ -77,6 +77,8 @@ export interface Consultation {
   completedAt: string | null;
   signedAt: string | null;
   doctorName: string | null;
+  doctorPrcLicense: string | null;
+  doctorPtrNumber: string | null;
   patientName: string | null;
   patientNumber: string | null;
   visitNumber: string | null;

@@ -93,6 +93,8 @@ function toConsultation(raw: any): Consultation {
     completedAt: raw.completed_at,
     signedAt: raw.signed_at,
     doctorName: raw.doctor_name,
+    doctorPrcLicense: raw.doctor_prc_license,
+    doctorPtrNumber: raw.doctor_ptr_number,
     patientName: raw.patient_name,
     patientNumber: raw.patient_number,
     visitNumber: raw.visit_number,

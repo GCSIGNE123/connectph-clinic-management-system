@@ -419,6 +419,8 @@ export default function ConsultationPage() {
           patientName={consultation.patientName ?? (patient ? `${patient.firstName} ${patient.lastName}` : undefined)}
           patientAge={patient ? computeAge(patient.birthDate) : undefined}
           doctorName={consultation.doctorName}
+          doctorPrcLicense={consultation.doctorPrcLicense}
+          doctorPtrNumber={consultation.doctorPtrNumber}
           visitNumber={visit.visitNumber}
         />
       ) : null}

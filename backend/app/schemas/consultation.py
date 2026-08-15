@@ -177,6 +177,8 @@ class ConsultationRead(BaseModel):
 
 class ConsultationDetail(ConsultationRead):
     doctor_name: str | None = None
+    doctor_prc_license: str | None = None
+    doctor_ptr_number: str | None = None
     patient_name: str | None = None
     patient_number: str | None = None
     visit_number: str | None = None

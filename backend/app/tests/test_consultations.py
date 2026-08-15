@@ -47,7 +47,12 @@ async def _setup_queue_deps(client: AsyncClient, headers: dict) -> dict:
     department = (
         await client.post("/api/v1/departments", headers=headers, json={"department_code": "GEN", "name": "General Medicine"})
     ).json()
-    doctor = (await client.post("/api/v1/doctors", headers=headers, json={"first_name": "Jose", "last_name": "Rizal"})).json()
+    doctor = (
+        await client.post(
+            "/api/v1/doctors", headers=headers,
+            json={"first_name": "Jose", "last_name": "Rizal", "prc_license": "0123456", "ptr_number": "9876543"},
+        )
+    ).json()
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
@@ -148,6 +153,10 @@ async def test_open_consultation_creates_draft_lock_and_timeline(client: AsyncCl
     assert body["status"] == "Draft"
     assert body["lock"]["locked"] is True
     assert body["lock"]["is_self"] is True
+    # Feature 1: PRC license + PTR # for prescription printouts - carried
+    # through from the attending doctor's own record.
+    assert body["doctor_prc_license"] == "0123456"
+    assert body["doctor_ptr_number"] == "9876543"
 
     timeline = await client.get(f"/api/v1/consultations/{body['id']}/timeline", headers=doc_headers)
     assert timeline.status_code == 200, timeline.text

@@ -156,6 +156,8 @@ class ConsultationService:
         return ConsultationDetail(
             **base,
             doctor_name=consultation.doctor.full_name if consultation.doctor else None,
+            doctor_prc_license=consultation.doctor.prc_license if consultation.doctor else None,
+            doctor_ptr_number=consultation.doctor.ptr_number if consultation.doctor else None,
             patient_name=consultation.patient.full_name if consultation.patient else None,
             patient_number=consultation.patient.patient_number if consultation.patient else None,
             visit_number=consultation.visit.visit_number if consultation.visit else None,

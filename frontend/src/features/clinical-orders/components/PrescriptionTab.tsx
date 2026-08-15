@@ -26,6 +26,8 @@ export function PrescriptionTab({
   patientName,
   patientAge,
   doctorName,
+  doctorPrcLicense,
+  doctorPtrNumber,
   visitNumber,
 }: {
   consultationId: string;
@@ -35,6 +37,8 @@ export function PrescriptionTab({
   patientName?: string | null;
   patientAge?: number | null;
   doctorName?: string | null;
+  doctorPrcLicense?: string | null;
+  doctorPtrNumber?: string | null;
   visitNumber?: string | null;
 }) {
   const prescriptionsQuery = usePrescriptionsForConsultation(consultationId);
@@ -266,8 +270,10 @@ export function PrescriptionTab({
             {/* Signature line - a physically-signable area at the bottom of
                 the printed sheet. */}
             <div className="pt-10 flex flex-col items-end">
-              <div className="w-56 border-t border-foreground text-center text-xs pt-1">
+              <div data-testid="prescription-signature-block" className="w-56 border-t border-foreground text-center text-xs pt-1">
                 {doctorName ? `Dr. ${doctorName}` : "Prescribing Physician"}
+                {doctorPrcLicense ? <><br />PRC License No. {doctorPrcLicense}</> : null}
+                {doctorPtrNumber ? <><br />PTR No. {doctorPtrNumber}</> : null}
                 {clinic?.license_number ? <><br />License No. {clinic.license_number}</> : null}
               </div>
             </div>
