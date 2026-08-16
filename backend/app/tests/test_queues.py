@@ -623,6 +623,34 @@ async def test_queue_slip_blocked_without_vitals(client: AsyncClient, make_clini
     assert "vital signs" in response.json()["detail"].lower()
 
 
+async def test_queue_slip_laboratory_department_bypasses_vitals_requirement(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Laboratory queue tickets have no consultation/SOAP note to carry
+    vitals in, so `QueueService.get_slip` must not block them on missing
+    vitals the way it does for every other department - identified via
+    `department_code == "LAB"`, matching the seeded Laboratory department's
+    own code rather than its display name."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    lab_department = (
+        await client.post(
+            "/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"}
+        )
+    ).json()
+    created = (
+        await client.post(
+            "/api/v1/queues", headers=headers, json=_queue_payload(deps, department_id=lab_department["id"])
+        )
+    ).json()
+
+    response = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert response.status_code == 200, response.text
+    slip = response.json()
+    assert slip["department_name"] == "Laboratory"
+    assert slip["vitals_taken"] is False
+
+
 async def test_queue_slip_succeeds_after_vitals_entered(client: AsyncClient, make_clinic_with_owner) -> None:
     """Same ticket: blocked before vitals, then printable immediately after -
     proves the gate re-evaluates live state rather than caching a stale

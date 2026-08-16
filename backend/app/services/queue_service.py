@@ -642,14 +642,25 @@ class QueueService:
         # all (only possible via pre-Phase-6 legacy data) is left unblocked
         # rather than guessing at vitals that were never structurally
         # capturable - a documented limitation, not a bypass.
+        #
+        # Laboratory tickets are exempt: a walk-in lab order has no
+        # consultation/SOAP note to carry vitals in, so the requirement
+        # doesn't apply to that department - identified by the same
+        # `department_code == "LAB"` convention already used for the seeded
+        # Laboratory department/service (see `models/department.py`,
+        # `models/clinic_service.py`), not by matching the display name.
+        is_laboratory_department = queue.department is not None and queue.department.department_code == "LAB"
+
         vitals_taken = True
         if queue.visit_id is not None:
             missing = await self._missing_required_vitals(queue.visit_id, clinic_id=clinic_id)
             if missing:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Vital signs must be taken before printing the queue ticket.",
-                )
+                if not is_laboratory_department:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Vital signs must be taken before printing the queue ticket.",
+                    )
+                vitals_taken = False
         else:
             vitals_taken = False
 
