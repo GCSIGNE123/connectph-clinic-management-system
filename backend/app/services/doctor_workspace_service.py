@@ -280,6 +280,29 @@ class DoctorWorkspaceService:
             clinic_id=clinic_id, user_id=actor_id, action="doctor_workspace.consultation_completed",
             entity_type="visit", entity_id=str(visit_id),
         )
+
+        # Doctor Workspace <-> Consultation Workspace billing parity: per the
+        # spec's workflow diagram ("Doctor marks Consultation Complete ->
+        # Billing Draft automatically created"), completing an encounter
+        # auto-creates a Draft invoice for the visit - this used to only
+        # happen via `ConsultationService.complete_consultation()` (the full
+        # SOAP-note Consultation Workspace flow), not via this quicker
+        # Doctor Workspace "Complete"/"Next Patient" action, so a doctor
+        # checking a patient out from the queue table left the visit
+        # correctly "Completed" but silently unbilled. Reuses the exact same
+        # `InvoiceService.create_draft_invoice_for_consultation()` call
+        # `ConsultationService` already makes - no second invoice-generation
+        # implementation - which is itself idempotent (returns the existing
+        # non-cancelled invoice for this visit rather than duplicating), so
+        # this is safe even if the visit was already billed via the other
+        # path, and safe against retries.
+        from app.services.invoice_service import InvoiceService
+
+        invoice_service = InvoiceService(self.session)
+        await invoice_service.create_draft_invoice_for_consultation(
+            clinic_id=clinic_id, visit_id=visit_id, actor_id=actor_id,
+        )
+
         await self.session.commit()
         await self._broadcast(clinic_id, "visit.consultation_completed", {"visit_id": str(visit_id)})
         await self._broadcast(clinic_id, "visit.lock_released", {"visit_id": str(visit_id)})

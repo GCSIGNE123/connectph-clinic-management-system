@@ -232,6 +232,97 @@ async def test_call_start_complete_lifecycle(client: AsyncClient, make_clinic_wi
     assert dash.json()["stats"]["avg_consultation_seconds"] is not None
 
 
+# --- Doctor Workspace <-> Billing parity (quick "Complete" also drafts an invoice) ---
+
+async def test_quick_complete_creates_draft_invoice_with_consultation_fee(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A: completing a normal billable visit via the quick Doctor Workspace
+    "Complete" button (`/complete-consultation`) - NOT the full Consultation
+    Workspace flow - must now create exactly one Draft/Pending invoice with
+    the expected auto-priced Consultation Fee line item, matching what
+    `ConsultationService.complete_consultation()` already does."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)  # MEDCERT service, default_price 500.00
+    queue = await _create_visit(client, owner_headers, deps)
+    visit_id = queue["visit_id"]
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    complete_resp = await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/complete-consultation", headers=doc_headers)
+    assert complete_resp.status_code == 200, complete_resp.text
+    assert complete_resp.json()["status"] == "Completed"
+
+    invoice_resp = await client.get(f"/api/v1/visits/{visit_id}/invoice", headers=owner_headers)
+    assert invoice_resp.status_code == 200, invoice_resp.text
+    invoice = invoice_resp.json()
+    assert invoice is not None, "quick Doctor Workspace completion must create a draft invoice, same as full Consultation completion"
+    assert invoice["status"] == "PendingPayment"
+    assert len(invoice["items"]) == 1
+    assert invoice["items"][0]["item_type"] == "ConsultationFee"
+    assert invoice["items"][0]["unit_price"] == "500.00"
+    assert invoice["grand_total"] == "500.00"
+    assert invoice["balance_due"] == "500.00"
+
+    listing = await client.get("/api/v1/invoices", headers=owner_headers)
+    assert listing.json()["total"] == 1, "exactly one invoice must exist for this visit, no duplicates"
+
+
+async def test_completion_across_both_paths_does_not_duplicate_invoice(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """B: idempotency, including across paths - completing the SAME visit via
+    the quick Doctor Workspace "Complete" button and then also completing a
+    Consultation opened on that same visit (mirroring a doctor who clicks
+    "Complete" from the queue and then still opens/finishes the full
+    Consultation record) must never create a second invoice.
+    `InvoiceService.create_draft_invoice_for_consultation()`'s own existing
+    idempotency guard (returns the existing non-cancelled invoice for the
+    visit) is what's relied on here - not a new guard."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = await _create_visit(client, owner_headers, deps)
+    visit_id = queue["visit_id"]
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    first_complete = await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/complete-consultation", headers=doc_headers)
+    assert first_complete.status_code == 200, first_complete.text
+
+    first_invoice = (await client.get(f"/api/v1/visits/{visit_id}/invoice", headers=owner_headers)).json()
+    assert first_invoice is not None
+
+    # Retrying the same quick-complete action on an already-Completed visit
+    # is rejected by the existing (unchanged) Visit status-transition guard -
+    # confirms this fix didn't loosen that pre-existing rule.
+    retry_resp = await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/complete-consultation", headers=doc_headers)
+    assert retry_resp.status_code == 400, retry_resp.text
+
+    # Now complete a Consultation opened on that same (already-Completed)
+    # visit - `ConsultationService.complete_consultation()` unconditionally
+    # calls the same idempotent invoice-creation helper at the end of its
+    # own flow, regardless of visit status.
+    opened = await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)
+    assert opened.status_code == 200, opened.text
+    cid = opened.json()["id"]
+    second_complete = await client.post(f"/api/v1/consultations/{cid}/complete", headers=doc_headers)
+    assert second_complete.status_code == 200, second_complete.text
+
+    second_invoice = (await client.get(f"/api/v1/visits/{visit_id}/invoice", headers=owner_headers)).json()
+    assert second_invoice["id"] == first_invoice["id"], "must be the SAME invoice, not a new one"
+
+    listing = await client.get("/api/v1/invoices", headers=owner_headers)
+    assert listing.json()["total"] == 1, "no duplicate invoice from completing across both paths"
+
+
 async def test_waiting_time_computed(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
     clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, owner_headers)
