@@ -41,9 +41,27 @@ class PlatformDashboardService:
                 select(func.count()).select_from(Subscription).where(Subscription.status == SubscriptionStatus.TRIALING)
             )
         ).scalar_one()
+        # BUG-039: NOT `Subscription.status == SubscriptionStatus.EXPIRED`.
+        # `EXPIRED` was added to the *Python* enum (and, via `create_all()`,
+        # to a fresh test database) as the lowercase value "expired", but
+        # migration 0015's `ALTER TYPE subscription_status ADD VALUE
+        # 'EXPIRED'` added it to a REAL, migration-built Postgres database
+        # with the wrong casing (uppercase) - so on any actually-migrated
+        # database, querying `status = 'expired'` 500s with
+        # `InvalidTextRepresentationError`. Nothing in the app ever writes
+        # `status = EXPIRED` either (grep confirms zero writers), so an
+        # enum-status comparison was never the right source of truth here
+        # anyway. `expiration_date` (added by the same migration) is the
+        # real, populated, enum-independent field for "has this
+        # subscription's paid term lapsed" - use that instead, which also
+        # sidesteps the broken enum label entirely regardless of whether/
+        # how it eventually gets corrected in the database.
         expired_subscriptions = (
             await self.session.execute(
-                select(func.count()).select_from(Subscription).where(Subscription.status == SubscriptionStatus.EXPIRED)
+                select(func.count()).select_from(Subscription).where(
+                    Subscription.expiration_date.is_not(None),
+                    Subscription.expiration_date < datetime.now(UTC),
+                )
             )
         ).scalar_one()
 

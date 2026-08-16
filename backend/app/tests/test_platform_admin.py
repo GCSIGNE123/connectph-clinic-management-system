@@ -551,6 +551,62 @@ async def test_dashboard_health_returns_real_numbers(client: AsyncClient, platfo
     assert body["database_size_bytes"] > 0
 
 
+async def test_dashboard_health_counts_expired_subscriptions_by_expiration_date_not_status(
+    client: AsyncClient, platform_admin_factory, make_clinic_with_owner
+):
+    """Regression test for BUG-039: `PlatformDashboardService.get_system_health()`
+    used to count "expired" subscriptions via `Subscription.status ==
+    SubscriptionStatus.EXPIRED`, which 500s with a raw asyncpg
+    `InvalidTextRepresentationError` on any database migrated the real way
+    (via alembic) instead of `Base.metadata.create_all()` - migration 0015
+    added `'EXPIRED'` (uppercase) to the Postgres enum, but SQLAlchemy's
+    `values_callable` always sends the lowercase `.value` ("expired"), so
+    the enum comparison never matches any real deployment's actual labels.
+
+    Nothing in the app ever writes `status = EXPIRED` (confirmed by
+    inspection - the only prior reference to that enum member anywhere in
+    the codebase was this exact broken query), so the fix counts by the
+    subscription's real, already-populated `expiration_date` field
+    instead: this test creates subscriptions with an ordinary,
+    always-valid status (`active`) and different `expiration_date` values,
+    and never once passes `status: "expired"` anywhere - proving the fixed
+    query no longer depends on that enum member at all, while still
+    correctly identifying which subscriptions have lapsed."""
+    from datetime import UTC, datetime, timedelta
+
+    admin, password = await platform_admin_factory()
+    pa_token = await _pa_login(client, admin.email, password)
+    headers = {"Authorization": f"Bearer {pa_token}"}
+
+    lapsed_clinic, _, _ = await make_clinic_with_owner()
+    current_clinic, _, _ = await make_clinic_with_owner()
+
+    past = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    future = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+
+    lapsed_resp = await client.put(
+        f"/api/v1/platform-admin/tenants/{lapsed_clinic.id}/subscription",
+        json={"plan": "professional", "status": "active", "expiration_date": past},
+        headers=headers,
+    )
+    assert lapsed_resp.status_code == 200, lapsed_resp.text
+
+    current_resp = await client.put(
+        f"/api/v1/platform-admin/tenants/{current_clinic.id}/subscription",
+        json={"plan": "professional", "status": "active", "expiration_date": future},
+        headers=headers,
+    )
+    assert current_resp.status_code == 200, current_resp.text
+
+    resp = await client.get("/api/v1/platform-admin/dashboard/health", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["expired_subscriptions"] >= 1, (
+        "a subscription with expiration_date in the past must be counted as expired, "
+        "purely from the date field - status was never set to 'expired'"
+    )
+
+
 async def test_platform_audit_log_records_actions(client: AsyncClient, platform_admin_factory, make_clinic_with_owner):
     admin, password = await platform_admin_factory()
     pa_token = await _pa_login(client, admin.email, password)
