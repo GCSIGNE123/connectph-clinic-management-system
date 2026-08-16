@@ -53,6 +53,12 @@ export default function TenantUsersPage() {
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [resetTarget, setResetTarget] = useState<TenantUser | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
+
   async function refresh() {
     try {
       setUsers(await listTenantUsers(clinicId));
@@ -137,17 +143,39 @@ export default function TenantUsersPage() {
     }
   }
 
-  async function handleResetPassword(u: TenantUser) {
-    const newPassword = window.prompt(`New password for ${u.email}? (min 8 characters)`);
-    if (!newPassword) return;
-    setBusyId(u.id);
+  function openResetPassword(u: TenantUser) {
+    setShowCreateForm(false);
+    setEditingUser(null);
+    setResetTarget(u);
+    setResetPasswordValue("");
+    setResetError(null);
+    setResetDone(false);
+  }
+
+  function closeResetPassword() {
+    setResetTarget(null);
+    setResetPasswordValue("");
+    setResetError(null);
+    setResetDone(false);
+  }
+
+  async function handleSubmitResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetTarget) return;
+    if (resetPasswordValue.length < 8) {
+      setResetError("Password must be at least 8 characters.");
+      return;
+    }
+    setResetError(null);
+    setResetSubmitting(true);
     try {
-      await resetTenantUserPassword(clinicId, u.id, newPassword);
-      window.alert("Password reset. All of this user's active sessions have been revoked.");
+      await resetTenantUserPassword(clinicId, resetTarget.id, resetPasswordValue);
+      setResetDone(true);
+      setResetPasswordValue("");
     } catch (err) {
-      window.alert(err instanceof PlatformApiError ? err.message : "Failed to reset password");
+      setResetError(err instanceof PlatformApiError ? err.message : "Failed to reset password");
     } finally {
-      setBusyId(null);
+      setResetSubmitting(false);
     }
   }
 
@@ -361,6 +389,89 @@ export default function TenantUsersPage() {
         </form>
       )}
 
+      {resetTarget && (
+        <div
+          style={{
+            background: "#111827",
+            border: "1px solid #1f2937",
+            borderRadius: 12,
+            padding: 24,
+            marginBottom: 24,
+          }}
+        >
+          <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 12 }}>
+            Reset password for {resetTarget.first_name} {resetTarget.last_name} ({resetTarget.email})
+          </div>
+
+          {resetDone ? (
+            <div>
+              <p style={{ color: "#34d399", fontSize: 13, marginBottom: 12 }}>
+                Password reset. All of this user&apos;s active sessions have been revoked.
+              </p>
+              <button
+                type="button"
+                onClick={closeResetPassword}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 6,
+                  border: "1px solid #374151",
+                  background: "transparent",
+                  color: "#e5e7eb",
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmitResetPassword}>
+              <FormField
+                label="New password (min 8 characters)"
+                value={resetPasswordValue}
+                onChange={setResetPasswordValue}
+                type="password"
+                required
+              />
+
+              {resetError && <div style={{ color: "#f87171", fontSize: 12, marginTop: 8 }}>{resetError}</div>}
+
+              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                <button
+                  type="submit"
+                  disabled={resetSubmitting}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "none",
+                    background: "linear-gradient(135deg,#7c3aed,#2563eb)",
+                    color: "white",
+                    fontWeight: 600,
+                    cursor: resetSubmitting ? "default" : "pointer",
+                    opacity: resetSubmitting ? 0.6 : 1,
+                  }}
+                >
+                  {resetSubmitting ? "Resetting..." : "Reset password"}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeResetPassword}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "1px solid #374151",
+                    background: "transparent",
+                    color: "#e5e7eb",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
       {error && <div style={{ color: "#f87171" }}>{error}</div>}
 
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -399,7 +510,7 @@ export default function TenantUsersPage() {
                 <button disabled={busyId === u.id} onClick={() => openEdit(u)}>
                   Edit
                 </button>
-                <button disabled={busyId === u.id} onClick={() => handleResetPassword(u)} style={{ marginLeft: 8 }}>
+                <button disabled={busyId === u.id} onClick={() => openResetPassword(u)} style={{ marginLeft: 8 }}>
                   Reset password
                 </button>
                 {u.status === "Locked" ? (
