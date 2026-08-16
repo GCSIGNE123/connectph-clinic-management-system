@@ -20,6 +20,7 @@ fail, roll back, or slow the primary clinic operation that called it.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -64,3 +65,42 @@ async def enqueue(
             "Failed to enqueue sync job (non-fatal, clinic operation unaffected)",
             extra={"entity_type": entity_type, "record_id": str(record_id)},
         )
+
+
+async def enqueue_lazy(
+    *,
+    entity_type: str,
+    record_id: UUID,
+    operation: SyncJobOperation | str,
+    clinic_id: UUID,
+    build_payload: Callable[[], dict[str, Any]],
+) -> None:
+    """Same "never raises" guarantee as `enqueue()`, but also covers the
+    step of BUILDING the payload, not just writing it.
+
+    `enqueue()` alone can't do this: a call like
+    `enqueue(payload=_to_read(record).model_dump(mode="json"), ...)` still
+    evaluates `_to_read(record).model_dump(mode="json")` in the CALLER's
+    own stack frame, before `enqueue()` is ever entered - so an exception
+    raised while building that payload is NOT caught by `enqueue()`'s
+    try/except, and propagates straight out of the caller's
+    already-committed operation. That turns a fully successful,
+    already-persisted write into a 500 despite this module's own
+    docstring promising callers the sync queue "must never fail, roll
+    back, or slow the primary clinic operation." Passing a zero-arg
+    `build_payload` callable instead defers that evaluation until it is
+    running inside THIS function's own try/except, closing that gap.
+
+    Callers with a pre-built payload dict that can't itself raise (e.g. a
+    small literal dict) may keep calling `enqueue()` directly - this
+    wrapper exists for the (common) case where the payload comes from
+    re-serializing an ORM object via a Pydantic schema."""
+    try:
+        payload = build_payload()
+    except Exception:
+        logger.exception(
+            "Failed to build sync job payload (non-fatal, clinic operation unaffected)",
+            extra={"entity_type": entity_type, "record_id": str(record_id)},
+        )
+        return
+    await enqueue(entity_type=entity_type, record_id=record_id, operation=operation, payload=payload, clinic_id=clinic_id)

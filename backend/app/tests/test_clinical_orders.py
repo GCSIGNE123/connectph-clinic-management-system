@@ -8,12 +8,13 @@ Laboratory role scoped to Laboratory orders only), patient-prescriptions
 and visit-orders/visit-prescriptions read endpoints, and tenant isolation.
 """
 
+import asyncio
 import uuid
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.security import hash_password
 from app.models.role import Role
@@ -319,6 +320,180 @@ async def test_laboratory_role_scoped_to_laboratory_orders(client: AsyncClient, 
     # Laboratory role has no access to prescriptions.
     prescriptions_resp = await client.get(f"/api/v1/consultations/{cid}/prescriptions", headers=lab_headers)
     assert prescriptions_resp.status_code == 403
+
+
+# --- Atomic order creation / partial-order-state regression tests ---
+#
+# Regression coverage for the bug where `ClinicalOrdersService.create_order()`
+# committed the parent `Order` in its own transaction BEFORE creating the
+# Laboratory/Vaccination-category child record in a SEPARATE follow-up
+# commit. Any failure in that follow-up step (most concretely: the shared
+# daily order-number counter's first-of-day race, see
+# `clinical_number_generator.py`) could leave a durably committed `Order`
+# with no matching `LaboratoryOrder` - the doctor saw the Order after a
+# refresh, but the Laboratory Technician's worklist correctly showed
+# nothing, because the row genuinely never existed. NOTE: because this
+# test file's `client` fixture overrides `get_db` to hand out the shared
+# `db_session` directly (no automatic commit/rollback wrapper like the
+# real `get_session()` dependency provides in production), a request that
+# fails mid-transaction leaves `db_session` sitting on that same aborted/
+# uncommitted transaction until we explicitly roll it back - exactly what
+# `get_session()` would have done automatically for a real client.
+
+async def test_laboratory_order_creation_creates_both_order_and_laboratory_order(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The core "no split state" invariant this fix guarantees: a
+    successful Laboratory order creation always produces BOTH rows
+    together - the generic Order (what the doctor's Orders tab reads) and
+    the LaboratoryOrder (what the Laboratory Technician's worklist
+    reads)."""
+    _clinic, _owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    resp = await client.post(
+        f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+        json={"order_category": "Laboratory", "items": [{"item_name": "CBC"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    order = resp.json()
+
+    visit_orders = await client.get(f"/api/v1/visits/{visit_id}/orders", headers=doc_headers)
+    assert any(o["id"] == order["id"] for o in visit_orders.json()), "parent Order must exist"
+
+    lab_orders = await client.get("/api/v1/laboratory/orders", headers=doc_headers, params={"visit_id": visit_id})
+    assert any(lo["order_id"] == order["id"] for lo in lab_orders.json()), "LaboratoryOrder child must exist alongside it"
+
+
+async def test_forced_failure_in_laboratory_child_creation_rolls_back_parent_order(
+    client: AsyncClient, make_clinic_with_owner, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If anything fails while creating the Laboratory-specific child
+    record, the parent Order must NOT survive as an orphan - this is the
+    exact split state (Order committed, LaboratoryOrder missing) the bug
+    produced. Forces the failure via `LaboratoryService.create_from_order`
+    itself so the test doesn't depend on any particular trigger (e.g. the
+    counter race, covered separately below) actually firing."""
+    _clinic, _owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    from app.services.laboratory_service import LaboratoryService
+
+    async def _boom(self, order, *, clinic_id, actor_id):
+        raise RuntimeError("simulated failure creating the LaboratoryOrder child record")
+
+    monkeypatch.setattr(LaboratoryService, "create_from_order", _boom)
+
+    # httpx's `ASGITransport` re-raises unhandled app exceptions to the
+    # caller by default (`raise_app_exceptions=True`) instead of only
+    # returning the clean 500 `JSONResponse` a real deployed server would
+    # send - so the failure surfaces here as a raised exception, not a
+    # response with `status_code == 500`.
+    with pytest.raises(RuntimeError, match="simulated failure creating the LaboratoryOrder child record"):
+        await client.post(
+            f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+            json={"order_category": "Laboratory", "items": [{"item_name": "CBC"}]},
+        )
+
+    # Simulates the automatic rollback the real `get_session()` dependency
+    # performs on an unhandled exception - see module-level note above.
+    await db_session.rollback()
+    monkeypatch.undo()
+
+    visit_orders = await client.get(f"/api/v1/visits/{visit_id}/orders", headers=doc_headers)
+    assert visit_orders.json() == [], "the parent Order must not survive when the child creation failed"
+
+    lab_orders = await client.get("/api/v1/laboratory/orders", headers=doc_headers, params={"visit_id": visit_id})
+    assert lab_orders.json() == []
+
+
+async def test_non_laboratory_order_categories_remain_atomic_on_unrelated_failure(
+    client: AsyncClient, make_clinic_with_owner, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The transaction-boundary fix isn't Laboratory-specific: forcing a
+    failure in a step every category goes through (the timeline event,
+    written before the Laboratory/Vaccination branch even runs) must roll
+    back a Radiology order just as completely as a Laboratory one - no
+    special-casing by category."""
+    _clinic, _owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    from app.repositories.visit_repository import VisitRepository
+
+    async def _boom(self, **kwargs):
+        raise RuntimeError("simulated failure recording the timeline event")
+
+    monkeypatch.setattr(VisitRepository, "add_timeline_event", _boom)
+
+    # See the note in `test_forced_failure_in_laboratory_child_creation_rolls_back_parent_order`
+    # on why this surfaces as a raised exception rather than a 500 response.
+    with pytest.raises(RuntimeError, match="simulated failure recording the timeline event"):
+        await client.post(
+            f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+            json={"order_category": "Radiology", "items": [{"item_name": "Chest X-Ray"}]},
+        )
+
+    await db_session.rollback()
+    monkeypatch.undo()
+
+    visit_orders = await client.get(f"/api/v1/visits/{visit_id}/orders", headers=doc_headers)
+    assert visit_orders.json() == [], "a non-Laboratory order must roll back completely too, not just the Order row"
+
+
+async def test_sync_queue_payload_failure_does_not_turn_success_into_500(
+    client: AsyncClient, make_clinic_with_owner, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sync_queue_service.enqueue_lazy()`'s whole point: a payload-
+    construction failure (e.g. `build_sync_payload()` raising) must never
+    turn an already-committed, fully successful order creation into a 500
+    - the create already committed before this step even runs."""
+    _clinic, _owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    from app.services import laboratory_service
+
+    def _boom(lab_order):
+        raise RuntimeError("simulated sync-payload serialization failure")
+
+    monkeypatch.setattr(laboratory_service, "build_sync_payload", _boom)
+
+    resp = await client.post(
+        f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+        json={"order_category": "Laboratory", "items": [{"item_name": "CBC"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    order = resp.json()
+
+    lab_orders = await client.get("/api/v1/laboratory/orders", headers=doc_headers, params={"visit_id": visit_id})
+    assert any(lo["order_id"] == order["id"] for lo in lab_orders.json()), (
+        "the LaboratoryOrder must still exist - only the best-effort sync-queue enqueue failed"
+    )
+
+
+async def test_order_number_counter_concurrent_first_of_day_creation_is_race_safe(
+    engine, make_clinic_with_owner
+) -> None:
+    """Regression test for the shared daily counter's first-of-day race
+    (BUG-013's own writeup explicitly flagged this shared Order/
+    Prescription counter as left unfixed: "the shared Phase 9 counter
+    implementation itself (also used by Orders/Prescriptions) was not
+    touched"). Fires N genuinely concurrent `OrderNumberGenerator
+    .next_number()` calls - each its own independent AsyncSession/
+    connection/transaction via `asyncio.gather` - for a brand-new clinic
+    with no counter row yet for today. All must succeed with distinct,
+    gap-free numbers; none may surface a raw IntegrityError/500."""
+    clinic, _owner, _password = await make_clinic_with_owner()
+    clinic_id = clinic.id
+
+    from app.services.clinical_number_generator import OrderNumberGenerator
+
+    session_maker = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+
+    async def _issue_one() -> str:
+        async with session_maker() as session:
+            number = await OrderNumberGenerator(session).next_number(clinic_id)
+            await session.commit()
+            return number
+
+    results = await asyncio.gather(*(_issue_one() for _ in range(20)))
+    assert len(results) == len(set(results)) == 20, f"expected 20 unique order numbers, got: {results}"
+    assert sorted(results) == [f"ORD-{results[0].split('-')[1]}-{str(i).zfill(6)}" for i in range(1, 21)]
 
 
 # --- Read endpoints ---

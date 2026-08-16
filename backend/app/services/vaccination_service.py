@@ -31,6 +31,14 @@ def _to_read(record: VaccinationAdministration) -> VaccinationAdministrationRead
     return read
 
 
+def build_sync_payload(record: VaccinationAdministration) -> dict:
+    """Sync-queue JSON payload for a vaccination administration record,
+    mirroring `laboratory_service.py::build_sync_payload` - shared by any
+    caller that commits the record itself and enqueues the sync job
+    afterward (see `ClinicalOrdersService.create_order`)."""
+    return _to_read(record).model_dump(mode="json")
+
+
 class VaccinationService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -43,26 +51,23 @@ class VaccinationService:
     async def create_from_order(self, order: Order, *, clinic_id: UUID, actor_id: UUID | None) -> VaccinationAdministration:
         """Idempotent: if a vaccination_administrations row already exists
         for this order, returns the existing one - mirrors
-        `LaboratoryService.create_from_order`'s idempotency guarantee."""
+        `LaboratoryService.create_from_order`'s idempotency guarantee.
+
+        Deliberately does NOT commit and does NOT enqueue a sync job - see
+        `LaboratoryService.create_from_order`'s docstring for the full
+        rationale. This mirrors that same atomicity fix so a
+        Vaccination-category Order can never end up committed with its
+        `VaccinationAdministration` child missing."""
         existing = await self.repo.get_by_order_id(order.id, clinic_id)
         if existing is not None:
             return existing
 
         vaccine_name = order.items[0].item_name if order.items else "Vaccination"
-        record = await self.repo.create(
+        return await self.repo.create(
             clinic_id=clinic_id, order_id=order.id, branch_id=order.branch_id, visit_id=order.visit_id,
             patient_id=order.patient_id, doctor_id=order.doctor_id, vaccine_name=vaccine_name,
             status=VaccinationStatus.REQUESTED,
         )
-        await self.session.commit()
-        refreshed = await self.repo.get_by_id(record.id, clinic_id)
-        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
-        # affects this already-committed create (see sync_queue_service.py).
-        await sync_queue_service.enqueue(
-            entity_type="vaccination_administration", record_id=refreshed.id, operation="create",
-            payload=_to_read(refreshed).model_dump(mode="json"), clinic_id=clinic_id,
-        )
-        return refreshed
 
     # --- Reads ---
 
@@ -113,9 +118,9 @@ class VaccinationService:
         await self.session.commit()
         refreshed = await self.repo.get_by_id(record.id, clinic_id)
         read = _to_read(refreshed)
-        await sync_queue_service.enqueue(
+        await sync_queue_service.enqueue_lazy(
             entity_type="vaccination_administration", record_id=refreshed.id, operation="update",
-            payload=read.model_dump(mode="json"), clinic_id=clinic_id,
+            clinic_id=clinic_id, build_payload=lambda: read.model_dump(mode="json"),
         )
         return read
 

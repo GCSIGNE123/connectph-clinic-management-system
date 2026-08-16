@@ -120,27 +120,64 @@ class ClinicalOrdersService:
             clinic_id=clinic_id, user_id=actor_id, action="clinical_orders.order_created",
             entity_type="order", entity_id=str(order.id), metadata={"order_number": order_number},
         )
-        await self.session.commit()
 
-        # Phase 10: a Laboratory-category order automatically gets its own
-        # `laboratory_orders` workflow record attached, so it shows up on
-        # the Laboratory Dashboard immediately with no extra step for the
-        # doctor. See `services/laboratory_service.py::create_from_order`
-        # for the full design rationale (separate table vs. extending
-        # `orders` in place).
+        # Phase 10 / Post-RC1: a Laboratory- or Vaccination-category order
+        # automatically gets its own category-specific workflow record
+        # attached, so it shows up on that module's dashboard immediately
+        # with no extra step for the doctor. See
+        # `services/laboratory_service.py::create_from_order` for the full
+        # design rationale (separate table vs. extending `orders` in
+        # place).
+        #
+        # Created here, in the SAME uncommitted transaction as the Order
+        # above, and committed together in the single `session.commit()`
+        # below. Previously each of these ran its OWN follow-up
+        # `session.commit()` after the Order's own (earlier) commit had
+        # already happened - so any failure in the follow-up step (e.g.
+        # the daily order-number counter's first-of-day race, now fixed in
+        # `clinical_number_generator.py`, or any other error) could leave
+        # a durably committed `Order` with no matching
+        # `LaboratoryOrder`/`VaccinationAdministration` row: the doctor saw
+        # the Order after a refresh, but the Laboratory Technician's
+        # worklist (or the Vaccination dashboard) correctly showed
+        # nothing, because that row genuinely never existed. A single
+        # commit for the whole operation means any failure anywhere above
+        # rolls back everything - the Order included - instead of leaving
+        # this split state.
+        lab_order = None
+        vaccination_record = None
         if payload.order_category == OrderCategory.LABORATORY:
             from app.services.laboratory_service import LaboratoryService
 
-            await LaboratoryService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
+            lab_order = await LaboratoryService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
 
-        # Post-RC1: a Vaccination-category order automatically gets its own
-        # `vaccination_administrations` workflow record, so it shows up on
-        # the Vaccination Dashboard immediately - same pattern as Laboratory
-        # above, see `services/vaccination_service.py` for the design.
         if payload.order_category == OrderCategory.VACCINATION:
             from app.services.vaccination_service import VaccinationService
 
-            await VaccinationService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
+            vaccination_record = await VaccinationService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
+
+        await self.session.commit()
+
+        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
+        # affects this already-committed create (see sync_queue_service.py).
+        # Enqueued only AFTER the commit above has actually succeeded, and
+        # via `enqueue_lazy` so a payload-serialization failure can't turn
+        # this already-successful create into a 500 either (see
+        # `sync_queue_service.enqueue_lazy`'s docstring).
+        if lab_order is not None:
+            from app.services.laboratory_service import build_sync_payload as build_lab_sync_payload
+
+            await sync_queue_service.enqueue_lazy(
+                entity_type="laboratory_order", record_id=lab_order.id, operation="create",
+                clinic_id=clinic_id, build_payload=lambda: build_lab_sync_payload(lab_order),
+            )
+        if vaccination_record is not None:
+            from app.services.vaccination_service import build_sync_payload as build_vaccination_sync_payload
+
+            await sync_queue_service.enqueue_lazy(
+                entity_type="vaccination_administration", record_id=vaccination_record.id, operation="create",
+                clinic_id=clinic_id, build_payload=lambda: build_vaccination_sync_payload(vaccination_record),
+            )
 
         return OrderRead.model_validate(order)
 
@@ -277,9 +314,9 @@ class ClinicalOrdersService:
         read = PrescriptionRead.model_validate(prescription)
         # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
         # affects this already-committed create (see sync_queue_service.py).
-        await sync_queue_service.enqueue(
+        await sync_queue_service.enqueue_lazy(
             entity_type="prescription", record_id=prescription.id, operation="create",
-            payload=read.model_dump(mode="json"), clinic_id=clinic_id,
+            clinic_id=clinic_id, build_payload=lambda: read.model_dump(mode="json"),
         )
         return PrescriptionCreateResponse(prescription=read, warnings=warnings)
 

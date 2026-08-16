@@ -120,6 +120,15 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
     )
 
 
+def build_sync_payload(lab_order: LaboratoryOrder) -> dict:
+    """Sync-queue JSON payload for a laboratory order, shared by any caller
+    that commits a `LaboratoryOrder` itself and enqueues the sync job
+    afterward (see `ClinicalOrdersService.create_order`, which calls this
+    via `sync_queue_service.enqueue_lazy` only AFTER its own commit has
+    succeeded) - keeps the field mapping in exactly one place (`_to_read`)."""
+    return _to_read(lab_order).model_dump(mode="json")
+
+
 class LaboratoryService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -172,7 +181,21 @@ class LaboratoryService:
         """Idempotent: if a laboratory_orders row already exists for this
         order (e.g. called twice), returns the existing one rather than
         raising or duplicating - mirrors the invoice auto-creation
-        idempotency pattern used across the app."""
+        idempotency pattern used across the app.
+
+        Deliberately does NOT commit and does NOT enqueue a sync job -
+        this is always invoked from `ClinicalOrdersService.create_order()`
+        while the parent `Order` is still in the SAME uncommitted
+        transaction. The caller commits both rows together in one
+        `session.commit()` and enqueues the sync job (via
+        `build_sync_payload` below) only after that single commit
+        succeeds. Previously this method committed independently, which
+        meant a failure anywhere between the `Order`'s own (earlier)
+        commit and this row's commit - e.g. the daily order-number
+        counter's first-of-day race - could leave a committed `Order`
+        with no matching `LaboratoryOrder`: the doctor saw the Order after
+        a refresh, but the Laboratory Technician's worklist correctly
+        showed nothing, because the row genuinely never existed."""
         existing = await self.repo.get_by_order_id(order.id, clinic_id)
         if existing is not None:
             return existing
@@ -189,20 +212,11 @@ class LaboratoryService:
                 template_id = t.id
                 break
 
-        lab_order = await self.repo.create_laboratory_order(
+        return await self.repo.create_laboratory_order(
             clinic_id=clinic_id, order_id=order.id, branch_id=order.branch_id, visit_id=order.visit_id,
             patient_id=order.patient_id, doctor_id=order.doctor_id, template_id=template_id, test_type=test_type,
             status=LaboratoryOrderStatus.REQUESTED,
         )
-        await self.session.commit()
-        refreshed = await self.repo.get_by_id(lab_order.id, clinic_id)
-        # Post-RC1 Phase 2 Milestone 2: Cloud Backup - best-effort, never
-        # affects this already-committed create (see sync_queue_service.py).
-        await sync_queue_service.enqueue(
-            entity_type="laboratory_order", record_id=refreshed.id, operation="create",
-            payload=_to_read(refreshed).model_dump(mode="json"), clinic_id=clinic_id,
-        )
-        return refreshed
 
     # --- Reads ---
 
@@ -321,9 +335,9 @@ class LaboratoryService:
         await self.session.commit()
 
         result_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
-        await sync_queue_service.enqueue(
+        await sync_queue_service.enqueue_lazy(
             entity_type="laboratory_result", record_id=laboratory_order_id, operation="update",
-            payload=result_read.model_dump(mode="json"), clinic_id=clinic_id,
+            clinic_id=clinic_id, build_payload=lambda: result_read.model_dump(mode="json"),
         )
 
         # Billing integration - fires once the order first reaches Completed.
@@ -348,9 +362,9 @@ class LaboratoryService:
         )
         await self.session.commit()
         released_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
-        await sync_queue_service.enqueue(
+        await sync_queue_service.enqueue_lazy(
             entity_type="laboratory_order", record_id=laboratory_order_id, operation="update",
-            payload=released_read.model_dump(mode="json"), clinic_id=clinic_id,
+            clinic_id=clinic_id, build_payload=lambda: released_read.model_dump(mode="json"),
         )
         return released_read
 
