@@ -21,8 +21,31 @@ interface Row {
   referenceNumber: string;
 }
 
+/**
+ * BUG-040: was `crypto.randomUUID()`, called unconditionally from this
+ * dialog's `useState` initializer - which runs the moment
+ * `InvoiceDetailPage` mounts `<PaymentDialog>`, regardless of `open`
+ * (every invoice-detail dialog is always mounted, just hidden). The Web
+ * Crypto API only exposes `randomUUID()` in a secure context (`https:`,
+ * or `http://localhost`) - this app's production deployment
+ * (`docker/docker-compose.prod.yml`'s default `NEXT_PUBLIC_API_URL`,
+ * `http://<LAN IP>:8000`) serves the frontend over plain HTTP at a LAN
+ * IP, which the browser does NOT treat as secure, so `crypto.randomUUID`
+ * is `undefined` there - calling it threw a render-time `TypeError` on
+ * every single invoice-detail page load, caught by the root error
+ * boundary as the generic "Something went wrong". This `id` is only ever
+ * used as a local React list key for split-payment rows (never sent to
+ * the backend), so it doesn't need cryptographic randomness - a small
+ * context-independent generator is the correct fix, not a workaround.
+ */
+let localRowIdCounter = 0;
+function nextLocalRowId(): string {
+  localRowIdCounter += 1;
+  return `payment-row-${Date.now().toString(36)}-${localRowIdCounter}`;
+}
+
 function newRow(amount = ""): Row {
-  return { id: crypto.randomUUID(), paymentMethod: "Cash", amount, referenceNumber: "" };
+  return { id: nextLocalRowId(), paymentMethod: "Cash", amount, referenceNumber: "" };
 }
 
 export function PaymentDialog({
