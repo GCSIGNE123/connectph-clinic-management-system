@@ -42,6 +42,20 @@ export interface ButtonProps
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, isLoading = false, children, disabled, ...props }, ref) => {
     const Comp = asChild ? Slot : "button";
+    // `Slot` (see `components/ui/slot.tsx`) only clones a SINGLE valid
+    // React element - passing it two children (the conditional loading
+    // spinner alongside `children`) turns its `children` prop into an
+    // array, `React.isValidElement` on that array is false, and Slot
+    // silently renders nothing at all. `asChild` callers own their own
+    // child element already, so skip the spinner injection there instead
+    // of breaking every `asChild` usage.
+    if (asChild) {
+      return (
+        <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props}>
+          {children}
+        </Comp>
+      );
+    }
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
