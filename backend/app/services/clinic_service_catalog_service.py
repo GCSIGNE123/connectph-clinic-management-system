@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.clinic_service import DEFAULT_SERVICES, ClinicService
@@ -32,7 +33,17 @@ class ClinicServiceCatalogService:
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service code already in use")
 
-        service = await self.repo.create(clinic_id=clinic_id, **payload.model_dump())
+        # The check above has a race window - two concurrent creates for the
+        # same code (e.g. overlapping CSV imports) can both pass it before
+        # either commits. The database's unique constraint is the real
+        # guard; without this catch, the second request's flush raises an
+        # unhandled IntegrityError that crashes the connection instead of
+        # returning the same clean 409 the pre-check already promises.
+        try:
+            service = await self.repo.create(clinic_id=clinic_id, **payload.model_dump())
+        except IntegrityError:
+            await self.session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service code already in use") from None
         await self.audit_service.log_event(
             clinic_id=clinic_id, user_id=actor.id, action="service.created",
             entity_type="service", entity_id=str(service.id),
@@ -48,7 +59,11 @@ class ClinicServiceCatalogService:
             if existing is not None and existing.id != service_id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service code already in use")
 
-        service = await self.repo.update(service, **updates)
+        try:
+            service = await self.repo.update(service, **updates)
+        except IntegrityError:
+            await self.session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service code already in use") from None
         await self.audit_service.log_event(
             clinic_id=clinic_id, user_id=actor.id, action="service.updated",
             entity_type="service", entity_id=str(service_id), metadata={"fields": list(updates.keys())},
