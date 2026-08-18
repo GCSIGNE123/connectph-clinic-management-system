@@ -13,6 +13,7 @@ import { useCancelQueue, useChangeQueueStatus, useReannounceQueue } from "@/feat
 import { NewQueueDialog } from "@/features/queue/components/NewQueueDialog";
 import { QueueTable } from "@/features/queue/components/QueueTable";
 import { QueueDetailsDialog } from "@/features/queue/components/QueueDetailsDialog";
+import { EditQueueDialog } from "@/features/queue/components/EditQueueDialog";
 import { QueueSlipDialog } from "@/features/queue/components/QueueSlipDialog";
 import { ReceptionVitalsDialog } from "@/features/consultation/components/ReceptionVitalsDialog";
 import {
@@ -54,6 +55,7 @@ export default function QueuePage() {
 
   const [newQueueOpen, setNewQueueOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
   const [slipId, setSlipId] = useState<string | null>(null);
   // "Save and Print" (ReceptionVitalsDialog) opens the slip dialog with
   // auto-print on; the manual Reprint button and New Queue Ticket's own
@@ -143,6 +145,7 @@ export default function QueuePage() {
           isLoading={isLoading}
           canManage={canManage}
           onView={(item) => setDetailsId(item.id)}
+          onEdit={canManage ? (item) => setEditId(item.id) : undefined}
           onReprint={(item) => {
             setSlipAutoPrint(false);
             setSlipId(item.id);
@@ -166,6 +169,7 @@ export default function QueuePage() {
       />
 
       <QueueDetailsDialog queueId={detailsId} onOpenChange={(open) => !open && setDetailsId(null)} canTransition={canTransition} />
+      <EditQueueDialog queueId={editId} onOpenChange={(open) => !open && setEditId(null)} />
       <QueueSlipDialog
         queueId={slipId}
         autoPrint={slipAutoPrint}

@@ -60,6 +60,55 @@ describe("QueueTable", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
 
+  // Queues must be editable (department/doctor/service/priority/
+  // classification/notes) - see `EditQueueDialog`. `QueueTable` only owns
+  // showing/hiding the Edit action and forwarding the click; the closed-
+  // ticket guard mirrors the backend's own (`QueueService.update_queue`:
+  // "Cannot edit a closed queue ticket").
+  it("shows the Edit action for an open ticket when the user can manage, and calls onEdit", () => {
+    const items = [buildQueue({ status: QueueStatus.Waiting })];
+    let edited: QueueListItem | null = null;
+    render(
+      <QueueTable
+        items={items}
+        isLoading={false}
+        canManage
+        onView={noop}
+        onCancel={noop}
+        onReprint={noop}
+        onEdit={(item) => {
+          edited = item;
+        }}
+      />
+    );
+    const editButton = screen.getByRole("button", { name: "Edit" });
+    editButton.click();
+    expect(edited).not.toBeNull();
+  });
+
+  it("hides the Edit action for Completed/Cancelled tickets even when the user can manage", () => {
+    const items = [
+      buildQueue({ id: "1", status: QueueStatus.Completed }),
+      buildQueue({ id: "2", queueNumber: "A002", status: QueueStatus.Cancelled }),
+    ];
+    render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} onEdit={noop} />);
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("hides the Edit action entirely when the user cannot manage, even for an open ticket", () => {
+    const items = [buildQueue({ status: QueueStatus.Waiting })];
+    render(
+      <QueueTable items={items} isLoading={false} canManage={false} onView={noop} onCancel={noop} onReprint={noop} onEdit={noop} />
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("hides the Edit action when no onEdit handler is provided", () => {
+    const items = [buildQueue({ status: QueueStatus.Waiting })];
+    render(<QueueTable items={items} isLoading={false} canManage onView={noop} onCancel={noop} onReprint={noop} />);
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
   it("shows the YAKAP/Regular classification for each ticket", () => {
     const items = [
       buildQueue({ visitClassification: VisitClassification.Yakap }),

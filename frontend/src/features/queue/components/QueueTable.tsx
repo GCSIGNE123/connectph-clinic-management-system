@@ -15,6 +15,10 @@ export interface QueueTableProps {
   onView: (item: QueueListItem) => void;
   onCancel: (item: QueueListItem) => void;
   onReprint: (item: QueueListItem) => void;
+  /** Opens `EditQueueDialog` for this ticket - only rendered when
+   * `canManage` and the ticket isn't Completed/Cancelled, matching the
+   * backend's own closed-ticket guard (`QueueService.update_queue`). */
+  onEdit?: (item: QueueListItem) => void;
   canManage: boolean;
   /** Phase 20 (items 3-5): show an "Enter Vitals" action (Receptionist/
    * Nurse only) that opens `ReceptionVitalsDialog` for the ticket's visit. */
@@ -70,6 +74,7 @@ export function QueueTable({
   onView,
   onCancel,
   onReprint,
+  onEdit,
   canManage,
   onEnterVitals,
   canTransition,
@@ -168,6 +173,11 @@ export function QueueTable({
                 <Button size="sm" variant="outline" onClick={() => onReprint(item)}>
                   Print
                 </Button>
+                {canManage && onEdit && !["Completed", "Cancelled"].includes(item.status) ? (
+                  <Button size="sm" variant="outline" onClick={() => onEdit(item)}>
+                    Edit
+                  </Button>
+                ) : null}
                 {/* Phase 2.7 (Receptionist Queue Control): the receptionist
                     explicitly picks which Waiting ticket to call next - no
                     automatic YAKAP-first ordering, this button is available
