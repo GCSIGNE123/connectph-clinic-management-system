@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Camera } from "lucide-react";
+import { ArrowLeft, Camera, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
@@ -20,6 +20,7 @@ import { PatientBillingHistory } from "@/features/billing/components/PatientBill
 import { PatientPrescriptionsHistory } from "@/features/clinical-orders/components/PatientPrescriptionsHistory";
 import { PatientLaboratoryHistory } from "@/features/laboratory/components/PatientLaboratoryHistory";
 import { PatientAppointmentsHistory } from "@/features/appointments/components/PatientAppointmentsHistory";
+import { PatientFormDialog } from "@/features/patients/components/PatientFormDialog";
 import { formatDate } from "@/lib/utils";
 
 const TABS = [
@@ -49,6 +50,7 @@ export default function PatientProfilePage() {
 
   const { data: patient, isLoading } = usePatient(patientId);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [editOpen, setEditOpen] = useState(false);
   const { data: qr } = usePatientQr(patientId, { enabled: activeTab === "overview" });
   const uploadPhoto = useUploadPatientPhoto(patientId);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +88,13 @@ export default function PatientProfilePage() {
         >
           {patient.status}
         </Badge>
+        <Button type="button" variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <Pencil className="h-4 w-4" aria-hidden="true" />
+          Edit
+        </Button>
       </div>
+
+      <PatientFormDialog open={editOpen} onOpenChange={setEditOpen} patient={patient} />
 
       <div className="flex flex-wrap gap-1 border-b border-border" role="tablist">
         {TABS.map((tab) => (
