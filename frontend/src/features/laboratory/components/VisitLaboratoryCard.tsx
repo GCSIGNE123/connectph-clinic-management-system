@@ -40,7 +40,7 @@ export function VisitLaboratoryCard({ visitId }: { visitId: string }) {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span>
-                    <span className="font-mono text-xs text-muted-foreground">{lo.orderNumber}</span> {lo.testType}
+                    <span className="font-mono text-xs text-muted-foreground">{lo.orderNumber ?? "-"}</span> {lo.testType}
                   </span>
                   <span className="flex items-center gap-2">
                     <LaboratoryStatusBadge status={lo.status} />

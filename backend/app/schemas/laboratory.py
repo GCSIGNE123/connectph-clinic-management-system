@@ -180,7 +180,9 @@ class LaboratoryOrderRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    order_id: UUID
+    # None for a walk-in Laboratory queue ticket with no linked Order - see
+    # `LaboratoryService.create_from_queue_ticket`.
+    order_id: UUID | None = None
     order_number: str | None = None
     visit_id: UUID
     visit_number: str | None = None

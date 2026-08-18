@@ -35,7 +35,12 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
   }
 
   if (orders.length === 0) {
-    return <EmptyState title="No laboratory orders" description="Orders created by doctors will appear here." />;
+    return (
+      <EmptyState
+        title="No laboratory orders"
+        description="Orders placed by doctors, and walk-in Laboratory queue tickets, will appear here."
+      />
+    );
   }
 
   return (

@@ -77,7 +77,8 @@ export interface LaboratoryAttachment {
 
 export interface LaboratoryOrder {
   id: string;
-  orderId: string;
+  // null for a walk-in Laboratory queue ticket with no linked Order.
+  orderId: string | null;
   orderNumber: string | null;
   visitId: string;
   visitNumber: string | null;

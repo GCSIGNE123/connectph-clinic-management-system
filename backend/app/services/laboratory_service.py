@@ -158,7 +158,10 @@ class LaboratoryService:
         Order's current status (e.g. it was independently cancelled) -
         `laboratory_orders.status` stays the source of truth for the lab
         workflow either way, same guarding philosophy as the Phase 7
-        Queue<->Visit sync helper."""
+        Queue<->Visit sync helper. No-ops for a walk-in lab order (no
+        `order_id` at all - see `create_from_queue_ticket`)."""
+        if lab_order.order_id is None:
+            return
         order = await self.orders_repo.get_order(lab_order.order_id, clinic_id)
         if order is None:
             return
@@ -225,6 +228,43 @@ class LaboratoryService:
         return await self.repo.create_laboratory_order(
             clinic_id=clinic_id, order_id=order.id, branch_id=order.branch_id, visit_id=order.visit_id,
             patient_id=order.patient_id, doctor_id=order.doctor_id, template_id=template_id, test_type=test_type,
+            status=LaboratoryOrderStatus.REQUESTED,
+        )
+
+    async def create_from_queue_ticket(
+        self, *, visit_id: UUID, branch_id: UUID, patient_id: UUID, service_name: str, clinic_id: UUID
+    ) -> LaboratoryOrder:
+        """Walk-in lab order: a Reception queue ticket created directly for
+        the Laboratory department (no doctor, no consultation - so no
+        Phase 9 Order for `create_from_order` above to attach to) creates a
+        LaboratoryOrder for the queue's selected service, best-effort
+        linked to an active template by exact name match - the same
+        matching `create_from_order` already does for a doctor's free-text
+        order item. Called from `QueueService.create_queue` in the same
+        transaction as the queue ticket/visit themselves - not committed or
+        sync-enqueued here, mirroring `create_from_order`'s own contract
+        (see BUG-038: a lab order half-created outside its parent's
+        transaction is exactly the "Order committed, LaboratoryOrder
+        never existed" failure mode that fix closed).
+
+        Always creates the LaboratoryOrder once called (the caller already
+        decided this queue ticket is a genuine walk-in lab visit) - the
+        template match below is best-effort linking for pricing/parameters
+        only, exactly like `create_from_order`'s own `template_id = None`
+        fallback, not a precondition for the row existing. A clinic with no
+        Laboratory templates configured yet (a real, observed case) still
+        needs the order to show up on the worklist; it just won't have
+        structured parameters until a template is added and linked."""
+        templates = await self.repo.list_templates(clinic_id, active_only=True)
+        template_id = None
+        for t in templates:
+            if t.test_name.strip().lower() == service_name.strip().lower():
+                template_id = t.id
+                break
+
+        return await self.repo.create_laboratory_order(
+            clinic_id=clinic_id, order_id=None, branch_id=branch_id, visit_id=visit_id,
+            patient_id=patient_id, doctor_id=None, template_id=template_id, test_type=service_name,
             status=LaboratoryOrderStatus.REQUESTED,
         )
 

@@ -351,7 +351,7 @@ class QueueService:
         # either path, and nothing partial gets created.
         await enforce_receptionist_open_shift(self.session, clinic_id=clinic_id, actor_id=actor.id)
 
-        _patient, _department, _doctor, service = await self._validate_and_fetch_entities(
+        _patient, department, _doctor, service = await self._validate_and_fetch_entities(
             clinic_id,
             patient_id=payload.patient_id,
             department_id=payload.department_id,
@@ -451,6 +451,31 @@ class QueueService:
         )
         queue = await self.repo.update(queue, visit_id=visit.id)
 
+        # Walk-in lab order: a queue ticket with no doctor has no Phase 9
+        # consultation/Order to place a lab order through, so this is the
+        # only place a LaboratoryOrder can originate for it - see
+        # `LaboratoryService.create_from_queue_ticket`. Gated on the
+        # department's NAME, not `department.department_code == "LAB"`
+        # (the convention the vitals-exemption check below uses) - that
+        # code is only the *seeded* default department's code, and a
+        # clinic that created its own departments manually (a real,
+        # observed case: Laboratory named "Laboratory" but coded "D03")
+        # would never match it, silently breaking this for exactly the
+        # clinics that most need it. Deferred import to avoid a circular
+        # import (LaboratoryService itself constructs a QueueService).
+        # Created in this SAME transaction, before the one commit below -
+        # same lesson as BUG-038: creating it after an independent commit
+        # risks a committed queue ticket with no matching lab order if
+        # anything failed in between.
+        lab_order = None
+        if payload.doctor_id is None and department.name.strip().lower() == "laboratory":
+            from app.services.laboratory_service import LaboratoryService
+
+            lab_order = await LaboratoryService(self.session).create_from_queue_ticket(
+                visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
+                service_name=service.service_name, clinic_id=clinic_id,
+            )
+
         await self.session.commit()
 
         detail = await self.get_detail(queue.id, clinic_id=clinic_id)
@@ -464,6 +489,13 @@ class QueueService:
             payload={"visit_id": str(visit.id), "queue_id": str(queue.id)},
             clinic_id=clinic_id,
         )
+        if lab_order is not None:
+            from app.services.laboratory_service import build_sync_payload
+
+            await sync_queue_service.enqueue(
+                entity_type="laboratory_order", record_id=lab_order.id, operation="create",
+                payload=build_sync_payload(lab_order), clinic_id=clinic_id,
+            )
         return detail
 
     async def search(self, *, clinic_id: UUID, params: QueueSearchParams) -> tuple[list[QueueListItem], int]:

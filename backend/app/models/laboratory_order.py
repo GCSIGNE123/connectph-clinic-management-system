@@ -51,8 +51,12 @@ LABORATORY_ORDER_STATUS_TRANSITIONS: dict[LaboratoryOrderStatus, set[LaboratoryO
 class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin, LegacyMixin, Base):
     __tablename__ = "laboratory_orders"
 
-    order_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    # Nullable: a walk-in Laboratory-department queue ticket (no doctor, no
+    # consultation) has no Phase 9 `orders` row to attach to - see
+    # `LaboratoryService.create_from_queue_ticket`. Every doctor-placed lab
+    # order still gets one via `create_from_order`, unchanged.
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
     )
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
     visit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -77,7 +81,7 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
         UUID(as_uuid=True), ForeignKey("invoice_items.id", ondelete="SET NULL"), nullable=True
     )
 
-    order: Mapped["Order"] = relationship()
+    order: Mapped["Order | None"] = relationship()
     visit: Mapped["Visit"] = relationship()
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["Doctor"] = relationship()
