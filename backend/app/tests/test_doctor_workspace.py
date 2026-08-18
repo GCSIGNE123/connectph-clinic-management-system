@@ -543,3 +543,150 @@ async def test_avg_consultation_seconds_not_lost_across_db_timezone_date_boundar
         "Asia/Kuala_Lumpur) was excluded from the UTC-date average - the date comparison "
         "is not timezone-consistent."
     )
+
+
+# --- Doctor Workspace queue: newest-first ordering + "currently called" header value ---
+# The queue previously ordered oldest-arrival-first, inconsistent with
+# Reception Queue's own `Queue.created_at DESC` default - see
+# `DoctorWorkspaceRepository.today_visits_for_doctor`.
+
+async def test_doctor_queue_returns_newest_created_first(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+
+    # Three separate patients queued for the same doctor, in order - the
+    # queue's own sequential numbering (A001 < A002 < A003) doubles as an
+    # unambiguous creation-order signal for this assertion.
+    numbers = []
+    for i in range(3):
+        patient = (
+            await client.post(
+                "/api/v1/patients", headers=owner_headers,
+                json={
+                    "first_name": f"Patient{i}", "last_name": "Test", "birth_date": "1990-01-01",
+                    "gender": "Male", "civil_status": "Single", "mobile_number": f"+63917000000{i}",
+                },
+            )
+        ).json()["patient"]
+        queue = await _create_visit(client, owner_headers, {**deps, "patient_id": patient["id"]})
+        numbers.append(queue["queue_number"])
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    resp = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [i["queue_number"] for i in items] == list(reversed(numbers)), (
+        "Doctor Workspace queue is not newest-created-first, inconsistent with Reception Queue"
+    )
+
+
+async def test_doctor_queue_newest_first_ordering_is_not_a_client_side_reverse(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Confirms the ordering is a real `ORDER BY ... DESC` applied server-
+    side (before any pagination/limit could exist), not merely "reverse
+    whatever page the client happened to fetch" - by checking the same
+    invariant holds for a larger set than any single UI page would show."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+
+    numbers = []
+    for i in range(12):
+        patient = (
+            await client.post(
+                "/api/v1/patients", headers=owner_headers,
+                json={
+                    "first_name": f"Bulk{i}", "last_name": "Test", "birth_date": "1990-01-01",
+                    "gender": "Female", "civil_status": "Single", "mobile_number": f"+63918000{i:04d}",
+                },
+            )
+        ).json()["patient"]
+        queue = await _create_visit(client, owner_headers, {**deps, "patient_id": patient["id"]})
+        numbers.append(queue["queue_number"])
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    resp = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    items = resp.json()["items"]
+    assert [i["queue_number"] for i in items] == list(reversed(numbers))
+
+
+async def test_currently_called_visit_is_identifiable_by_status_in_queue_response(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The frontend header's "Called-in #" is derived from this same
+    `/queue` response (whichever item has `status == "Called"`) - not a
+    second endpoint/field - so this proves the data needed for that is
+    correct and unambiguous: exactly one Called item, carrying the real
+    queue_number, everything else left in its own status."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = await _create_visit(client, owner_headers, deps)
+    visit_id = queue["visit_id"]
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    # No one called yet.
+    resp = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    items = resp.json()["items"]
+    assert not any(i["status"] == "Called" for i in items)
+
+    call_resp = await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    assert call_resp.status_code == 200, call_resp.text
+
+    resp2 = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    items2 = resp2.json()["items"]
+    called = [i for i in items2 if i["status"] == "Called"]
+    assert len(called) == 1
+    assert called[0]["queue_number"] == queue["queue_number"]
+    assert called[0]["visit_id"] == visit_id
+
+
+async def test_called_visit_changes_when_a_different_patient_is_called(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Calling a second patient must not leave the first one also showing
+    as Called - the header's derived "Called-in #" must be able to change
+    to the newly-called ticket, not get stuck on the first."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue1 = await _create_visit(client, owner_headers, deps)
+
+    patient2 = (
+        await client.post(
+            "/api/v1/patients", headers=owner_headers,
+            json={
+                "first_name": "Second", "last_name": "Patient", "birth_date": "1992-02-02",
+                "gender": "Female", "civil_status": "Single", "mobile_number": "+639175550002",
+            },
+        )
+    ).json()["patient"]
+    queue2 = await _create_visit(client, owner_headers, {**deps, "patient_id": patient2["id"]})
+
+    doc_email, _ = await _make_doctor_login(db_session, clinic_id=clinic.id, doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "DoctorPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+
+    await client.post(f"/api/v1/doctor-workspace/visits/{queue1['visit_id']}/call", headers=doc_headers)
+    resp1 = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    called1 = [i for i in resp1.json()["items"] if i["status"] == "Called"]
+    assert [c["queue_number"] for c in called1] == [queue1["queue_number"]]
+
+    # Doctor starts the first consultation (moves it off "Called"), then
+    # calls the second patient - the "currently called" ticket must now be
+    # the second one, not the first.
+    await client.post(f"/api/v1/doctor-workspace/visits/{queue1['visit_id']}/start-consultation", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{queue2['visit_id']}/call", headers=doc_headers)
+
+    resp2 = await client.get("/api/v1/doctor-workspace/queue", headers=doc_headers)
+    called2 = [i for i in resp2.json()["items"] if i["status"] == "Called"]
+    assert [c["queue_number"] for c in called2] == [queue2["queue_number"]]

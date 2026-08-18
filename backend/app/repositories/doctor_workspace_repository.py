@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.consultation_session import ConsultationSession, ConsultationSessionStatus
 from app.models.doctor_activity import DoctorActivity, DoctorActivityType
+from app.models.queue import Queue
 from app.models.visit import Visit, VisitStatus
 from app.models.visit_lock import VisitLock
 
@@ -37,9 +38,19 @@ class DoctorWorkspaceRepository:
             filters.append(Visit.doctor_id == doctor_id)
         stmt = (
             select(Visit)
+            .outerjoin(Queue, Queue.id == Visit.queue_id)
             .where(and_(*filters))
             .options(selectinload(Visit.patient), selectinload(Visit.doctor), selectinload(Visit.queue))
-            .order_by(Visit.arrival_time.asc().nulls_last(), Visit.created_at.asc())
+            # Newest-first, matching Reception Queue's own `Queue.created_at
+            # DESC` ordering principle (see `QueueRepository.search`) rather
+            # than the previous oldest-arrival-first order, which put the
+            # newest walk-ins at the bottom of the Doctor Workspace list -
+            # inconsistent with what Reception sees for the same tickets.
+            # A LEFT JOIN (not inner) because `Visit.queue_id` is nullable
+            # (e.g. a legacy/direct visit with no queue ticket at all) -
+            # such a visit falls back to its own `created_at` so it still
+            # sorts into the list instead of being silently dropped.
+            .order_by(func.coalesce(Queue.created_at, Visit.created_at).desc())
         )
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows)

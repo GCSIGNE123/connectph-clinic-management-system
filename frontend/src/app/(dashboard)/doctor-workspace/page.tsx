@@ -51,6 +51,12 @@ export default function DoctorWorkspacePage() {
   const { data: queueItems, isLoading: queueLoading } = useDoctorQueue();
   useDoctorWorkspaceRealtime();
 
+  // The header's "Called-in #" is derived from this same queue list (the
+  // one visit, if any, currently in "Called" status) rather than a second
+  // fetch/field - there's exactly one source of truth for who's currently
+  // called, matching what the queue table itself shows.
+  const calledItem = queueItems?.find((item) => item.status === "Called");
+
   const isReadOnly = currentUser?.role === "Receptionist";
   // Item 14: Doctor Session Control is a Doctor-only self-service action
   // (Owner/Administrator can view any doctor's dashboard via `doctorId`,
@@ -77,14 +83,25 @@ export default function DoctorWorkspacePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">Doctor Workspace</h1>
-        <p className="text-sm text-muted-foreground">
-          {today}
-          {dashboard?.doctorName ? ` · ${dashboard.doctorName}` : ""}
-          {dashboard?.branchName ? ` · ${dashboard.branchName}` : ""}
-          {dashboard?.departmentName ? ` · ${dashboard.departmentName}` : ""}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl font-semibold text-foreground">Doctor Workspace</h1>
+          <p className="text-sm text-muted-foreground">
+            {today}
+            {dashboard?.doctorName ? ` · ${dashboard.doctorName}` : ""}
+            {dashboard?.branchName ? ` · ${dashboard.branchName}` : ""}
+            {dashboard?.departmentName ? ` · ${dashboard.departmentName}` : ""}
+          </p>
+        </div>
+        {!dashboardLoading && !queueLoading ? (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm">
+            <PhoneCall className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            <span className="text-muted-foreground">Called-in #:</span>
+            <span data-testid="called-in-queue-number" className="font-semibold text-foreground">
+              {calledItem?.queueNumber ?? "—"}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {isDoctor ? (
