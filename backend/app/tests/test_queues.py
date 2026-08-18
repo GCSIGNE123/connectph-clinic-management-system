@@ -693,6 +693,33 @@ async def test_queue_slip_succeeds_after_vitals_entered(client: AsyncClient, mak
     assert allowed.json()["vitals_taken"] is True
 
 
+async def test_queue_slip_prints_with_only_one_partial_vital_recorded(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Reception Vitals dialog (Enter Vitals / Chief Complaint) no longer
+    requires every field - a Receptionist/Nurse may save (and print) with
+    only, e.g., Temperature filled in. The slip's print gate must not
+    block on a partial-but-nonempty vitals record; it only stays blocked
+    when the visit's SOAP note has truly nothing recorded (see
+    `test_queue_slip_blocked_without_vitals`). `vitals_taken` still
+    reports `False` for a partial record (unchanged meaning: "complete",
+    not "printable")."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    consultation = (
+        await client.post(f"/api/v1/visits/{created['visit_id']}/consultation/open-for-reception", headers=headers)
+    ).json()
+    saved = await client.put(
+        f"/api/v1/consultations/{consultation['id']}/soap/subjective-objective",
+        headers=headers, json={"temperature": 36.5},
+    )
+    assert saved.status_code == 200, saved.text
+
+    response = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["vitals_taken"] is False
+
+
 async def test_queue_call_and_reannounce(client: AsyncClient, make_clinic_with_owner) -> None:
     """Feature 3: Owner (a role in `QUEUE_TRANSITION_ROLES`) calls a Waiting
     ticket via the existing status-transition endpoint (Waiting -> Called),

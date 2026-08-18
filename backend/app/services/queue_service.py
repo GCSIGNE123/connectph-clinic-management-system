@@ -241,6 +241,29 @@ class QueueService:
             return list(required.values())
         return [label for field, label in required.items() if getattr(soap, field, None) in (None, "")]
 
+    async def _has_any_vitals_or_chief_complaint(self, visit_id: UUID, *, clinic_id: UUID) -> bool:
+        """Reception Vitals dialog (Enter Vitals / Chief Complaint) no longer
+        requires every field - a Receptionist/Nurse may legitimately only
+        have one reading at hand. `get_slip`'s print gate below is relaxed
+        to match: a non-Laboratory ticket may print once AT LEAST ONE vital
+        or the chief complaint has been recorded, not all of
+        `REQUIRED_VITALS_FIELDS`. Queue *creation*'s own, separate
+        "vitals-before-queue" gate (`_missing_required_vitals` in
+        `_create_queue_for_draft_visit`) and the Reception Queue list's
+        `vitals_taken` completeness badge are intentionally untouched -
+        this only relaxes whether printing is BLOCKED outright, not what
+        counts as "fully taken" elsewhere."""
+        required = await self._required_vitals_fields(clinic_id)
+        consultation = await self.consultation_repo.get_latest_for_visit(visit_id, clinic_id)
+        if consultation is None:
+            return False
+        soap = await self.consultation_repo.get_soap(consultation.id, clinic_id)
+        if soap is None:
+            return False
+        if getattr(soap, "chief_complaint", None) not in (None, ""):
+            return True
+        return any(getattr(soap, field, None) not in (None, "") for field in required)
+
     async def _create_queue_for_draft_visit(
         self, payload: QueueCreate, *, clinic_id: UUID, actor: User, service: ClinicService
     ) -> QueueDetail:
@@ -875,7 +898,15 @@ class QueueService:
         if queue.visit_id is not None:
             missing = await self._missing_required_vitals(queue.visit_id, clinic_id=clinic_id)
             if missing:
-                if not is_laboratory_department:
+                # Only fully block printing when NOTHING was recorded at
+                # all - a partial entry (e.g. Temperature only) is enough
+                # to print, matching the Reception Vitals dialog no longer
+                # requiring every field. `missing` still makes this ticket
+                # count as `vitals_taken=False` either way (unchanged: that
+                # flag means "complete", not "printable").
+                if not is_laboratory_department and not await self._has_any_vitals_or_chief_complaint(
+                    queue.visit_id, clinic_id=clinic_id
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Vital signs must be taken before printing the queue ticket.",

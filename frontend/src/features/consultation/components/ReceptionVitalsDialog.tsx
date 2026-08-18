@@ -100,23 +100,18 @@ export function ReceptionVitalsDialog({
       .finally(() => setLoading(false));
   }, [open, visitId]);
 
-  const REQUIRED_FIELDS: Array<[string, string]> = [
-    ["bloodPressure", bloodPressure],
-    ["temperature", temperature],
-    ["pulseRate", pulseRate],
-    ["respiratoryRate", respiratoryRate],
-    ["oxygenSaturation", oxygenSaturation],
-    ["heightCm", heightCm],
-    ["weightKg", weightKg],
-  ];
-
   const handleSaveAndClose = async () => {
     if (!consultationId) return;
-    const missing = REQUIRED_FIELDS.filter(([, v]) => !v).map(([key]) => key);
-    if (missing.length > 0) {
-      setInvalidFields(new Set(missing));
-      setError("Please fill in all required vitals before saving.");
-      fieldRefs.current[missing[0]]?.focus();
+    // All vitals/chief complaint fields are optional - a receptionist/nurse
+    // may legitimately only have one reading at hand (e.g. just a
+    // temperature). Only reject the save if EVERY field is empty, since an
+    // empty note is not a meaningful save.
+    const hasAnyValue = [
+      chiefComplaint, bloodPressure, pulseRate, respiratoryRate,
+      temperature, heightCm, weightKg, oxygenSaturation,
+    ].some((v) => v.trim() !== "");
+    if (!hasAnyValue) {
+      setError("Enter at least one vital sign or chief complaint before saving.");
       return;
     }
     setInvalidFields(new Set());
@@ -177,7 +172,7 @@ export function ReceptionVitalsDialog({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Blood pressure *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Blood pressure</label>
                   <Input
                     ref={(el) => { fieldRefs.current.bloodPressure = el; }}
                     value={bloodPressure}
@@ -187,7 +182,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Pulse rate (bpm) *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Pulse rate (bpm)</label>
                   <Input
                     ref={(el) => { fieldRefs.current.pulseRate = el; }}
                     type="number"
@@ -197,7 +192,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Respiratory rate *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Respiratory rate</label>
                   <Input
                     ref={(el) => { fieldRefs.current.respiratoryRate = el; }}
                     type="number"
@@ -207,7 +202,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Temperature (°C) *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Temperature (°C)</label>
                   <Input
                     ref={(el) => { fieldRefs.current.temperature = el; }}
                     type="number"
@@ -218,7 +213,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Height (cm) *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Height (cm)</label>
                   <Input
                     ref={(el) => { fieldRefs.current.heightCm = el; }}
                     type="number"
@@ -229,7 +224,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Weight (kg) *</label>
+                  <label className="text-xs font-medium text-muted-foreground">Weight (kg)</label>
                   <Input
                     ref={(el) => { fieldRefs.current.weightKg = el; }}
                     type="number"
@@ -240,7 +235,7 @@ export function ReceptionVitalsDialog({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">O2 saturation (%) *</label>
+                  <label className="text-xs font-medium text-muted-foreground">O2 saturation (%)</label>
                   <Input
                     ref={(el) => { fieldRefs.current.oxygenSaturation = el; }}
                     type="number"
