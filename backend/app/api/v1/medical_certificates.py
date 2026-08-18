@@ -10,6 +10,7 @@ doctor's behalf in v1); Receptionist/Cashier are view+reprint only.
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import (
@@ -19,6 +20,7 @@ from app.core.dependencies import (
     require_medical_certificate_edit_role,
     require_medical_certificate_view_role,
 )
+from app.core.doctor_signature_storage import resolve_doctor_signature_path
 from app.models.user import User
 from app.repositories.visit_repository import VisitRepository
 from app.schemas.medical_certificate import (
@@ -175,6 +177,26 @@ async def reissue_medical_certificate(
     can_edit = await _permissions_for_certificate(db, clinic_id, current_user, certificate_id)
     service = MedicalCertificateService(db)
     return await service.reissue(certificate_id, reason=payload.reason, clinic_id=clinic_id, actor_id=current_user.id, can_edit=can_edit)
+
+
+@router.get("/medical-certificates/{certificate_id}/signature/file")
+async def get_medical_certificate_signature_file(
+    certificate_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_medical_certificate_view_role),
+) -> FileResponse:
+    """Serves the SNAPSHOTTED signature captured at `issue()` time, never
+    the doctor's current one - see migration 0036. A reprint of an already-
+    issued certificate must keep showing what was true at issue time."""
+    service = MedicalCertificateService(db)
+    certificate = await service.get(certificate_id, clinic_id=clinic_id)
+    if not certificate.doctor_signature_snapshot_url:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This certificate has no signature.")
+    file_path = resolve_doctor_signature_path(clinic_id, certificate.doctor_id, certificate.doctor_signature_snapshot_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
 
 
 @router.post("/medical-certificates/{certificate_id}/print", response_model=None)

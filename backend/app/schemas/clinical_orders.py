@@ -102,6 +102,7 @@ class ReferralRead(BaseModel):
     notes: str | None = None
     status: OrderStatus
     created_at: datetime
+    doctor_signature_snapshot_url: str | None = None
 
 
 # --- Prescriptions ---
@@ -154,6 +155,7 @@ class PrescriptionRead(BaseModel):
     status: PrescriptionStatus
     created_at: datetime
     items: list[PrescriptionItemRead] = Field(default_factory=list)
+    doctor_signature_snapshot_url: str | None = None
 
 
 class PrescriptionCreateResponse(BaseModel):

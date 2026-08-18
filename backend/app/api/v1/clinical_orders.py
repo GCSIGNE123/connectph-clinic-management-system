@@ -12,6 +12,7 @@ access to Prescriptions/Procedures/Referrals/other-category orders.
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import (
@@ -21,6 +22,7 @@ from app.core.dependencies import (
     require_clinical_orders_edit_role,
     require_clinical_orders_view_role,
 )
+from app.core.doctor_signature_storage import resolve_doctor_signature_path
 from app.models.order import OrderCategory, OrderStatus
 from app.models.user import User
 from app.repositories.visit_repository import VisitRepository
@@ -237,6 +239,50 @@ async def list_patient_prescriptions(
 ) -> list[PrescriptionRead]:
     service = ClinicalOrdersService(db)
     return await service.list_prescriptions_for_patient(patient_id, clinic_id=clinic_id)
+
+
+# --- Doctor E-Signature print integration ---
+#
+# Serves the SNAPSHOTTED signature captured at issuance (`doctor_
+# signature_snapshot_url`), never the doctor's current one - a reprint of
+# an old document must keep showing what was true when it was issued (see
+# migration 0036). Same authenticated, non-public pattern as
+# `doctors.py`'s own signature file endpoint, gated by this document
+# type's own view role rather than doctor-config view role.
+
+
+@router.get("/prescriptions/{prescription_id}/signature/file")
+async def get_prescription_signature_file(
+    prescription_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_clinical_orders_view_role),
+) -> FileResponse:
+    service = ClinicalOrdersService(db)
+    prescription = await service.get_prescription(prescription_id, clinic_id=clinic_id)
+    if not prescription.doctor_signature_snapshot_url or prescription.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This prescription has no signature.")
+    file_path = resolve_doctor_signature_path(clinic_id, prescription.doctor_id, prescription.doctor_signature_snapshot_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
+
+
+@router.get("/referrals/{referral_id}/signature/file")
+async def get_referral_signature_file(
+    referral_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_clinical_orders_view_role),
+) -> FileResponse:
+    service = ClinicalOrdersService(db)
+    referral = await service.get_referral(referral_id, clinic_id=clinic_id)
+    if not referral.doctor_signature_snapshot_url or referral.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This referral has no signature.")
+    file_path = resolve_doctor_signature_path(clinic_id, referral.doctor_id, referral.doctor_signature_snapshot_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
 
 
 # NOTE (Phase 10): the Phase-9 placeholder `GET /laboratory/orders` that

@@ -2,6 +2,7 @@
 
 import { formatDate } from "@/lib/utils";
 import { MEDICAL_CERTIFICATE_TYPE_LABELS, type MedicalCertificate } from "@/features/clinical-orders/types";
+import { DoctorSignatureBlock } from "@/features/clinical-orders/components/DoctorSignatureBlock";
 import type { ClinicSettings } from "@/features/clinic-config/types";
 
 /** The certificate's printable body - shared between `MedicalCertificateTab`
@@ -84,21 +85,21 @@ export function MedicalCertificatePrintContent({
         ) : null}
       </div>
 
-      <div className="pt-10 flex flex-col items-end">
-        <div data-testid="medical-certificate-signature-block" className="w-56 border-t border-foreground text-center text-xs pt-1">
-          {certificate.doctorName ? `Dr. ${certificate.doctorName}` : "Attending Physician"}
-          {/* PRC/PTR always print, even blank - a certificate reads as
-              incomplete/unofficial without these lines present at all, so
-              a doctor with none on file still gets a fillable line rather
-              than the lines silently disappearing (unlike Prescription's
-              print, which omits them entirely when absent). */}
-          <br />PRC License No. {certificate.doctorPrcLicense || "____________________"}
-          <br />PTR No. {certificate.doctorPtrNumber || "____________________"}
-          {clinic?.license_number ?? certificate.clinicLicenseNumber ? (
-            <><br />License No. {clinic?.license_number ?? certificate.clinicLicenseNumber}</>
-          ) : null}
-        </div>
-      </div>
+      {/* PRC/PTR always print, even blank - a certificate reads as
+          incomplete/unofficial without these lines present at all, so a
+          doctor with none on file still gets a fillable line rather than
+          the lines silently disappearing (unlike Prescription's print,
+          which omits them entirely when absent) - see
+          `blankLineWhenMissing` on `DoctorSignatureBlock`. */}
+      <DoctorSignatureBlock
+        doctorName={certificate.doctorName}
+        doctorPrcLicense={certificate.doctorPrcLicense}
+        doctorPtrNumber={certificate.doctorPtrNumber}
+        clinicLicenseNumber={clinic?.license_number ?? certificate.clinicLicenseNumber}
+        signatureFileApiPath={certificate.doctorSignatureSnapshotUrl ? `/medical-certificates/${certificate.id}/signature/file` : null}
+        blankLineWhenMissing
+        testId="medical-certificate-signature-block"
+      />
     </>
   );
 }

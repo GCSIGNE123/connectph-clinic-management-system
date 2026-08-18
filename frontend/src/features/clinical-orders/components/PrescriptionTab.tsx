@@ -13,6 +13,7 @@ import { formatDate } from "@/lib/utils";
 import { useCreatePrescription, usePrescriptionsForConsultation } from "@/features/clinical-orders/hooks/use-clinical-orders";
 import { COMMON_MEDICINES, validatePrescriptionItems, type Prescription, type PrescriptionItemInput } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
+import { DoctorSignatureBlock } from "@/features/clinical-orders/components/DoctorSignatureBlock";
 import type { ClinicSettings } from "@/features/clinic-config/types";
 
 function emptyItem(): PrescriptionItemInput {
@@ -270,14 +271,15 @@ export function PrescriptionTab({
 
             {/* Signature line - a physically-signable area at the bottom of
                 the printed sheet. */}
-            <div className="pt-10 flex flex-col items-end">
-              <div data-testid="prescription-signature-block" className="w-56 border-t border-foreground text-center text-xs pt-1">
-                {doctorName ? `Dr. ${doctorName}` : "Prescribing Physician"}
-                {doctorPrcLicense ? <><br />PRC License No. {doctorPrcLicense}</> : null}
-                {doctorPtrNumber ? <><br />PTR No. {doctorPtrNumber}</> : null}
-                {clinic?.license_number ? <><br />License No. {clinic.license_number}</> : null}
-              </div>
-            </div>
+            <DoctorSignatureBlock
+              doctorName={doctorName}
+              doctorPrcLicense={doctorPrcLicense}
+              doctorPtrNumber={doctorPtrNumber}
+              clinicLicenseNumber={clinic?.license_number}
+              signatureFileApiPath={printRx.doctorSignatureSnapshotUrl ? `/prescriptions/${printRx.id}/signature/file` : null}
+              fallbackLabel="Prescribing Physician"
+              testId="prescription-signature-block"
+            />
           </>
         ) : null}
       </PrintableDocumentDialog>

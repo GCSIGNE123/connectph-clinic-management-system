@@ -410,6 +410,8 @@ export default function ConsultationPage() {
           canEdit={canEdit}
           patientName={consultation.patientName ?? (patient ? `${patient.firstName} ${patient.lastName}` : undefined)}
           doctorName={consultation.doctorName}
+          doctorPrcLicense={consultation.doctorPrcLicense}
+          doctorPtrNumber={consultation.doctorPtrNumber}
           visitNumber={visit.visitNumber}
         />
       ) : null}

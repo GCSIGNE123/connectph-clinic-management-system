@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +10,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
+import { apiClient } from "@/lib/api-client";
 import {
   useCreateOrder, useCreateProcedure, useCreateReferral,
   useOrdersForConsultation, useProceduresForConsultation, useReferralsForConsultation,
@@ -16,6 +18,8 @@ import {
 } from "@/features/clinical-orders/hooks/use-clinical-orders";
 import type { Order, OrderCategory, OrderItemInput, OrderPriority, OrderStatus, Referral } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
+import { DoctorSignatureBlock } from "@/features/clinical-orders/components/DoctorSignatureBlock";
+import type { ClinicSettings } from "@/features/clinic-config/types";
 import { formatDateTime } from "@/lib/utils";
 
 const ORDER_CATEGORIES: OrderCategory[] = ["Laboratory", "Radiology", "Vaccination", "Custom"];
@@ -31,6 +35,8 @@ export function ClinicalOrdersTab({
   canEdit,
   patientName,
   doctorName,
+  doctorPrcLicense,
+  doctorPtrNumber,
   visitNumber,
 }: {
   consultationId: string;
@@ -38,10 +44,19 @@ export function ClinicalOrdersTab({
   canEdit: boolean;
   patientName?: string | null;
   doctorName?: string | null;
+  doctorPrcLicense?: string | null;
+  doctorPtrNumber?: string | null;
   visitNumber?: string | null;
 }) {
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
   const [printReferral, setPrintReferral] = useState<Referral | null>(null);
+  // Doctor E-Signature (Referral previously had no signature block at all)
+  // - same clinic-license-number lookup PrescriptionTab already does.
+  const clinicQuery = useQuery({
+    queryKey: ["clinic-settings"],
+    queryFn: () => apiClient.get<ClinicSettings>("/clinic-settings"),
+  });
+  const clinic = clinicQuery.data;
   const ordersQuery = useOrdersForConsultation(consultationId);
   const proceduresQuery = useProceduresForConsultation(consultationId);
   const referralsQuery = useReferralsForConsultation(consultationId);
@@ -339,6 +354,15 @@ export function ClinicalOrdersTab({
                 <p>{printReferral.notes}</p>
               </div>
             ) : null}
+            <DoctorSignatureBlock
+              doctorName={doctorName}
+              doctorPrcLicense={doctorPrcLicense}
+              doctorPtrNumber={doctorPtrNumber}
+              clinicLicenseNumber={clinic?.license_number}
+              signatureFileApiPath={printReferral.doctorSignatureSnapshotUrl ? `/referrals/${printReferral.id}/signature/file` : null}
+              fallbackLabel="Referring Physician"
+              testId="referral-signature-block"
+            />
           </>
         ) : null}
       </PrintableDocumentDialog>

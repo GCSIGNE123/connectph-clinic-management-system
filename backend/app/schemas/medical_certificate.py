@@ -63,6 +63,7 @@ class MedicalCertificateRead(BaseModel):
     cancelled_reason: str | None = None
     cancelled_by: UUID | None = None
     superseded_by_id: UUID | None = None
+    doctor_signature_snapshot_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

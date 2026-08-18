@@ -69,6 +69,11 @@ export interface MedicalCertificate {
   clinicAddress: string | null;
   clinicLicenseNumber: string | null;
   visitNumber: string | null;
+  // Doctor E-Signature: a SNAPSHOT captured at `issue()` time (null for a
+  // Draft, which is not a legal document yet) - unlike the live-pulled
+  // fields above, this deliberately does NOT track the doctor's current
+  // signature. See `DoctorSignatureBlock`.
+  doctorSignatureSnapshotUrl?: string | null;
 }
 
 export interface MedicalCertificateDraftInput {
@@ -128,6 +133,9 @@ export interface Referral {
   notes?: string | null;
   status: OrderStatus;
   createdAt: string;
+  // Doctor E-Signature: snapshot captured at creation time (a Referral has
+  // no separate "finalize" step - creation IS issuance). See `MedicalCertificate.doctorSignatureSnapshotUrl`.
+  doctorSignatureSnapshotUrl?: string | null;
 }
 
 export interface PrescriptionItem {
@@ -155,6 +163,9 @@ export interface Prescription {
   status: PrescriptionStatus;
   createdAt: string;
   items: PrescriptionItem[];
+  // Doctor E-Signature: snapshot captured at creation time (a Prescription
+  // has no separate "finalize" step - creation IS issuance). See `MedicalCertificate.doctorSignatureSnapshotUrl`.
+  doctorSignatureSnapshotUrl?: string | null;
 }
 
 export interface PrescriptionItemInput {

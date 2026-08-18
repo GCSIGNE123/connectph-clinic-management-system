@@ -37,6 +37,7 @@ function toMedicalCertificate(raw: any): MedicalCertificate {
     clinicAddress: raw.clinic_address,
     clinicLicenseNumber: raw.clinic_license_number,
     visitNumber: raw.visit_number,
+    doctorSignatureSnapshotUrl: raw.doctor_signature_snapshot_url ?? null,
   };
 }
 

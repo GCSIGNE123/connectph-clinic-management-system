@@ -57,6 +57,13 @@ class Prescription(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantM
         nullable=False, default=PrescriptionStatus.DRAFT, server_default=PrescriptionStatus.DRAFT.value,
     )
 
+    # Doctor E-Signature: a snapshot of `Doctor.signature_url` copied in at
+    # creation time (this table has no separate "finalize" step - creation
+    # IS issuance), NOT a live join - see migration 0036's docstring.
+    # Replacing/removing the doctor's current signature afterward must
+    # never change what an already-created prescription prints.
+    doctor_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 

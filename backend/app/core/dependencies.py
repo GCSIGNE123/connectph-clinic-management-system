@@ -207,6 +207,16 @@ DOCTOR_WORKSPACE_PRIVILEGED_ROLES = {"Owner", "Administrator"}
 require_doctor_workspace_view_role = require_roles(*DOCTOR_WORKSPACE_VIEW_ROLES)
 require_doctor_workspace_act_role = require_roles(*DOCTOR_WORKSPACE_ACT_ROLES)
 
+# Doctor E-Signature: Owner/Administrator may manage ANY doctor's signature
+# (same as `CONFIG_MANAGE_ROLES`); a Doctor-role user is additionally let
+# through this role gate but ONLY to manage their OWN signature - that
+# ownership check is NOT expressible as a role set and is enforced
+# separately in `DoctorService` (see `_require_signature_permission`),
+# never trusted from this dependency alone. Receptionist/Cashier are
+# deliberately excluded entirely, per product decision.
+DOCTOR_SIGNATURE_MANAGE_ROLES = {"Owner", "Administrator", "Doctor"}
+require_doctor_signature_manage_role = require_roles(*DOCTOR_SIGNATURE_MANAGE_ROLES)
+
 # Phase 8: Clinical Consultation / SOAP.
 # Stricter than Phase 7: "Administrators may view" (not edit) and
 # "Reception cannot view or edit SOAP notes" per spec - Receptionist is

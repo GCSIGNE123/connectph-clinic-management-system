@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { MasterDataPage } from "@/features/clinic-config/components/MasterDataPage";
 import type { Doctor } from "@/features/clinic-config/types";
@@ -28,6 +30,11 @@ export default function DoctorsPage() {
       canManage={canManage}
       searchPlaceholder="Search doctors"
       rowLabel={(d) => `Dr. ${d.first_name} ${d.last_name}`}
+      renderRowActions={(d) => (
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <Link href={`/doctors/${d.id}`}>E-Signature</Link>
+        </Button>
+      )}
       columns={[
         { header: "Code", render: (d) => d.doctor_code },
         { header: "Name", render: (d) => `${d.first_name} ${d.last_name}` },

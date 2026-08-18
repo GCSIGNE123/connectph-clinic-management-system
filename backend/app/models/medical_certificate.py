@@ -110,6 +110,15 @@ class MedicalCertificate(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, T
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
+    # Doctor E-Signature: snapshot of `Doctor.signature_url` copied in at
+    # `issue()` time (a Draft has none - it's not a legal document yet),
+    # NOT a live join like the doctor name/PRC/PTR fields above - a
+    # deliberate, scoped exception (see migration 0036's docstring): the
+    # signature represents what was actually applied to THIS certificate
+    # at issue time. Replacing/removing the doctor's current signature
+    # afterward must never change what an already-issued certificate prints.
+    doctor_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     consultation: Mapped["Consultation"] = relationship()
     doctor: Mapped["Doctor"] = relationship(foreign_keys=[doctor_id])
     patient: Mapped["Patient"] = relationship()

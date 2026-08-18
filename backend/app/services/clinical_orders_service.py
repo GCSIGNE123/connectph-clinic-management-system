@@ -60,6 +60,24 @@ class ClinicalOrdersService:
         if not can_edit:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have edit access to this consultation.")
 
+    async def _snapshot_doctor_signature(self, doctor_id: UUID | None, *, clinic_id: UUID) -> str | None:
+        """Doctor E-Signature: copies the doctor's CURRENT `signature_url`
+        at issuance time into the document row - a deliberate, one-time
+        snapshot, not a live join (see migration 0036's docstring). Neither
+        Referral nor Prescription has a separate "finalize" step - creation
+        IS issuance for both, so this is called directly from
+        `create_referral`/`create_prescription`. Returns None gracefully
+        (no fabricated signature) if the doctor has none configured, or if
+        the visit has no assigned doctor at all."""
+        if doctor_id is None:
+            return None
+        from app.models.doctor import Doctor
+
+        doctor = await self.session.get(Doctor, doctor_id)
+        if doctor is None or doctor.clinic_id != clinic_id:
+            return None
+        return doctor.signature_url
+
     # --- Allergy conflict checking (architecture-only, Phase 9) ---
 
     def check_allergy_conflicts(self, patient_id: UUID, items: list[dict]) -> list[str]:
@@ -251,10 +269,12 @@ class ClinicalOrdersService:
     ) -> ReferralRead:
         self._require_can_edit(can_edit)
         consultation = await self._require_consultation(consultation_id, clinic_id)
+        signature_snapshot = await self._snapshot_doctor_signature(consultation.doctor_id, clinic_id=clinic_id)
         referral = await self.repo.create_referral(
             clinic_id=clinic_id, consultation_id=consultation_id, visit_id=consultation.visit_id,
             branch_id=consultation.branch_id, patient_id=consultation.patient_id, doctor_id=consultation.doctor_id,
             referred_to=payload.referred_to, reason=payload.reason, notes=payload.notes,
+            doctor_signature_snapshot_url=signature_snapshot,
             created_by=actor_id, updated_by=actor_id,
         )
         now = datetime.now(UTC)
@@ -274,6 +294,12 @@ class ClinicalOrdersService:
         rows = await self.repo.list_referrals_for_consultation(consultation_id, clinic_id)
         return [ReferralRead.model_validate(r) for r in rows]
 
+    async def get_referral(self, referral_id: UUID, *, clinic_id: UUID):
+        referral = await self.repo.get_referral(referral_id, clinic_id)
+        if referral is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Referral not found")
+        return referral
+
     async def list_referrals_for_visit(self, visit_id: UUID, *, clinic_id: UUID) -> list[ReferralRead]:
         rows = await self.repo.list_referrals_for_visit(visit_id, clinic_id)
         return [ReferralRead.model_validate(r) for r in rows]
@@ -292,11 +318,13 @@ class ClinicalOrdersService:
 
         generator = PrescriptionNumberGenerator(self.session)
         prescription_number = await generator.next_number(clinic_id)
+        signature_snapshot = await self._snapshot_doctor_signature(consultation.doctor_id, clinic_id=clinic_id)
 
         prescription = await self.repo.create_prescription(
             clinic_id=clinic_id, consultation_id=consultation_id, visit_id=consultation.visit_id,
             branch_id=consultation.branch_id, patient_id=consultation.patient_id, doctor_id=consultation.doctor_id,
             prescription_number=prescription_number, status=payload.status,
+            doctor_signature_snapshot_url=signature_snapshot,
             created_by=actor_id, updated_by=actor_id, items=items,
         )
 
@@ -319,6 +347,12 @@ class ClinicalOrdersService:
             clinic_id=clinic_id, build_payload=lambda: read.model_dump(mode="json"),
         )
         return PrescriptionCreateResponse(prescription=read, warnings=warnings)
+
+    async def get_prescription(self, prescription_id: UUID, *, clinic_id: UUID):
+        prescription = await self.repo.get_prescription(prescription_id, clinic_id)
+        if prescription is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
+        return prescription
 
     async def list_prescriptions(self, consultation_id: UUID, *, clinic_id: UUID) -> list[PrescriptionRead]:
         await self._require_consultation(consultation_id, clinic_id)

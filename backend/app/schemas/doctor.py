@@ -28,7 +28,11 @@ class DoctorBase(BaseModel):
 
 
 class DoctorCreate(DoctorBase):
-    pass
+    # `signature_url` is deliberately NOT settable here (inherited from
+    # `DoctorBase` but excluded below) - it must only ever be written by the
+    # dedicated, validated `/doctors/{id}/signature` upload endpoint, never
+    # as an arbitrary client-supplied string. See `DoctorService.upload_signature`.
+    signature_url: None = Field(default=None, exclude=True)
 
 
 class DoctorUpdate(BaseModel):
@@ -42,7 +46,7 @@ class DoctorUpdate(BaseModel):
     department_id: UUID | None = None
     branch_id: UUID | None = None
     photo_url: str | None = Field(default=None, max_length=500)
-    signature_url: str | None = Field(default=None, max_length=500)
+    # `signature_url` intentionally omitted - see `DoctorCreate` above.
     contact_number: str | None = Field(default=None, max_length=50)
     email: EmailStr | None = None
     consultation_fee: Decimal | None = None

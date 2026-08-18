@@ -88,6 +88,12 @@ class ClinicalOrdersRepository:
         await self.session.flush()
         return referral
 
+    async def get_referral(self, referral_id: UUID, clinic_id: UUID) -> Referral | None:
+        stmt = select(Referral).where(
+            Referral.id == referral_id, Referral.clinic_id == clinic_id, Referral.is_deleted.is_(False)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_referrals_for_consultation(self, consultation_id: UUID, clinic_id: UUID) -> list[Referral]:
         stmt = select(Referral).where(
             Referral.consultation_id == consultation_id, Referral.clinic_id == clinic_id, Referral.is_deleted.is_(False)

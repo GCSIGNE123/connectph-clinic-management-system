@@ -49,6 +49,11 @@ class Referral(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin
         nullable=False, default=OrderStatus.REQUESTED, server_default=OrderStatus.REQUESTED.value,
     )
 
+    # Doctor E-Signature: snapshot of `Doctor.signature_url` copied in at
+    # creation time (no separate "finalize" step for a Referral - creation
+    # IS issuance), NOT a live join - see migration 0036's docstring.
+    doctor_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 

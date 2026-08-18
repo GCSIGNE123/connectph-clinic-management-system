@@ -45,6 +45,10 @@ interface MasterDataPageProps<T extends { id: string; status?: string }> {
   searchPlaceholder?: string;
   rowLabel: (row: T) => string;
   csv?: MasterDataCsvConfig<T>;
+  /** Optional extra action rendered before Edit/Delete on each row (e.g.
+   * Doctors' "E-Signature" link to its own dedicated detail page) - opt-in,
+   * `undefined` for every other resource using this shared page. */
+  renderRowActions?: (row: T) => React.ReactNode;
 }
 
 /**
@@ -64,6 +68,7 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
   searchPlaceholder = "Search...",
   rowLabel,
   csv,
+  renderRowActions,
 }: MasterDataPageProps<T>) {
   const { useList, useMutations } = useMemo(() => createCrudHooks<T>(resourceKey, resourcePath), [resourceKey, resourcePath]);
   const [search, setSearch] = useState("");
@@ -278,6 +283,7 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
                   ))}
                   {canManage ? (
                     <TableCell className="text-right">
+                      {renderRowActions?.(row)}
                       <Button
                         type="button"
                         variant="ghost"

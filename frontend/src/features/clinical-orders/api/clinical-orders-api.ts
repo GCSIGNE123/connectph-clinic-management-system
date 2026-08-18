@@ -36,6 +36,7 @@ function toReferral(raw: any): Referral {
     id: raw.id, consultationId: raw.consultation_id, visitId: raw.visit_id, doctorId: raw.doctor_id,
     referredTo: raw.referred_to, reason: raw.reason, notes: raw.notes,
     status: raw.status, createdAt: raw.created_at,
+    doctorSignatureSnapshotUrl: raw.doctor_signature_snapshot_url ?? null,
   };
 }
 
@@ -53,6 +54,7 @@ function toPrescription(raw: any): Prescription {
     id: raw.id, consultationId: raw.consultation_id, visitId: raw.visit_id, patientId: raw.patient_id,
     doctorId: raw.doctor_id, prescriptionNumber: raw.prescription_number, status: raw.status,
     createdAt: raw.created_at, items: (raw.items ?? []).map(toPrescriptionItem),
+    doctorSignatureSnapshotUrl: raw.doctor_signature_snapshot_url ?? null,
   };
 }
 

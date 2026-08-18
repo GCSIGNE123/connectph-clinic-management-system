@@ -32,6 +32,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.clinic import Clinic
+from app.models.doctor import Doctor
 from app.models.medical_certificate import MedicalCertificate, MedicalCertificateStatus, MedicalCertificateType
 from app.models.visit import VisitTimelineEventType
 from app.repositories.consultation_repository import ConsultationRepository
@@ -159,9 +160,18 @@ class MedicalCertificateService:
         generator = MedicalCertificateNumberGenerator(self.session)
         certificate_number = await generator.next_number(clinic_id)
         now = datetime.now(UTC)
+
+        # Doctor E-Signature: snapshot the doctor's CURRENT signature at
+        # the moment of issuance - a deliberate exception to this
+        # certificate's otherwise-live-joined doctor fields (see the model
+        # docstring and migration 0036). No fabricated signature: a doctor
+        # with none configured simply issues with a blank signature area.
+        doctor = await self.session.get(Doctor, certificate.doctor_id)
+        signature_snapshot = doctor.signature_url if doctor is not None else None
+
         certificate = await self.repo.update(
             certificate, status=MedicalCertificateStatus.ISSUED, certificate_number=certificate_number,
-            issued_at=now, updated_by=actor_id,
+            issued_at=now, updated_by=actor_id, doctor_signature_snapshot_url=signature_snapshot,
         )
 
         await self.visit_repo.add_timeline_event(
@@ -232,9 +242,11 @@ class MedicalCertificateService:
         generator = MedicalCertificateNumberGenerator(self.session)
         certificate_number = await generator.next_number(clinic_id)
         now = datetime.now(UTC)
+        doctor = await self.session.get(Doctor, new_certificate.doctor_id)
+        signature_snapshot = doctor.signature_url if doctor is not None else None
         new_certificate = await self.repo.update(
             new_certificate, status=MedicalCertificateStatus.ISSUED, certificate_number=certificate_number,
-            issued_at=now, updated_by=actor_id,
+            issued_at=now, updated_by=actor_id, doctor_signature_snapshot_url=signature_snapshot,
         )
 
         original = await self.repo.update(
