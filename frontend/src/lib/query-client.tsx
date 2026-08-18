@@ -30,7 +30,13 @@ export function Providers({ children }: { children: ReactNode }): JSX.Element {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="system"
+        enableSystem
+        disableTransitionOnChange
+        storageKey="connectph-theme"
+      >
         <ToastProvider>{children}</ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>

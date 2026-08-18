@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import type { ClinicSettings } from "@/features/clinic-config/types";
 import { Role } from "@/types";
+import { ThemeSettings } from "@/components/layout/ThemeSettings";
 
 const MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator]);
 
@@ -26,7 +27,7 @@ export default function ClinicSettingsPage() {
   const canManage = Boolean(currentUser && MANAGE_ROLES.has(currentUser.role));
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"general" | "branding">("general");
+  const [tab, setTab] = useState<"general" | "branding" | "appearance">("general");
 
   const { data: settings } = useQuery({
     queryKey: ["clinic-settings"],
@@ -94,7 +95,7 @@ export default function ClinicSettingsPage() {
       </div>
 
       <div className="flex gap-2 border-b border-border">
-        {(["general", "branding"] as const).map((t) => (
+        {(["general", "branding", "appearance"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -172,7 +173,9 @@ export default function ClinicSettingsPage() {
             ) : null}
           </CardContent>
         </Card>
-      ) : (
+      ) : null}
+
+      {tab === "branding" ? (
         <Card>
           <CardHeader>
             <CardTitle>Branding</CardTitle>
@@ -221,7 +224,18 @@ export default function ClinicSettingsPage() {
             ) : null}
           </CardContent>
         </Card>
-      )}
+      ) : null}
+
+      {tab === "appearance" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Appearance</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ThemeSettings />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }
