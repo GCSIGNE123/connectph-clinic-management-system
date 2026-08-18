@@ -16,7 +16,7 @@ import {
   useOrdersForConsultation, useProceduresForConsultation, useReferralsForConsultation,
   useUpdateOrderStatus,
 } from "@/features/clinical-orders/hooks/use-clinical-orders";
-import type { Order, OrderCategory, OrderItemInput, OrderPriority, OrderStatus, Referral } from "@/features/clinical-orders/types";
+import type { Order, OrderCategory, OrderItemInput, OrderPriority, OrderStatus, Procedure, Referral } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
 import { DoctorSignatureBlock } from "@/features/clinical-orders/components/DoctorSignatureBlock";
 import type { ClinicSettings } from "@/features/clinic-config/types";
@@ -24,6 +24,22 @@ import { formatDateTime } from "@/lib/utils";
 
 const ORDER_CATEGORIES: OrderCategory[] = ["Laboratory", "Radiology", "Vaccination", "Custom"];
 const ORDER_STATUSES: OrderStatus[] = ["Requested", "Collected", "Processing", "Completed", "Cancelled"];
+
+// Print title/section label per category - Laboratory's wording is
+// preserved byte-for-byte (pre-existing behavior); other categories get
+// their own category-appropriate wording instead of a generic label.
+const ORDER_PRINT_TITLE: Partial<Record<OrderCategory, string>> = {
+  Laboratory: "Laboratory Request",
+  Radiology: "Radiology Request",
+  Vaccination: "Vaccination Request",
+  Custom: "Order Request",
+};
+const ORDER_PRINT_ITEMS_LABEL: Partial<Record<OrderCategory, string>> = {
+  Laboratory: "Requested tests",
+  Radiology: "Requested exams",
+  Vaccination: "Requested vaccines",
+  Custom: "Requested items",
+};
 
 const STATUS_VARIANT: Record<OrderStatus, "default" | "secondary" | "success" | "destructive"> = {
   Requested: "secondary", Collected: "default", Processing: "default", Completed: "success", Cancelled: "destructive",
@@ -49,6 +65,7 @@ export function ClinicalOrdersTab({
   visitNumber?: string | null;
 }) {
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
+  const [printProcedure, setPrintProcedure] = useState<Procedure | null>(null);
   const [printReferral, setPrintReferral] = useState<Referral | null>(null);
   // Doctor E-Signature (Referral previously had no signature block at all)
   // - same clinic-license-number lookup PrescriptionTab already does.
@@ -106,14 +123,19 @@ export function ClinicalOrdersTab({
                     <Badge variant="secondary">{order.orderCategory}</Badge>
                     <Badge variant={order.priority === "STAT" ? "destructive" : "secondary"}>{order.priority}</Badge>
                     <Badge variant={STATUS_VARIANT[order.status]}>{order.status}</Badge>
-                    {order.orderCategory === "Laboratory" ? (
-                      <Button type="button" variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={() => setPrintOrder(order)}>
-                        Print
-                      </Button>
-                    ) : null}
+                    {/* Print is available for every Order category created
+                        through this tab (Laboratory/Radiology/Vaccination/
+                        Custom - see `ORDER_CATEGORIES` below; `Procedure`/
+                        `Referral` are OrderCategory enum values that are
+                        never actually used to create an `orders` row, since
+                        those flows write to their own separate tables and
+                        already have their own print dialogs). */}
+                    <Button type="button" variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={() => setPrintOrder(order)}>
+                      Print
+                    </Button>
                     {canEdit ? (
                       <Select
-                        className={order.orderCategory === "Laboratory" ? "h-7 w-36 text-xs" : "ml-auto h-7 w-36 text-xs"}
+                        className="h-7 w-36 text-xs"
                         value={order.status}
                         onChange={(e) => updateOrderStatus.mutate({ orderId: order.id, status: e.target.value as OrderStatus })}
                       >
@@ -200,6 +222,9 @@ export function ClinicalOrdersTab({
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{p.procedureName}</span>
                     <Badge variant={STATUS_VARIANT[p.status]}>{p.status}</Badge>
+                    <Button type="button" variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={() => setPrintProcedure(p)}>
+                      Print
+                    </Button>
                   </div>
                   {p.notes ? <p className="mt-1 text-muted-foreground">{p.notes}</p> : null}
                 </li>
@@ -290,13 +315,13 @@ export function ClinicalOrdersTab({
       <PrintableDocumentDialog
         open={printOrder !== null}
         onOpenChange={(open) => !open && setPrintOrder(null)}
-        title="Laboratory Request"
+        title={printOrder ? ORDER_PRINT_TITLE[printOrder.orderCategory] ?? "Order Request" : "Order Request"}
         printableId="lab-request-printable"
       >
         {printOrder ? (
           <>
             <div className="text-center">
-              <p className="font-semibold">Laboratory Request</p>
+              <p className="font-semibold">{ORDER_PRINT_TITLE[printOrder.orderCategory] ?? "Order Request"}</p>
               <p className="text-xs text-muted-foreground">{printOrder.orderNumber}</p>
             </div>
             <div className="border-t border-dashed pt-2 space-y-1">
@@ -307,7 +332,7 @@ export function ClinicalOrdersTab({
               <PrintRow label="Date" value={formatDateTime(printOrder.createdAt)} />
             </div>
             <div className="border-t border-dashed pt-2 space-y-1">
-              <p className="font-medium">Requested tests</p>
+              <p className="font-medium">{ORDER_PRINT_ITEMS_LABEL[printOrder.orderCategory] ?? "Requested items"}</p>
               <ul className="list-disc pl-4">
                 {printOrder.items.map((item) => (
                   <li key={item.id}>{item.itemName}</li>
@@ -320,6 +345,60 @@ export function ClinicalOrdersTab({
                 <p>{printOrder.clinicalNotes}</p>
               </div>
             ) : null}
+            {/* Orders/Procedures are mutable, ongoing clinical records (status
+                cycles Requested -> Collected -> Processing -> Completed, no
+                one-time "issue" step) - unlike Referral/Prescription/Medical
+                Certificate, there is no document-level signature snapshot
+                for them (see ClinicalOrdersTab's module notes). The doctor's
+                CURRENT signature is used here, live, via the same
+                `/doctors/{id}/signature/file` endpoint the E-Signature
+                settings page itself uses - no new endpoint. */}
+            <DoctorSignatureBlock
+              doctorName={doctorName}
+              doctorPrcLicense={doctorPrcLicense}
+              doctorPtrNumber={doctorPtrNumber}
+              clinicLicenseNumber={clinic?.license_number}
+              signatureFileApiPath={printOrder.doctorId ? `/doctors/${printOrder.doctorId}/signature/file` : null}
+              fallbackLabel="Ordering Physician"
+              testId="order-signature-block"
+            />
+          </>
+        ) : null}
+      </PrintableDocumentDialog>
+
+      <PrintableDocumentDialog
+        open={printProcedure !== null}
+        onOpenChange={(open) => !open && setPrintProcedure(null)}
+        title="Procedure Record"
+        printableId="procedure-printable"
+      >
+        {printProcedure ? (
+          <>
+            <div className="text-center">
+              <p className="font-semibold">Procedure Record</p>
+            </div>
+            <div className="border-t border-dashed pt-2 space-y-1">
+              <PrintRow label="Visit #" value={visitNumber ?? "-"} />
+              <PrintRow label="Patient" value={patientName ?? "-"} />
+              <PrintRow label="Performing doctor" value={doctorName ?? "-"} />
+              <PrintRow label="Procedure" value={printProcedure.procedureName} />
+              <PrintRow label="Date" value={printProcedure.procedureDate ? formatDateTime(printProcedure.procedureDate) : formatDateTime(printProcedure.createdAt)} />
+            </div>
+            {printProcedure.notes ? (
+              <div className="border-t border-dashed pt-2">
+                <p className="font-medium">Notes</p>
+                <p>{printProcedure.notes}</p>
+              </div>
+            ) : null}
+            <DoctorSignatureBlock
+              doctorName={doctorName}
+              doctorPrcLicense={doctorPrcLicense}
+              doctorPtrNumber={doctorPtrNumber}
+              clinicLicenseNumber={clinic?.license_number}
+              signatureFileApiPath={printProcedure.doctorId ? `/doctors/${printProcedure.doctorId}/signature/file` : null}
+              fallbackLabel="Performing Physician"
+              testId="procedure-signature-block"
+            />
           </>
         ) : null}
       </PrintableDocumentDialog>
