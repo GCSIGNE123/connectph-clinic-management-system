@@ -36,11 +36,22 @@ export function LabPaymentStep({
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const paidHandledRef = useRef(false);
+  // React 18 dev-mode (StrictMode) mounts every effect twice (mount ->
+  // cleanup -> mount again) specifically to surface missing cleanup bugs -
+  // without this guard, that double-invocation fires this one-shot "create
+  // the invoice" call twice for the same visit. The backend itself is
+  // race-safe now (see `InvoiceService.create_draft_invoice_for_laboratory_visit`'s
+  // SAVEPOINT-guarded retry), so a real double-fire no longer errors, but
+  // there is still no reason to make two network calls when one is enough.
+  const startedForVisitRef = useRef<string | null>(null);
 
   const syncInvoiceCache = useSyncInvoiceCache();
   const { data: invoice } = useInvoice(invoiceId);
 
   useEffect(() => {
+    if (startedForVisitRef.current === visitId) return;
+    startedForVisitRef.current = visitId;
+
     let cancelled = false;
     setPreparing(true);
     setPrepareError(null);
@@ -59,6 +70,8 @@ export function LabPaymentStep({
         // Requirement: if invoice creation fails, no queue is created - this
         // step simply never calls `onPaid`, and the receptionist can Back
         // out or retry from here without a queue ticket ever existing.
+        // Reset the started-for guard so Retry can actually re-attempt.
+        startedForVisitRef.current = null;
         setPrepareError(err instanceof ApiError ? err.message : "Could not create the Laboratory invoice.");
       })
       .finally(() => {

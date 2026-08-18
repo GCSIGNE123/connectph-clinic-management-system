@@ -15,6 +15,7 @@ template-matching behavior itself, routed through this same real workflow;
 this file covers the payment gate, PAID queue slip, doctor optionality, and
 idempotency."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -287,6 +288,75 @@ async def test_retrying_invoice_creation_does_not_duplicate_invoice(client: Asyn
     invoices = await client.get(f"/api/v1/visits/{visit['id']}/invoice", headers=headers)
     assert invoices.status_code == 200, invoices.text
     assert invoices.json()["id"] == first.json()["id"]
+
+
+async def test_truly_concurrent_invoice_creation_does_not_500_or_duplicate(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession, engine
+) -> None:
+    """Regression: `create_draft_invoice_for_laboratory_visit`'s existence
+    check (`get_latest_for_visit`) is a plain SELECT with no row lock, so
+    two REAL simultaneous requests for the same visit (e.g. React 18
+    StrictMode's dev-mode double-effect-invocation in `LabPaymentStep`, a
+    double-click, or two browser tabs) can both see "no invoice yet" and
+    both attempt to create one. `uq_invoices_active_per_visit` (migration
+    0033) then lets only one INSERT win - the loser must return that
+    winner's invoice instead of surfacing a raw IntegrityError/500 (which
+    can even reach the browser as a bare, message-less CORS/network
+    failure).
+
+    The `client`/`db_session` fixtures share a single `AsyncSession` across
+    every request in a test (see conftest's `_override_get_db`), and
+    `AsyncSession` itself forbids concurrent use ("Session is already
+    flushing") - so firing two requests through `client` with
+    `asyncio.gather` never reaches the DB concurrently at all, it just
+    trips that guard. To actually exercise the race, this test commits the
+    setup data (so it's visible across connections) and then drives
+    `InvoiceService.create_draft_invoice_for_laboratory_visit` directly from
+    two independent sessions/connections on the same engine.
+
+    The test database is also built via `Base.metadata.create_all` (see
+    conftest's `engine` fixture), which only creates what's declared on the
+    ORM models - it does NOT run alembic migrations, so
+    `uq_invoices_active_per_visit` (raw DDL in migration 0033, not mirrored
+    on the `Invoice` model) doesn't exist here by default. Create it
+    directly so this test actually exercises the same constraint a real
+    (migrated) database enforces."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.services.invoice_service import InvoiceService
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_active_per_visit "
+                "ON invoices (clinic_id, visit_id) WHERE is_deleted = false AND status != 'Cancelled'"
+            )
+        )
+
+    clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers)
+    visit = await _create_draft_visit(client, headers, deps)
+    await db_session.commit()
+
+    session_maker = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with session_maker() as session_a, session_maker() as session_b:
+        results = await asyncio.gather(
+            InvoiceService(session_a).create_draft_invoice_for_laboratory_visit(
+                clinic_id=clinic.id, visit_id=uuid.UUID(visit["id"]), actor_id=_owner.id,
+            ),
+            InvoiceService(session_b).create_draft_invoice_for_laboratory_visit(
+                clinic_id=clinic.id, visit_id=uuid.UUID(visit["id"]), actor_id=_owner.id,
+            ),
+        )
+        await session_a.commit()
+        await session_b.commit()
+
+    assert str(results[0].id) == str(results[1].id)
+
+    invoices = await client.get(f"/api/v1/visits/{visit['id']}/invoice", headers=headers)
+    assert invoices.status_code == 200, invoices.text
+    assert invoices.json()["id"] == str(results[0].id)
 
 
 async def test_retrying_payment_after_already_paid_does_not_double_pay(client: AsyncClient, make_clinic_with_owner) -> None:

@@ -20,6 +20,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.clinic_service import ClinicService
@@ -214,14 +215,39 @@ class InvoiceService:
 
         today = datetime.now(UTC).date()
         invoice_number = await self.number_generator.next_number(clinic_id, today)
-        invoice = await self.repo.create_invoice(
-            clinic_id=clinic_id, visit_id=visit_id, branch_id=visit.branch_id, patient_id=visit.patient_id,
-            doctor_id=visit.doctor_id, invoice_number=invoice_number, invoice_date=today, actor_id=actor_id,
-        )
-        await self.repo.add_item(
-            invoice.id, clinic_id, description=service.service_name, item_type=InvoiceItemType.LABORATORY,
-            quantity=Decimal("1"), unit_price=unit_price, discount_amount=Decimal("0"), line_total=unit_price,
-        )
+
+        # Race guard: `get_latest_for_visit` above is a plain SELECT with no
+        # row lock, so two near-simultaneous calls for the same visit (a
+        # real scenario - React 18 dev-mode double-effect-invocation, a
+        # double-click, or two browser tabs) can both see "no invoice yet"
+        # and both reach here. `uq_invoices_active_per_visit` (a partial
+        # unique index, see migration 0033) then lets only one INSERT
+        # actually win; the loser must not surface that as a raw
+        # IntegrityError/500 (which Starlette's default error handling can
+        # even present to the browser as a bare CORS failure, with no useful
+        # message) - same lesson already applied to the shared Order/
+        # Prescription/Certificate number counter's first-of-day race in
+        # `clinical_number_generator.py::_DailyNumberGenerator`. The
+        # INSERT+item-add is wrapped in its own SAVEPOINT so a losing
+        # attempt only unwinds itself, not this whole request's transaction.
+        try:
+            async with self.session.begin_nested():
+                invoice = await self.repo.create_invoice(
+                    clinic_id=clinic_id, visit_id=visit_id, branch_id=visit.branch_id, patient_id=visit.patient_id,
+                    doctor_id=visit.doctor_id, invoice_number=invoice_number, invoice_date=today, actor_id=actor_id,
+                )
+                await self.repo.add_item(
+                    invoice.id, clinic_id, description=service.service_name, item_type=InvoiceItemType.LABORATORY,
+                    quantity=Decimal("1"), unit_price=unit_price, discount_amount=Decimal("0"), line_total=unit_price,
+                )
+        except IntegrityError:
+            # Lost the race: the winner's invoice now exists - return it
+            # instead of failing the whole request.
+            existing = await self.repo.get_latest_for_visit(visit_id, clinic_id)
+            if existing is not None and existing.status != InvoiceStatus.CANCELLED:
+                return existing
+            raise
+
         await self.session.refresh(invoice, attribute_names=["items", "discounts", "payments"])
         self._recompute_totals(invoice)
         self._maybe_advance_to_pending(invoice)
