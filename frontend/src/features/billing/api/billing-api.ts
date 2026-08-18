@@ -183,6 +183,15 @@ export const billingApi = {
     const raw = await apiClient.get<any>(`/visits/${visitId}/invoice`);
     return raw ? toInvoice(raw) : null;
   },
+  /** Laboratory pay-first workflow: creates (or returns the existing,
+   * idempotent) invoice for a draft Laboratory Visit created via
+   * `visitsApi.createPreQueue` - see
+   * `InvoiceService.create_draft_invoice_for_laboratory_visit` on the
+   * backend. A zero-priced Laboratory service comes back already `Paid`. */
+  createLaboratoryInvoiceForVisit: async (visitId: string): Promise<Invoice> => {
+    const raw = await apiClient.post<any>(`/visits/${visitId}/laboratory-invoice`);
+    return toInvoice(raw);
+  },
   getBillingHistory: async (patientId: string): Promise<BillingHistoryItem[]> => {
     const raw = await apiClient.get<any>(`/patients/${patientId}/billing-history`);
     return (raw.items ?? []).map(toBillingHistoryItem);

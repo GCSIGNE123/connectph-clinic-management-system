@@ -167,6 +167,87 @@ class InvoiceService:
         await self.session.commit()
         return await self.repo.get_by_id(invoice.id, clinic_id)
 
+    async def create_draft_invoice_for_laboratory_visit(
+        self, *, clinic_id: UUID, visit_id: UUID, actor_id: UUID | None
+    ) -> Invoice:
+        """Laboratory pay-first workflow: the invoice for a walk-in
+        Laboratory ticket, created against the draft Visit
+        (`VisitService.create_draft_visit_for_pre_queue`) BEFORE any Queue
+        ticket exists, so the receptionist can collect payment first (see
+        `QueueService._create_queue_for_paid_lab_visit`, the payment-gated
+        counterpart to `_create_queue_for_draft_visit`).
+
+        Deliberately a separate method from `create_draft_invoice_for_consultation`
+        rather than a generalization of it: that method's pricing precedence
+        (Doctor.consultation_fee override, always item_type=ConsultationFee)
+        is consultation-specific and already covered by its own tests/callers
+        - duplicating its small bootstrap (invoice number, Draft row) here is
+        safer than reshaping a heavily-depended-on method for a second use
+        case.
+
+        Idempotent: returns the existing non-cancelled invoice for this visit
+        if one already exists, exactly like `create_draft_invoice_for_consultation`
+        - a retried "prepare payment" call never creates a duplicate invoice.
+
+        Zero-priced services: if the resolved `ClinicService.default_price`
+        is 0 (unset), the single Laboratory line item is still added (so the
+        invoice/receipt reflects what was ordered), but the invoice is
+        advanced straight to `Paid` with zero owed - there is nothing to
+        collect, and requiring a $0 payment record would just be busywork.
+        A clinic that wants payment enforcement for a given lab test should
+        price that service in the catalog.
+        """
+        existing = await self.repo.get_latest_for_visit(visit_id, clinic_id)
+        if existing is not None and existing.status != InvoiceStatus.CANCELLED:
+            return existing
+
+        visit = await self.visit_repo.get_with_relations(visit_id, clinic_id)
+        if visit is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Visit not found")
+        if visit.service_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Visit has no service to invoice.")
+
+        service = await self.session.get(ClinicService, visit.service_id)
+        if service is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+        unit_price = Decimal(str(service.default_price or 0))
+
+        today = datetime.now(UTC).date()
+        invoice_number = await self.number_generator.next_number(clinic_id, today)
+        invoice = await self.repo.create_invoice(
+            clinic_id=clinic_id, visit_id=visit_id, branch_id=visit.branch_id, patient_id=visit.patient_id,
+            doctor_id=visit.doctor_id, invoice_number=invoice_number, invoice_date=today, actor_id=actor_id,
+        )
+        await self.repo.add_item(
+            invoice.id, clinic_id, description=service.service_name, item_type=InvoiceItemType.LABORATORY,
+            quantity=Decimal("1"), unit_price=unit_price, discount_amount=Decimal("0"), line_total=unit_price,
+        )
+        await self.session.refresh(invoice, attribute_names=["items", "discounts", "payments"])
+        self._recompute_totals(invoice)
+        self._maybe_advance_to_pending(invoice)
+        if invoice.grand_total == 0:
+            invoice.status = InvoiceStatus.PAID
+        await self.session.flush()
+
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="invoice.created", entity_type="invoice",
+            entity_id=str(invoice.id), metadata={"invoice_number": invoice_number, "visit_id": str(visit_id), "source": "laboratory_pay_first"},
+        )
+        await self.session.commit()
+        return await self.repo.get_by_id(invoice.id, clinic_id)
+
+    async def create_laboratory_invoice_for_visit_endpoint(
+        self, visit_id: UUID, *, clinic_id: UUID, actor_id: UUID | None
+    ) -> InvoiceDetail:
+        """`POST /visits/{visit_id}/laboratory-invoice` - thin wrapper
+        returning the full detail shape the frontend's payment step needs
+        (items/payments), matching `create_invoice_for_consultation_endpoint`'s
+        own wrapper convention below."""
+        invoice = await self.create_draft_invoice_for_laboratory_visit(
+            clinic_id=clinic_id, visit_id=visit_id, actor_id=actor_id
+        )
+        return _to_detail(await self.repo.get_by_id(invoice.id, clinic_id))
+
     async def create_invoice_for_consultation_endpoint(self, consultation_id: UUID, *, clinic_id: UUID, actor_id: UUID | None) -> InvoiceDetail:
         """Mostly-internal/test trigger endpoint - resolves the visit from the
         consultation then delegates to the same auto-creation path used by

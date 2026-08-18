@@ -1,14 +1,19 @@
-"""Walk-in laboratory queue tickets: a Reception queue ticket created
-directly for a "Laboratory"-named department, with no doctor assigned, has
-no consultation/Order to place a lab order through - previously this meant
-it could NEVER reach the Laboratory role's worklist, even though the
-queue-print vitals-exemption logic already anticipated "a walk-in lab
-order" as a real scenario. `QueueService.create_queue` now auto-creates a
-LaboratoryOrder for such tickets via `LaboratoryService.
+"""Walk-in laboratory queue tickets: a Reception queue ticket created for a
+"Laboratory"-named department has no consultation/Order to place a lab
+order through - `QueueService._create_queue_for_paid_lab_visit` auto-creates
+a LaboratoryOrder for such tickets via `LaboratoryService.
 create_from_queue_ticket` - see that method and its call site for the full
 reasoning, including why the match is on the department's NAME rather than
-`department_code == "LAB"` (a real clinic's Laboratory department was
-found coded "D03", not the seeded default's "LAB")."""
+`department_code == "LAB"` (a real clinic's Laboratory department was found
+coded "D03", not the seeded default's "LAB").
+
+Laboratory pay-first workflow: every Laboratory queue ticket must now go
+through POST /visits/pre-queue -> POST /visits/{id}/laboratory-invoice ->
+POST /invoices/{id}/payments -> POST /queues (visit_id=...), so every test
+below routes through that real API workflow instead of a single direct
+POST /queues call - see `test_laboratory_payment_first_queue.py` for the
+dedicated tests covering the payment gate itself (unpaid rejection, PAID
+slip, doctor optionality, idempotency)."""
 
 import uuid
 
@@ -18,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
-from app.models.laboratory_order import LaboratoryOrder
 from app.models.role import Role
 
 pytestmark = pytest.mark.asyncio
@@ -83,6 +87,40 @@ async def _setup(client: AsyncClient, headers: dict, *, department_code: str, de
     return {"branch_id": branch["id"], "department_id": department["id"], "service_id": service["id"], "patient_id": patient["id"]}
 
 
+async def _create_paid_lab_queue(client: AsyncClient, headers: dict, deps: dict, *, doctor_id: str | None = None):
+    """Drives the real pay-first workflow end to end: draft visit -> invoice
+    -> full payment -> queue ticket. Returns the final `POST /queues`
+    response so callers can assert on it exactly like the old direct call."""
+    visit_resp = await client.post(
+        "/api/v1/visits/pre-queue", headers=headers,
+        json={
+            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
+            "doctor_id": doctor_id, "department_id": deps["department_id"], "service_id": deps["service_id"],
+        },
+    )
+    assert visit_resp.status_code == 201, visit_resp.text
+    visit = visit_resp.json()
+
+    invoice_resp = await client.post(f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers)
+    assert invoice_resp.status_code == 200, invoice_resp.text
+    invoice = invoice_resp.json()
+
+    if float(invoice["balance_due"]) > 0:
+        pay_resp = await client.post(
+            f"/api/v1/invoices/{invoice['id']}/payments", headers=headers,
+            json={"payments": [{"payment_method": "Cash", "amount": invoice["balance_due"]}]},
+        )
+        assert pay_resp.status_code == 200, pay_resp.text
+
+    return await client.post(
+        "/api/v1/queues", headers=headers,
+        json={
+            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"], "department_id": deps["department_id"],
+            "doctor_id": doctor_id, "service_id": deps["service_id"], "priority": "Normal", "visit_id": visit["id"],
+        },
+    )
+
+
 async def test_walk_in_laboratory_queue_ticket_creates_lab_order_even_with_custom_department_code(
     client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
 ) -> None:
@@ -93,13 +131,7 @@ async def test_walk_in_laboratory_queue_ticket_creates_lab_order_even_with_custo
     clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup(client, owner_headers, department_code="D03", department_name="Laboratory")
 
-    queue_resp = await client.post(
-        "/api/v1/queues", headers=owner_headers,
-        json={
-            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"], "department_id": deps["department_id"],
-            "doctor_id": None, "service_id": deps["service_id"], "priority": "Normal",
-        },
-    )
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
     assert queue_resp.status_code == 201, queue_resp.text
     queue = queue_resp.json()
     assert queue["status"] == "Waiting"
@@ -132,13 +164,7 @@ async def test_walk_in_lab_order_created_even_with_no_matching_template(
     _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup(client, owner_headers, department_code="D03")
 
-    queue_resp = await client.post(
-        "/api/v1/queues", headers=owner_headers,
-        json={
-            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"], "department_id": deps["department_id"],
-            "doctor_id": None, "service_id": deps["service_id"], "priority": "Normal",
-        },
-    )
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
     assert queue_resp.status_code == 201, queue_resp.text
     queue = queue_resp.json()
 
@@ -149,30 +175,31 @@ async def test_walk_in_lab_order_created_even_with_no_matching_template(
     assert orders[0]["test_type"] == "CBC, PLATELET"
 
 
-async def test_queue_ticket_with_doctor_assigned_does_not_auto_create_lab_order(
+async def test_lab_queue_ticket_can_have_a_doctor_assigned_and_still_auto_creates_lab_order(
     client: AsyncClient, make_clinic_with_owner
 ) -> None:
-    """A doctor-assigned queue ticket (Consultation/Follow-up-style) is not
-    a walk-in - it must go through the normal doctor-placed-order flow
-    (`create_from_order`), not have this auto-creation fire alongside it
-    just because the selected service happens to share a name with a lab
-    test."""
+    """A Laboratory-department ticket that happens to carry a doctor_id
+    (e.g. reassigned later, or a clinic routing convention) still goes
+    through the same pay-first + auto-lab-order path - the Doctor rule only
+    ever makes the doctor OPTIONAL for Laboratory, it never disables lab-
+    order auto-creation when one happens to be present. This replaces the
+    pre-payment-gate version of this test, which asserted the opposite
+    (no lab order) back when a doctor_id on a Laboratory-named department
+    ticket fell through to the plain consultation-style path - that path no
+    longer exists for this department, see `QueueService.create_queue`."""
     _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup(client, owner_headers, department_code="D03")
     doctor = (await client.post("/api/v1/doctors", headers=owner_headers, json={"first_name": "Jose", "last_name": "Rizal"})).json()
 
-    queue_resp = await client.post(
-        "/api/v1/queues", headers=owner_headers,
-        json={
-            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"], "department_id": deps["department_id"],
-            "doctor_id": doctor["id"], "service_id": deps["service_id"], "priority": "Normal",
-        },
-    )
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps, doctor_id=doctor["id"])
     assert queue_resp.status_code == 201, queue_resp.text
     queue = queue_resp.json()
+    assert queue["doctor_id"] == doctor["id"]
 
     orders_resp = await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
-    assert orders_resp.json() == []
+    orders = orders_resp.json()
+    assert len(orders) == 1
+    assert orders[0]["test_type"] == "CBC, PLATELET"
 
 
 async def test_non_laboratory_department_walk_in_queue_does_not_create_lab_order(
@@ -180,7 +207,9 @@ async def test_non_laboratory_department_walk_in_queue_does_not_create_lab_order
 ) -> None:
     """A walk-in ticket for an unrelated department (e.g. Radiology) whose
     service name doesn't happen to be named after a department called
-    "Laboratory" must not create a lab order."""
+    "Laboratory" must not create a lab order, and (regression) is completely
+    unaffected by the Laboratory pay-first gate - it still creates
+    immediately via the direct, no-payment-required path."""
     _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup(client, owner_headers, department_code="RAD", department_name="Radiology")
 

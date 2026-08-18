@@ -639,9 +639,32 @@ async def test_queue_slip_laboratory_department_bypasses_vitals_requirement(
             "/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"}
         )
     ).json()
+
+    # Laboratory pay-first workflow: a Laboratory-department queue ticket
+    # must now come from a paid draft visit (see
+    # `QueueService._create_queue_for_paid_lab_visit`) - this test only
+    # cares about the (unrelated, pre-existing) vitals-exemption behavior
+    # on the resulting slip, so it drives that real workflow to reach a
+    # printable ticket rather than the old single direct `POST /queues` call.
+    visit = (
+        await client.post(
+            "/api/v1/visits/pre-queue", headers=headers,
+            json={
+                "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
+                "doctor_id": deps["doctor_id"], "department_id": lab_department["id"], "service_id": deps["service_id"],
+            },
+        )
+    ).json()
+    invoice = (await client.post(f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers)).json()
+    if float(invoice["balance_due"]) > 0:
+        await client.post(
+            f"/api/v1/invoices/{invoice['id']}/payments", headers=headers,
+            json={"payments": [{"payment_method": "Cash", "amount": invoice["balance_due"]}]},
+        )
     created = (
         await client.post(
-            "/api/v1/queues", headers=headers, json=_queue_payload(deps, department_id=lab_department["id"])
+            "/api/v1/queues", headers=headers,
+            json=_queue_payload(deps, department_id=lab_department["id"], visit_id=visit["id"]),
         )
     ).json()
 

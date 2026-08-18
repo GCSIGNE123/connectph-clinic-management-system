@@ -24,6 +24,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.invoice import InvoiceStatus
 from app.models.invoice_item import InvoiceItemType
 from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.laboratory_order import LABORATORY_ORDER_STATUS_TRANSITIONS, LaboratoryOrder, LaboratoryOrderStatus
@@ -513,6 +514,21 @@ class LaboratoryService:
         invoice = await self.invoice_service.create_draft_invoice_for_consultation(
             clinic_id=clinic_id, visit_id=lab_order.visit_id, actor_id=actor_id
         )
+
+        # Laboratory pay-first workflow: a walk-in Laboratory ticket's
+        # invoice (`InvoiceService.create_draft_invoice_for_laboratory_visit`)
+        # is already `Paid` in full by the time a queue ticket - and
+        # therefore this order - even exists (see
+        # `QueueService._create_queue_for_paid_lab_visit`). Both `add_item`
+        # and `update_item` below reject any edit once an invoice is Paid
+        # (`InvoiceService.NON_EDITABLE_STATUSES`) - correctly so, a settled
+        # invoice shouldn't be silently mutated - so there is nothing left
+        # for this sync to do once that's true: skip it rather than raising.
+        # A doctor-ordered lab test (the other caller of this method) still
+        # syncs normally, since its invoice is virtually never already Paid
+        # at result-entry time.
+        if invoice.status == InvoiceStatus.PAID:
+            return
 
         if lab_order.invoice_item_id is not None:
             existing_item = await self.invoice_service.repo.get_item(lab_order.invoice_item_id, invoice.id, clinic_id)

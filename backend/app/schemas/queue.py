@@ -195,3 +195,8 @@ class QueueSlip(BaseModel):
     # explicitly (rather than assumed) so the printed ticket's "VITALS
     # TAKEN" line is driven by real response data, not a hardcoded assumption.
     vitals_taken: bool = True
+    # Laboratory pay-first workflow: True only when this ticket's visit has
+    # an invoice whose status is genuinely `Paid` (see `QueueService.get_slip`)
+    # - never inferred from department or ticket status, so a non-Laboratory
+    # or unpaid ticket never prints a false "PAID" line.
+    is_paid: bool = False

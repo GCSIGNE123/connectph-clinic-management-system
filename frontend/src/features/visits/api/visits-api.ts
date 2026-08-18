@@ -180,15 +180,19 @@ export const visitsApi = {
     return toVisitDetail(raw);
   },
 
-  /** Phase 21 (Vitals-before-Queue): creates a `DraftVitals` Visit for a
-   * Consultation/Follow-up service, BEFORE any Queue ticket exists, so
-   * Reception can capture vitals first (see `NewQueueDialog`'s two-step
-   * flow). `POST /queues` later attaches a Queue ticket to this same
-   * Visit id. */
+  /** Creates a `DraftVitals` Visit BEFORE any Queue ticket exists, so
+   * something can be attached to it first - either vitals (Consultation/
+   * Follow-up, see `NewQueueDialog`'s vitals step) or an invoice
+   * (Laboratory pay-first, see `NewQueueDialog`'s Laboratory step /
+   * `LabPaymentStep`). `POST /queues` later attaches a Queue ticket to this
+   * same Visit id. `doctorId` is required for the Consultation/Follow-up
+   * path (the backend rejects a missing one there - see
+   * `VisitService.create_draft_visit_for_pre_queue`) but optional for
+   * Laboratory. */
   async createPreQueue(input: {
     patientId: string;
     branchId: string;
-    doctorId: string;
+    doctorId?: string | null;
     departmentId: string;
     serviceId: string;
     remarks?: string | null;
@@ -196,7 +200,7 @@ export const visitsApi = {
     const raw = await apiClient.post<RawVisitDetail>("/visits/pre-queue", {
       patient_id: input.patientId,
       branch_id: input.branchId,
-      doctor_id: input.doctorId,
+      doctor_id: input.doctorId || null,
       department_id: input.departmentId,
       service_id: input.serviceId,
       remarks: input.remarks || null,

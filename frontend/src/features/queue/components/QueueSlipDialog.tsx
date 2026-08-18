@@ -72,6 +72,17 @@ function SlipContent({ slip }: { slip: QueueSlip }) {
       {/* Feature 2: a small, secondary confirmation line - deliberately
           not styled to compete with the large queue number above it. */}
       {slip.vitalsTaken ? <p className="pt-1 text-xs font-semibold tracking-wide text-muted-foreground">VITALS TAKEN</p> : null}
+      {/* Laboratory pay-first workflow: driven ONLY by the backend's real
+          `isPaid` (from a genuine, fully-Paid invoice) - never hardcoded
+          from department, so a non-Laboratory or unpaid ticket never shows
+          this line. Bottom of the ticket, prominent but visually consistent
+          with the rest of the slip (same weight as "VITALS TAKEN" above,
+          just larger/bordered so it reads as a settled-transaction stamp). */}
+      {slip.isPaid ? (
+        <div className="mt-1 border-t border-dashed border-border pt-1.5">
+          <p className="text-base font-extrabold tracking-widest text-green-700 dark:text-green-500">PAID</p>
+        </div>
+      ) : null}
       <p className="pt-2 text-sm font-medium">Thank you!</p>
     </>
   );

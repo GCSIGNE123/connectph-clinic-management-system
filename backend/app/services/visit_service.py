@@ -39,6 +39,15 @@ from app.services.audit_service import AuditService
 from app.services.visit_number_generator import VisitNumberGenerator
 from app.services import sync_queue_service
 
+# Duplicated from `services/queue_service.py::PRE_QUEUE_VITALS_SERVICE_CODES`
+# (that module already duplicates the same set for the frontend's benefit,
+# see its own comment) rather than imported, to avoid a circular import -
+# `queue_service.py` imports this module. Used only to decide whether
+# `create_draft_visit_for_pre_queue` must reject a missing `doctor_id`; the
+# Laboratory pay-first path (the other caller of this same endpoint) never
+# requires a doctor, so this check must stay scoped to exactly this set.
+PRE_QUEUE_VITALS_SERVICE_CODES = {"CONSULT", "FOLLOW-UP"}
+
 
 def _full_name(entity) -> str:
     parts = [entity.first_name, getattr(entity, "middle_name", None), entity.last_name, getattr(entity, "suffix", None)]
@@ -201,7 +210,12 @@ class VisitService:
         unmodified, since they only ever look at `visit_id`/`visit.doctor_id`.
         `QueueService.create_queue` later transitions this same Visit row
         from DRAFT_VITALS -> WAITING and attaches the Queue ticket, instead
-        of creating a brand new Visit (see `queue_service.py`)."""
+        of creating a brand new Visit (see `queue_service.py`).
+
+        Also the entry point for the Laboratory pay-first workflow: a
+        walk-in Laboratory ticket creates a draft Visit here (no doctor)
+        so an invoice can be raised and paid before the Queue ticket
+        exists - see `QueueService._create_queue_for_paid_lab_visit`."""
         await self._validate_entities(
             clinic_id,
             patient_id=payload.patient_id,
@@ -209,6 +223,13 @@ class VisitService:
             department_id=payload.department_id,
             service_id=payload.service_id,
         )
+
+        service = await self.repo.get_active_entity(ClinicService, payload.service_id, clinic_id)
+        if service is not None and service.service_code in PRE_QUEUE_VITALS_SERVICE_CODES and payload.doctor_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A doctor must be selected before entering vitals for this service.",
+            )
 
         today = datetime.now(UTC).date()
         visit_number = await self.number_generator.next_number(clinic_id, payload.branch_id, today)

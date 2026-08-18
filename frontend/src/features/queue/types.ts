@@ -146,6 +146,10 @@ export interface QueueSlip {
   /** Feature 2: always true when a slip is actually returned - printing is
    * blocked server-side (400) before this point if vitals are missing. */
   vitalsTaken: boolean;
+  /** Laboratory pay-first workflow: true only when this ticket's visit has
+   * a real invoice that is genuinely `Paid` (see `QueueService.get_slip`).
+   * Never inferred from department - drives the printed "PAID" line. */
+  isPaid: boolean;
 }
 
 export interface QueueListParams {

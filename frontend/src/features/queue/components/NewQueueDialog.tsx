@@ -24,6 +24,7 @@ import { ShiftRequiredDialog } from "@/features/shifts/components/ShiftRequiredD
 import { visitsApi } from "@/features/visits/api/visits-api";
 import type { VisitDetail } from "@/features/visits/types";
 import { PreQueueVitalsStep } from "@/features/queue/components/PreQueueVitalsStep";
+import { LabPaymentStep } from "@/features/queue/components/LabPaymentStep";
 import { ApiError } from "@/lib/api-client";
 
 interface SimpleOption {
@@ -81,6 +82,19 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
   const [creatingDraft, setCreatingDraft] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
 
+  // Laboratory pay-first workflow: mirrors the vitals-step state above, but
+  // for Laboratory tickets - a draft Visit + Laboratory invoice must be
+  // created and PAID before the Queue ticket itself can exist (backend-
+  // enforced, see `QueueService._create_queue_for_paid_lab_visit`). Kept
+  // as its own parallel step (not merged with the vitals step) since the
+  // two are mutually exclusive - a service can't be both Consultation/
+  // Follow-up and Laboratory-department at once.
+  const [labDraftVisit, setLabDraftVisit] = useState<VisitDetail | null>(null);
+  const [showLabPaymentStep, setShowLabPaymentStep] = useState(false);
+  const [labQueueError, setLabQueueError] = useState<string | null>(null);
+  const [creatingLabDraft, setCreatingLabDraft] = useState(false);
+  const [labDraftError, setLabDraftError] = useState<string | null>(null);
+
   const shiftError = useShiftRequiredError();
   const createQueue = useCreateQueue(shiftError.handleError);
 
@@ -89,6 +103,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     handleSubmit,
     watch,
     setValue,
+    getValues,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<NewQueueInput>({
@@ -123,6 +138,10 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
       setShowVitalsStep(false);
       setVitalsSaved(false);
       setDraftError(null);
+      setLabDraftVisit(null);
+      setShowLabPaymentStep(false);
+      setLabQueueError(null);
+      setLabDraftError(null);
     }
   }, [open, defaultBranchId, reset]);
 
@@ -181,6 +200,19 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
   );
   const requiresVitals = Boolean(selectedService?.service_code && PRE_QUEUE_VITALS_SERVICE_CODES.has(selectedService.service_code));
 
+  // Laboratory pay-first workflow: detected by department NAME (matching
+  // the same convention `QueueService._is_laboratory_department` uses on
+  // the backend, which is the real enforcement - this is only the first
+  // line of defense driving the frontend's step/button state, exactly like
+  // `requiresVitals`/`PRE_QUEUE_VITALS_SERVICE_CODES` above). A direct API
+  // call for this department without going through the pay-first steps is
+  // still rejected server-side regardless of what this flag does here.
+  const selectedDepartment = useMemo(
+    () => (departments.data?.items ?? []).find((d) => d.id === departmentId),
+    [departments.data, departmentId]
+  );
+  const isLaboratoryDepartment = Boolean(selectedDepartment?.name?.trim().toLowerCase() === "laboratory");
+
   // A previously created draft only remains valid for the service/patient
   // it was created for - if the receptionist changes patient or service
   // after entering vitals, the draft no longer applies and must be redone.
@@ -191,6 +223,17 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
       setShowVitalsStep(false);
     }
   }, [serviceId, patientId, draftVisit]);
+
+  // Same invalidation rule as above, for the Laboratory draft/invoice - a
+  // changed patient/service/department means the invoice already created
+  // for the previous selection no longer applies.
+  useEffect(() => {
+    if (labDraftVisit && (labDraftVisit.serviceId !== serviceId || labDraftVisit.patientId !== patientId || labDraftVisit.departmentId !== departmentId)) {
+      setLabDraftVisit(null);
+      setShowLabPaymentStep(false);
+      setLabQueueError(null);
+    }
+  }, [serviceId, patientId, departmentId, labDraftVisit]);
 
   async function handleEnterVitals() {
     setDraftError(null);
@@ -216,7 +259,70 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     }
   }
 
+  async function handleProceedToLabPayment() {
+    setLabDraftError(null);
+    if (!patientId || !branchId || !departmentId || !serviceId) {
+      setLabDraftError("Select patient, branch, department, and service first.");
+      return;
+    }
+    setCreatingLabDraft(true);
+    try {
+      // Doctor rule: never sent for Laboratory - the field is hidden below
+      // and the backend treats it as fully optional for this department.
+      const visit = labDraftVisit ?? (await visitsApi.createPreQueue({
+        patientId, branchId, doctorId: null, departmentId, serviceId,
+      }));
+      setLabDraftVisit(visit);
+      setLabQueueError(null);
+      setShowLabPaymentStep(true);
+    } catch (err) {
+      setLabDraftError(err instanceof ApiError ? err.message : "Could not start the Laboratory payment step.");
+    } finally {
+      setCreatingLabDraft(false);
+    }
+  }
+
+  // Fires once `LabPaymentStep` observes the real invoice state reach
+  // `Paid` (never assumed from department alone). Only NOW is the Queue
+  // ticket created - the transactional guarantee this workflow requires:
+  // if this call fails, no queue exists yet, and the receptionist gets an
+  // explicit Retry rather than a silently-pretended success. Retrying is
+  // safe - the backend's own draft-visit-status/duplicate-ticket guards
+  // make a second `POST /queues` for the same paid visit a no-op-or-clear-
+  // error, never a second ticket.
+  async function handleLabPaid() {
+    if (!labDraftVisit) return;
+    setLabQueueError(null);
+    const values = getValues();
+    try {
+      const result = await createQueue.mutateAsync({
+        patientId: values.patientId,
+        branchId: values.branchId,
+        departmentId: values.departmentId,
+        doctorId: null,
+        serviceId: values.serviceId,
+        priority: values.priority,
+        notes: values.notes,
+        visitId: labDraftVisit.id,
+        visitClassification: values.visitClassification,
+      });
+      onOpenChange(false);
+      onCreated?.(result.id);
+    } catch {
+      setLabQueueError("Payment was recorded, but the queue ticket could not be created. Click Retry to try again.");
+    }
+  }
+
   const onSubmit = handleSubmit(async (values) => {
+    // Laboratory tickets never submit through this path - the "Create
+    // Queue Ticket" button is replaced with "Proceed to Payment" below, but
+    // pressing Enter in a text field still triggers native form submit, so
+    // this is the real guard (defense in depth, matching the backend's own
+    // rejection of a Laboratory queue with no visit_id).
+    if (isLaboratoryDepartment) {
+      await handleProceedToLabPayment();
+      return;
+    }
     // mutateAsync rejects on failure even though onError (see
     // use-queue-mutations.ts) already shows a toast with the backend's
     // message; without this try/catch that rejection propagates as an
@@ -315,7 +421,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
             {errors.patientId ? <p className="text-xs text-destructive">{errors.patientId.message}</p> : null}
           </div>
 
-          {!showVitalsStep ? (
+          {!showVitalsStep && !showLabPaymentStep ? (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
@@ -340,22 +446,30 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                     ))}
                   </Select>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Doctor{requiresVitals ? "" : " (optional)"}</Label>
-                  <Select {...register("doctorId")} disabled={vitalsSaved}>
-                    <option value="">{requiresVitals ? "Select doctor" : "Any / unassigned"}</option>
-                    {filteredDoctors.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.first_name} {d.last_name}
-                      </option>
-                    ))}
-                  </Select>
-                  {requiresVitals ? (
-                    <p className="text-xs text-muted-foreground">
-                      Required for this service - vitals are opened against the assigned doctor&apos;s consultation.
-                    </p>
-                  ) : null}
-                </div>
+                {/* Doctor rule: Laboratory tickets never require - and never
+                    show - a doctor field, consistent with the backend
+                    treating `doctor_id` as fully optional for this
+                    department (see `QueueService`'s Doctor rule). Every
+                    other department keeps the existing field exactly as
+                    before. */}
+                {!isLaboratoryDepartment ? (
+                  <div className="space-y-1.5">
+                    <Label>Doctor{requiresVitals ? "" : " (optional)"}</Label>
+                    <Select {...register("doctorId")} disabled={vitalsSaved}>
+                      <option value="">{requiresVitals ? "Select doctor" : "Any / unassigned"}</option>
+                      {filteredDoctors.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.first_name} {d.last_name}
+                        </option>
+                      ))}
+                    </Select>
+                    {requiresVitals ? (
+                      <p className="text-xs text-muted-foreground">
+                        Required for this service - vitals are opened against the assigned doctor&apos;s consultation.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="space-y-1.5">
                   <Label>Service</Label>
                   <SearchableSelect
@@ -413,8 +527,15 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                 </div>
               ) : null}
               {draftError ? <p className="text-xs text-destructive">{draftError}</p> : null}
+              {isLaboratoryDepartment ? (
+                <p className="text-xs text-muted-foreground">
+                  Laboratory tickets are paid first - the next step creates and settles the invoice before the
+                  queue ticket is raised.
+                </p>
+              ) : null}
+              {labDraftError ? <p className="text-xs text-destructive">{labDraftError}</p> : null}
             </>
-          ) : draftVisit ? (
+          ) : showVitalsStep && draftVisit ? (
             <PreQueueVitalsStep
               visitId={draftVisit.id}
               onSaved={() => {
@@ -423,9 +544,38 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
               }}
               onBack={() => setShowVitalsStep(false)}
             />
+          ) : showLabPaymentStep && labDraftVisit ? (
+            labQueueError ? (
+              <div className="space-y-3">
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  {labQueueError}
+                </div>
+                <div className="flex justify-between pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setShowLabPaymentStep(false);
+                      setLabQueueError(null);
+                    }}
+                  >
+                    Back
+                  </Button>
+                  <Button type="button" onClick={handleLabPaid} disabled={createQueue.isPending}>
+                    {createQueue.isPending ? "Retrying..." : "Retry"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <LabPaymentStep
+                visitId={labDraftVisit.id}
+                onPaid={handleLabPaid}
+                onBack={() => setShowLabPaymentStep(false)}
+              />
+            )
           ) : null}
 
-          {!showVitalsStep ? (
+          {!showVitalsStep && !showLabPaymentStep ? (
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
@@ -433,6 +583,10 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
               {requiresVitals && !vitalsSaved ? (
                 <Button type="button" onClick={handleEnterVitals} disabled={creatingDraft}>
                   {creatingDraft ? "Starting..." : "Enter Vitals"}
+                </Button>
+              ) : isLaboratoryDepartment ? (
+                <Button type="button" onClick={handleProceedToLabPayment} disabled={creatingLabDraft}>
+                  {creatingLabDraft ? "Preparing..." : "Proceed to Payment"}
                 </Button>
               ) : (
                 <Button type="submit" disabled={isSubmitting || createQueue.isPending}>

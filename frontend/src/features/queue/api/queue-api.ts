@@ -71,6 +71,7 @@ interface RawQueueSlip {
   created_at: string;
   qr_token: string;
   vitals_taken: boolean;
+  is_paid: boolean;
 }
 
 function toHistoryEntry(raw: RawHistoryEntry): QueueStatusHistoryEntry {
@@ -141,6 +142,7 @@ function toQueueSlip(raw: RawQueueSlip): QueueSlip {
     createdAt: raw.created_at,
     qrToken: raw.qr_token,
     vitalsTaken: raw.vitals_taken,
+    isPaid: raw.is_paid,
   };
 }
 

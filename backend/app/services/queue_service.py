@@ -17,12 +17,15 @@ from app.models.clinic import Clinic
 from app.models.clinic_service import ClinicService
 from app.models.department import Department
 from app.models.doctor import Doctor, DoctorStatus
+from app.models.invoice import InvoiceStatus
+from app.models.invoice_item import InvoiceItemType
 from app.models.patient import Patient, PatientStatus
 from app.models.queue import QUEUE_STATUS_TRANSITIONS, Queue, QueueStatus
 from app.models.queue_setting import QueueSetting
 from app.models.user import User
 from app.models.visit import VISIT_STATUS_TRANSITIONS, VisitPriority, VisitStatus, VisitTimelineEventType, VisitType
 from app.repositories.consultation_repository import ConsultationRepository
+from app.repositories.invoice_repository import InvoiceRepository
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.queue_setting_repository import QueueSettingRepository
 from app.services.queue_destination import resolve_room_label
@@ -74,6 +77,18 @@ REQUIRED_VITALS_FIELDS: dict[str, str] = {
 
 def service_requires_pre_queue_vitals(service: ClinicService) -> bool:
     return service.service_code in PRE_QUEUE_VITALS_SERVICE_CODES
+
+
+def _is_laboratory_department(department: Department) -> bool:
+    # Matched by NAME, not `department.department_code == "LAB"` - see the
+    # comment on the original walk-in-lab-order gate this was factored out
+    # of (below, in `create_queue`): `department_code` is only reliable for
+    # the *seeded* default Laboratory department, and a clinic that created
+    # its own Laboratory department manually (a real, observed case) would
+    # never match it. Used for both the existing auto-lab-order-linking gate
+    # and the new Laboratory pay-first payment gate, so both features agree
+    # on what counts as "the Laboratory department" for a given clinic.
+    return department.name.strip().lower() == "laboratory"
 
 
 def _slip_qr_token(clinic_id: UUID, queue_id: UUID) -> str:
@@ -335,6 +350,163 @@ class QueueService:
         )
         return detail
 
+    async def _create_queue_for_paid_lab_visit(
+        self, payload: QueueCreate, *, clinic_id: UUID, actor: User, service: ClinicService
+    ) -> QueueDetail:
+        """Laboratory pay-first workflow: the payment-gated counterpart to
+        `_create_queue_for_draft_visit` above - attaches a Queue ticket to
+        an EXISTING draft Visit (created via `POST /visits/pre-queue`), but
+        ONLY once that visit's invoice (`POST /visits/{id}/laboratory-invoice`,
+        paid via the existing `POST /invoices/{id}/payments`) is fully paid.
+        This is the real backend enforcement point - a direct API call with
+        no prior payment is rejected here, not merely hidden behind a
+        disabled frontend button. Doctor rule: `doctor_id` is never required
+        for Laboratory (see `QueueCreate.doctor_id`/`_validate_and_fetch_entities`,
+        already optional for every department) - this method neither
+        requires nor forces it, it simply passes through whatever the draft
+        visit/payload already carry."""
+        visit = await self.visit_service.repo.get_by_id_and_clinic(payload.visit_id, clinic_id)
+        if visit is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft visit not found.")
+        if visit.status != VisitStatus.DRAFT_VITALS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This visit is not awaiting queue creation (already queued, or not a pre-queue draft).",
+            )
+        if visit.patient_id != payload.patient_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Draft visit does not belong to this patient.")
+
+        invoice = await InvoiceRepository(self.session).get_latest_for_visit(visit.id, clinic_id)
+        if invoice is None or invoice.status != InvoiceStatus.PAID:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This Laboratory ticket's invoice must be paid in full before the queue ticket can be "
+                    "created. Create an invoice (POST /visits/{visit_id}/laboratory-invoice) and record full "
+                    "payment (POST /invoices/{invoice_id}/payments) first."
+                ),
+            )
+
+        today = datetime.now(UTC).date()
+        if await self.repo.has_active_duplicate(
+            clinic_id, patient_id=payload.patient_id, department_id=payload.department_id, queue_date=today
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This patient already has an active queue ticket for this department today.",
+            )
+
+        resolved_doctor_id = payload.doctor_id if payload.doctor_id is not None else visit.doctor_id
+        prefix = await self._resolve_prefix(clinic_id, payload.branch_id, payload.department_id, resolved_doctor_id)
+        max_daily_queue = await self._resolve_max_daily_queue(
+            clinic_id, payload.branch_id, payload.department_id, resolved_doctor_id
+        )
+        queue_number = await self.number_generator.next_number(
+            clinic_id, payload.branch_id, prefix, today, max_daily_queue=max_daily_queue
+        )
+
+        queue = await self.repo.create(
+            clinic_id=clinic_id,
+            branch_id=payload.branch_id,
+            patient_id=payload.patient_id,
+            department_id=payload.department_id,
+            doctor_id=resolved_doctor_id,
+            service_id=payload.service_id,
+            queue_number=queue_number,
+            queue_prefix=prefix,
+            queue_date=today,
+            priority=payload.priority,
+            status=QueueStatus.WAITING,
+            visit_classification=payload.visit_classification,
+            notes=payload.notes,
+            visit_id=visit.id,
+            created_by=actor.id,
+            updated_by=actor.id,
+        )
+        await self.repo.add_history(
+            clinic_id=clinic_id, queue_id=queue.id, from_status=None, to_status=QueueStatus.WAITING,
+            changed_by=actor.id, note="Queue ticket created (Laboratory - invoice paid in full)",
+        )
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor.id, action="queue.created",
+            entity_type="queue", entity_id=str(queue.id),
+            metadata={
+                "queue_number": queue_number, "patient_id": str(payload.patient_id),
+                "visit_id": str(visit.id), "invoice_id": str(invoice.id),
+            },
+        )
+
+        now = datetime.now(UTC)
+        visit = await self.visit_service.repo.update(
+            visit,
+            queue_id=queue.id,
+            status=VisitStatus.WAITING,
+            check_in_time=visit.check_in_time or now,
+            updated_by=actor.id,
+        )
+        await self.visit_service.repo.add_timeline_event(
+            clinic_id=clinic_id, visit_id=visit.id, event_type=VisitTimelineEventType.QUEUED,
+            occurred_at=now, recorded_by=actor.id, note="Added to reception queue (Laboratory - invoice paid)",
+        )
+        await self.visit_service.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor.id, action="visit.queued",
+            entity_type="visit", entity_id=str(visit.id), metadata={"queue_id": str(queue.id)},
+        )
+
+        # Walk-in lab order: moved here from the direct-creation `create_queue`
+        # path (see that method's comment) since every Laboratory queue
+        # ticket now goes through this payment-gated path. Created in this
+        # SAME transaction, before the one commit below - same lesson as
+        # BUG-038: creating it after an independent commit risks a committed
+        # queue ticket with no matching lab order if anything failed in
+        # between.
+        from app.services.laboratory_service import LaboratoryService
+
+        lab_order = await LaboratoryService(self.session).create_from_queue_ticket(
+            visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
+            service_name=service.service_name, clinic_id=clinic_id,
+        )
+
+        # Idempotency (no duplicate Laboratory charge): link the already-paid
+        # invoice's Laboratory line item to this order NOW, so
+        # `LaboratoryService._sync_billing` (unchanged - runs later when
+        # results are entered) sees `invoice_item_id` already set and
+        # updates that existing line in place instead of adding a second one
+        # for the same test. The pay-first invoice always has exactly one
+        # Laboratory item (see `InvoiceService.create_draft_invoice_for_laboratory_visit`).
+        lab_item = next((i for i in invoice.items if i.item_type == InvoiceItemType.LABORATORY), None)
+        if lab_item is not None:
+            await LaboratoryService(self.session).repo.update_laboratory_order(lab_order, invoice_item_id=lab_item.id)
+            # `update_laboratory_order`'s flush touches a server-side
+            # `onupdate` column (`updated_at`), which SQLAlchemy always
+            # expires after any UPDATE regardless of `expire_on_commit` -
+            # `build_sync_payload(lab_order)` below reads that column
+            # directly, and an expired-attribute reload triggers a lazy
+            # (sync) load that `MissingGreenlet`s under asyncio. Refresh
+            # just that one column explicitly rather than lazily.
+            await self.session.refresh(lab_order, attribute_names=["updated_at"])
+
+        await self.session.commit()
+
+        detail = await self.get_detail(queue.id, clinic_id=clinic_id)
+        await queue_connection_manager.broadcast(clinic_id, "queue.created", detail.model_dump(mode="json"))
+        await sync_queue_service.enqueue(
+            entity_type="queue_ticket", record_id=queue.id, operation="create",
+            payload=detail.model_dump(mode="json"), clinic_id=clinic_id,
+        )
+        await sync_queue_service.enqueue(
+            entity_type="visit", record_id=visit.id, operation="update",
+            payload={"visit_id": str(visit.id), "queue_id": str(queue.id), "status": "Waiting"},
+            clinic_id=clinic_id,
+        )
+        from app.services.laboratory_service import build_sync_payload
+
+        await sync_queue_service.enqueue(
+            entity_type="laboratory_order", record_id=lab_order.id, operation="create",
+            payload=build_sync_payload(lab_order), clinic_id=clinic_id,
+        )
+        return detail
+
     async def create_queue(
         self, payload: QueueCreate, *, clinic_id: UUID, actor: User, visit_type: VisitType = VisitType.WALK_IN
     ) -> QueueDetail:
@@ -379,10 +551,33 @@ class QueueService:
                     ),
                 )
             return await self._create_queue_for_draft_visit(payload, clinic_id=clinic_id, actor=actor, service=service)
+        elif _is_laboratory_department(department):
+            # Laboratory pay-first workflow: a Laboratory queue ticket must
+            # always originate from a draft Visit whose invoice is already
+            # fully paid (see `_create_queue_for_paid_lab_visit`) - there is
+            # no direct-creation path left for this department, so a
+            # missing `visit_id` is rejected here rather than silently
+            # falling through to the unpaid, no-visit-required flow below.
+            # This is the real enforcement point: a direct `POST /queues`
+            # call for Laboratory with no `visit_id` (and therefore no
+            # verified payment) is rejected here, not merely hidden behind
+            # a disabled frontend button.
+            if payload.visit_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Laboratory queue tickets require payment first. Create a draft visit "
+                        "(POST /visits/pre-queue), then an invoice (POST /visits/{visit_id}/laboratory-invoice), "
+                        "then record full payment (POST /invoices/{invoice_id}/payments) before creating the queue ticket."
+                    ),
+                )
+            return await self._create_queue_for_paid_lab_visit(
+                payload, clinic_id=clinic_id, actor=actor, service=service
+            )
         elif payload.visit_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="visit_id is only supported for Consultation/Follow-up services.",
+                detail="visit_id is only supported for Consultation/Follow-up or Laboratory services.",
             )
 
         today = datetime.now(UTC).date()
@@ -451,31 +646,14 @@ class QueueService:
         )
         queue = await self.repo.update(queue, visit_id=visit.id)
 
-        # Walk-in lab order: a queue ticket with no doctor has no Phase 9
-        # consultation/Order to place a lab order through, so this is the
-        # only place a LaboratoryOrder can originate for it - see
-        # `LaboratoryService.create_from_queue_ticket`. Gated on the
-        # department's NAME, not `department.department_code == "LAB"`
-        # (the convention the vitals-exemption check below uses) - that
-        # code is only the *seeded* default department's code, and a
-        # clinic that created its own departments manually (a real,
-        # observed case: Laboratory named "Laboratory" but coded "D03")
-        # would never match it, silently breaking this for exactly the
-        # clinics that most need it. Deferred import to avoid a circular
-        # import (LaboratoryService itself constructs a QueueService).
-        # Created in this SAME transaction, before the one commit below -
-        # same lesson as BUG-038: creating it after an independent commit
-        # risks a committed queue ticket with no matching lab order if
-        # anything failed in between.
-        lab_order = None
-        if payload.doctor_id is None and department.name.strip().lower() == "laboratory":
-            from app.services.laboratory_service import LaboratoryService
-
-            lab_order = await LaboratoryService(self.session).create_from_queue_ticket(
-                visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
-                service_name=service.service_name, clinic_id=clinic_id,
-            )
-
+        # Note: the walk-in-Laboratory-order side effect that used to live
+        # here (a queue ticket with no doctor, department=Laboratory) was
+        # moved to `_create_queue_for_paid_lab_visit` - every Laboratory
+        # queue ticket now goes through that payment-gated path instead (see
+        # the `_is_laboratory_department` branch above), so this direct-
+        # creation path can no longer produce one; unreachable dead code
+        # would otherwise sit here for a department this function can never
+        # actually see reach this point.
         await self.session.commit()
 
         detail = await self.get_detail(queue.id, clinic_id=clinic_id)
@@ -489,13 +667,6 @@ class QueueService:
             payload={"visit_id": str(visit.id), "queue_id": str(queue.id)},
             clinic_id=clinic_id,
         )
-        if lab_order is not None:
-            from app.services.laboratory_service import build_sync_payload
-
-            await sync_queue_service.enqueue(
-                entity_type="laboratory_order", record_id=lab_order.id, operation="create",
-                payload=build_sync_payload(lab_order), clinic_id=clinic_id,
-            )
         return detail
 
     async def search(self, *, clinic_id: UUID, params: QueueSearchParams) -> tuple[list[QueueListItem], int]:
@@ -716,6 +887,16 @@ class QueueService:
         clinic_stmt_result = await self.session.get(Clinic, clinic_id)
         clinic_name = clinic_stmt_result.name if clinic_stmt_result else ""
 
+        # Laboratory pay-first workflow (and, harmlessly, any other queue
+        # ticket whose visit happens to already be fully paid): print "PAID"
+        # only when a real invoice for this ticket's visit is genuinely in
+        # `Paid` status - never inferred from department or ticket status,
+        # so an unpaid or non-Laboratory ticket never shows a false PAID line.
+        is_paid = False
+        if queue.visit_id is not None:
+            invoice = await InvoiceRepository(self.session).get_latest_for_visit(queue.visit_id, clinic_id)
+            is_paid = invoice is not None and invoice.status == InvoiceStatus.PAID
+
         return QueueSlip(
             queue_id=queue.id,
             queue_number=queue.queue_number,
@@ -730,4 +911,5 @@ class QueueService:
             created_at=queue.created_at,
             vitals_taken=vitals_taken,
             qr_token=_slip_qr_token(clinic_id, queue.id),
+            is_paid=is_paid,
         )

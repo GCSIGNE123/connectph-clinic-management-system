@@ -24,16 +24,28 @@ class VisitCreate(BaseModel):
 
 
 class VisitPreQueueCreate(BaseModel):
-    """Phase 21 (Vitals-before-Queue): creates a `DraftVitals` Visit for
-    Consultation/Follow-up services, BEFORE any Queue ticket exists, so
-    Reception can capture vitals first. `doctor_id` is required here (unlike
-    `VisitCreate`) because `ConsultationService.open_consultation_for_reception`
-    - reused unmodified for the vitals step - requires a non-null
-    `visit.doctor_id`."""
+    """Creates a draft Visit (`DraftVitals` status) BEFORE any Queue ticket
+    exists, for the two flows that need something to exist prior to queue
+    creation:
+
+    - Phase 21 (Vitals-before-Queue): Consultation/Follow-up services, so
+      Reception can capture vitals first. `doctor_id` is required for this
+      path because `ConsultationService.open_consultation_for_reception`
+      - reused unmodified for the vitals step - requires a non-null
+      `visit.doctor_id`.
+    - Laboratory pay-first workflow: a walk-in Laboratory ticket, so an
+      invoice can be created and paid before the queue ticket is raised.
+      `doctor_id` is genuinely optional here (see `QueueService`'s Doctor
+      rule for Laboratory tickets) - the field itself stays optional at the
+      schema level; `VisitService.create_draft_visit_for_pre_queue` is the
+      real enforcement point for "Consultation/Follow-up still requires a
+      doctor", mirroring how `service_requires_pre_queue_vitals` is already
+      enforced in the service layer rather than the schema for `QueueCreate`.
+    """
 
     patient_id: UUID
     branch_id: UUID
-    doctor_id: UUID
+    doctor_id: UUID | None = None
     department_id: UUID
     service_id: UUID
     visit_type: VisitType = VisitType.WALK_IN

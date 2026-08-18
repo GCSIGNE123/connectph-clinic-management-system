@@ -115,6 +115,27 @@ async def get_invoice_for_visit(
     return await service.get_invoice_for_visit(visit_id, clinic_id=clinic_id)
 
 
+@router.post("/visits/{visit_id}/laboratory-invoice", response_model=InvoiceDetail)
+async def create_laboratory_invoice_for_visit(
+    visit_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_billing_payment_record_role),
+) -> InvoiceDetail:
+    """Laboratory pay-first workflow (Reception): creates (or returns the
+    existing) invoice for a draft Laboratory Visit created via
+    `POST /visits/pre-queue`, so it can be paid via the existing
+    `POST /invoices/{invoice_id}/payments` before the Queue ticket is
+    raised via `POST /queues`. Gated on `require_billing_payment_record_role`
+    (Owner/Administrator/Cashier/Receptionist) rather than the stricter
+    `require_billing_manage_role` (no Receptionist) - a Receptionist is the
+    one who runs this walk-in flow at the counter, and this endpoint only
+    ever creates one fixed, system-priced line item, not arbitrary invoice
+    editing."""
+    service = InvoiceService(db)
+    return await service.create_laboratory_invoice_for_visit_endpoint(visit_id, clinic_id=clinic_id, actor_id=current_user.id)
+
+
 @router.get("/patients/{patient_id}/billing-history")
 async def get_billing_history(
     patient_id: UUID,
