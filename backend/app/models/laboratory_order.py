@@ -78,6 +78,7 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     )
 
     order: Mapped["Order"] = relationship()
+    visit: Mapped["Visit"] = relationship()
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["Doctor"] = relationship()
     template: Mapped["LaboratoryTemplate"] = relationship()

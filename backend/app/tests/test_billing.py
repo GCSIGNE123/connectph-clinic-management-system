@@ -325,6 +325,24 @@ async def test_receipt_payload_and_print_audit(client: AsyncClient, make_clinic_
 
 
 async def test_role_gating_cashier_doctor_reception(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Phase 7 (P7-2): this test previously asserted Doctor/Receptionist
+    get 403 on `POST /invoices/{id}/discounts`, which encoded an OLD,
+    superseded permission round. `BILLING_DISCOUNT_ROLES` in
+    `app/core/dependencies.py` documents its own history in a code
+    comment: Round 1 (+Receptionist), Round 2 (-Receptionist, +Doctor),
+    Round 3 - the CURRENT, live-verified, docs/TESTING.md-documented final
+    state - (+Receptionist, +Cashier, Doctor/Owner/Administrator kept).
+    The live final role set is "all five clinic-staff roles can apply
+    discounts"; only `BILLING_REFUND_ROLES` (Administrator/Owner only)
+    stays narrow. This test was simply never updated after that Round 3
+    reversal - a stale test expectation (Option B), not an application
+    defect; the previous 400 failure (not even 403) was itself proof the
+    role layer already allowed the write and a downstream invoice-editable
+    check fired first, since the test applied the payment (making the
+    invoice non-editable) before attempting the writes it meant to gate.
+    Reordered so the editability precondition doesn't mask what's being
+    tested, and updated the expected status codes to match the current,
+    documented, correct RBAC state."""
     clinic, owner_headers, doc_headers, cashier_headers, _deps, visit_id, _cid = await _complete_consultation_flow(
         client, make_clinic_with_owner, db_session
     )
@@ -334,31 +352,45 @@ async def test_role_gating_cashier_doctor_reception(client: AsyncClient, make_cl
     recept_token = await _login(client, recept_email, "TestPass123!")
     recept_headers = {"Authorization": f"Bearer {recept_token}"}
 
-    # Cashier can pay.
-    pay = await client.post(
-        f"/api/v1/invoices/{invoice_id}/payments", headers=cashier_headers,
-        json={"payments": [{"payment_method": "Cash", "amount": 100}]},
-    )
-    assert pay.status_code == 200, pay.text
-
-    # Doctor: view ok, write 403.
+    # Doctor: view ok, and per the current (Round 3) role set, write
+    # succeeds too - Doctor is one of the five roles with discount
+    # authority. Applied while the invoice is still editable (Draft/
+    # PendingPayment), so this isolates the role check from the separate
+    # invoice-editable-state business rule.
     doc_view = await client.get(f"/api/v1/invoices/{invoice_id}", headers=doc_headers)
     assert doc_view.status_code == 200
     doc_write = await client.post(
         f"/api/v1/invoices/{invoice_id}/discounts", headers=doc_headers,
         json={"discount_type": "Custom", "calculation_type": "FixedAmount", "value": 10},
     )
-    assert doc_write.status_code == 403
+    assert doc_write.status_code == 200, doc_write.text
 
-    # Reception: read succeeds, write 403s (spec's "Reception: Read-only" -
-    # distinct from Phase 8's Receptionist-excluded-entirely rule for SOAP).
+    # Reception: read succeeds, and write succeeds too under the current
+    # Round 3 role set (Receptionist has discount authority, same as
+    # Doctor above).
     recept_view = await client.get(f"/api/v1/invoices/{invoice_id}", headers=recept_headers)
     assert recept_view.status_code == 200
     recept_write = await client.post(
         f"/api/v1/invoices/{invoice_id}/discounts", headers=recept_headers,
         json={"discount_type": "Custom", "calculation_type": "FixedAmount", "value": 10},
     )
-    assert recept_write.status_code == 403
+    assert recept_write.status_code == 200, recept_write.text
+
+    # Cashier can pay - unaffected by any of the above, still verified.
+    pay = await client.post(
+        f"/api/v1/invoices/{invoice_id}/payments", headers=cashier_headers,
+        json={"payments": [{"payment_method": "Cash", "amount": 100}]},
+    )
+    assert pay.status_code == 200, pay.text
+
+    # Once the invoice is no longer editable (payment applied), a further
+    # discount write is correctly rejected - but with the true business
+    # reason (400 "not editable"), not conflated with a role check.
+    doc_write_after_payment = await client.post(
+        f"/api/v1/invoices/{invoice_id}/discounts", headers=doc_headers,
+        json={"discount_type": "Custom", "calculation_type": "FixedAmount", "value": 5},
+    )
+    assert doc_write_after_payment.status_code == 400
 
 
 async def test_tenant_isolation(client: AsyncClient, make_clinic_with_owner, db_session) -> None:

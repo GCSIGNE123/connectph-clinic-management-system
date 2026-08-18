@@ -26,11 +26,15 @@ from app.core.dependencies import (
     require_lab_view_role,
 )
 from app.core.upload_validation import validate_document_upload, validate_image_upload
+from app.models.clinic import Clinic
 from app.models.laboratory_attachment import LaboratoryAttachmentType
 from app.models.user import User
 from app.schemas.laboratory import (
     LaboratoryAttachmentRead,
     LaboratoryOrderRead,
+    LaboratoryReferenceRangeCreate,
+    LaboratoryReferenceRangeRead,
+    LaboratoryReferenceRangeUpdate,
     LaboratoryResultsSubmit,
     LaboratoryTemplateCreate,
     LaboratoryTemplateRead,
@@ -83,7 +87,14 @@ async def get_order(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_lab_view_role),
 ) -> LaboratoryOrderRead:
-    return await LaboratoryService(db).get(laboratory_order_id, clinic_id=clinic_id)
+    order = await LaboratoryService(db).get(laboratory_order_id, clinic_id=clinic_id)
+    # Phase 4G: report/print header branding - same one-line lookup
+    # `GET /billing/invoices/{id}/receipt` already uses for `clinic_name`.
+    # Only this single-order fetch populates it (the report view's data
+    # source); list/action endpoints are unaffected.
+    clinic = await db.get(Clinic, clinic_id)
+    order.clinic_name = clinic.name if clinic else None
+    return order
 
 
 @router.post("/orders/{laboratory_order_id}/collect", response_model=LaboratoryOrderRead)
@@ -115,7 +126,10 @@ async def enter_results(
     current_user: User = Depends(require_lab_manage_role),
 ) -> LaboratoryOrderRead:
     results = [r.model_dump() for r in payload.results]
-    return await LaboratoryService(db).enter_results(laboratory_order_id, results, clinic_id=clinic_id, actor_id=current_user.id)
+    return await LaboratoryService(db).enter_results(
+        laboratory_order_id, results, clinic_id=clinic_id, actor_id=current_user.id,
+        expected_updated_at=payload.expected_updated_at,
+    )
 
 
 @router.post("/orders/{laboratory_order_id}/release", response_model=LaboratoryOrderRead)
@@ -259,6 +273,62 @@ async def seed_default_templates(
     reference ranges) - same opt-in pattern as `POST /services/seed-
     defaults`/`POST /departments/seed-defaults`, not auto-run."""
     return await LaboratoryService(db).seed_default_templates(clinic_id=clinic_id, actor_id=current_user.id)
+
+
+# --- Reference Ranges (Phase 2A - Structured Result Backend Foundation) ---
+# Administrator-only mutation, same role gate as template management -
+# these rows configure a template parameter's demographic-specific ranges,
+# not yet consumed by the live result-entry flow (foundation only).
+
+@router.post(
+    "/templates/parameters/{template_parameter_id}/reference-ranges",
+    response_model=LaboratoryReferenceRangeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_reference_range(
+    template_parameter_id: UUID,
+    payload: LaboratoryReferenceRangeCreate,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> LaboratoryReferenceRangeRead:
+    reference_range = await LaboratoryService(db).create_reference_range(
+        template_parameter_id, payload.model_dump(), clinic_id=clinic_id, actor_id=current_user.id
+    )
+    return LaboratoryReferenceRangeRead.model_validate(reference_range, from_attributes=True)
+
+
+@router.get(
+    "/templates/parameters/{template_parameter_id}/reference-ranges",
+    response_model=list[LaboratoryReferenceRangeRead],
+)
+async def list_reference_ranges(
+    template_parameter_id: UUID,
+    active_only: bool = False,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_view_role),
+) -> list[LaboratoryReferenceRangeRead]:
+    rows = await LaboratoryService(db).list_reference_ranges(
+        template_parameter_id, clinic_id=clinic_id, active_only=active_only
+    )
+    return [LaboratoryReferenceRangeRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.patch("/reference-ranges/{reference_range_id}", response_model=LaboratoryReferenceRangeRead)
+async def update_reference_range(
+    reference_range_id: UUID,
+    payload: LaboratoryReferenceRangeUpdate,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> LaboratoryReferenceRangeRead:
+    if payload.is_active is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update.")
+    reference_range = await LaboratoryService(db).set_reference_range_active(
+        reference_range_id, payload.is_active, clinic_id=clinic_id, actor_id=current_user.id
+    )
+    return LaboratoryReferenceRangeRead.model_validate(reference_range, from_attributes=True)
 
 
 # --- Visit / Patient laboratory history (mounted under their own path prefixes) ---

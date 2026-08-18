@@ -13,7 +13,6 @@ from app.api.v1 import (
     branches,
     clinic_settings,
     clinical_orders,
-    clinics,
     consultation_rooms,
     consultations,
     departments,
@@ -45,7 +44,6 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(roles.router)
-api_router.include_router(clinics.router)
 api_router.include_router(patients.router)
 
 # Phase 4: Clinic Configuration & Master Data

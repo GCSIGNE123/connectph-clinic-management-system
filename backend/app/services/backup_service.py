@@ -27,7 +27,6 @@ safety rules (and this session's operating rules) explicitly forbid without
 a human at the controls.
 """
 
-import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,48 +36,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.backup import Backup, BackupStatus
+from app.services.backup_verification import find_pg_dump, parse_db_url_for_pg_tools, verify_dump_file
 
 BACKUP_DIR = Path(__file__).resolve().parent.parent.parent / "backups"
-
-
-def _parse_db_url_for_pg_dump(database_url: str) -> tuple[list[str], dict[str, str]]:
-    """Translate the app's `postgresql+asyncpg://user:pass@host:port/db` URL
-    into `pg_dump` CLI args + a PGPASSWORD env override (pg_dump is a
-    synchronous libpq tool, it doesn't understand the asyncpg dialect
-    prefix or take a password inline on the command line for good reason -
-    passing it via env avoids it ever showing up in a process list)."""
-    import os
-    from urllib.parse import urlparse
-
-    parsed = urlparse(database_url.replace("postgresql+asyncpg://", "postgresql://"))
-    args = [
-        "--host", parsed.hostname or "localhost",
-        "--port", str(parsed.port or 5432),
-        "--username", parsed.username or "postgres",
-        "--no-password",
-        "--dbname", (parsed.path or "/").lstrip("/"),
-    ]
-    env = dict(os.environ)
-    if parsed.password:
-        env["PGPASSWORD"] = parsed.password
-    return args, env
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
 class BackupService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-
-    @staticmethod
-    def _find_portable_pg_dump() -> str | None:
-        """Fallback for this environment's specific setup: `pg_dump` isn't
-        necessarily on the PATH of whatever process launched `uvicorn` (it
-        wasn't, in the process this was verified against), but the portable
-        Postgres distribution documented in docs/TESTING.md always ships it
-        at a known relative location - `.devdb/pgsql/bin/pg_dump.exe` from
-        the repo root. Checked here rather than requiring every dev/CI
-        environment to modify its PATH."""
-        candidate = Path(__file__).resolve().parent.parent.parent.parent / ".devdb" / "pgsql" / "bin" / "pg_dump.exe"
-        return str(candidate) if candidate.exists() else None
 
     async def run_backup(self, *, triggered_by: UUID | None) -> Backup:
         started_at = datetime.now(UTC)
@@ -86,7 +52,7 @@ class BackupService:
         self.session.add(backup)
         await self.session.flush()
 
-        pg_dump_path = shutil.which("pg_dump") or self._find_portable_pg_dump()
+        pg_dump_path = find_pg_dump(_REPO_ROOT)
         if pg_dump_path is None:
             backup.status = BackupStatus.FAILED
             backup.completed_at = datetime.now(UTC)
@@ -97,10 +63,10 @@ class BackupService:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         dest = BACKUP_DIR / f"backup-{started_at.strftime('%Y%m%dT%H%M%S')}-{backup.id}.sql"
 
-        args, env = _parse_db_url_for_pg_dump(settings.DATABASE_URL)
+        args, env, dbname = parse_db_url_for_pg_tools(settings.DATABASE_URL)
         try:
             result = subprocess.run(
-                [pg_dump_path, *args, "--format=plain", "--file", str(dest)],
+                [pg_dump_path, *args, "--dbname", dbname, "--format=plain", "--file", str(dest)],
                 env=env, capture_output=True, text=True, timeout=120,
             )
         except Exception as exc:  # pragma: no cover - subprocess/environment failure
@@ -117,20 +83,12 @@ class BackupService:
             await self.session.commit()
             return backup
 
-        # Real verification, not just "exit code 0": non-empty, and starts
-        # with the real pg_dump preamble.
-        if not dest.exists() or dest.stat().st_size == 0:
+        # Real verification, not just "exit code 0" - see backup_verification.py.
+        is_valid, error_message = verify_dump_file(dest)
+        if not is_valid:
             backup.status = BackupStatus.FAILED
             backup.completed_at = datetime.now(UTC)
-            backup.error_message = "pg_dump produced an empty or missing file."
-            await self.session.commit()
-            return backup
-
-        header = dest.read_text(encoding="utf-8", errors="ignore")[:200]
-        if "PostgreSQL database dump" not in header:
-            backup.status = BackupStatus.FAILED
-            backup.completed_at = datetime.now(UTC)
-            backup.error_message = "Dump file does not start with the expected PostgreSQL dump header."
+            backup.error_message = error_message
             await self.session.commit()
             return backup
 

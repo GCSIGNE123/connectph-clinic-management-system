@@ -83,6 +83,13 @@ class Invoice(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin,
         UUID(as_uuid=True), ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Phase 5B (LR2): a Postgres partial unique index (created directly in
+    # the migration - `0033_invoice_one_active_per_visit.py`) enforces at
+    # most one non-Cancelled invoice per (clinic_id, visit_id), matching
+    # `create_draft_invoice_for_consultation`'s own documented invariant.
+    # Not expressible as a plain UniqueConstraint here since it must
+    # exclude Cancelled invoices - same pattern already used for `queues`
+    # (see `uq_queues_active_patient_department_day` in queue.py).
     invoice_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     status: Mapped[InvoiceStatus] = mapped_column(
         SAEnum(InvoiceStatus, name="invoice_status", values_callable=_enum_values),

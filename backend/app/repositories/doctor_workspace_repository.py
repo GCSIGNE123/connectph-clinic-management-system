@@ -82,11 +82,24 @@ class DoctorWorkspaceRepository:
         return session
 
     async def avg_duration_seconds(self, *, clinic_id: UUID, doctor_id: UUID | None, visit_date: date) -> float | None:
+        # Phase 9: `visit_date` is always computed in UTC by the caller
+        # (`datetime.now(UTC).date()` in doctor_workspace.py's endpoint).
+        # `func.date(...)` on a `timestamptz` column implicitly converts to
+        # the DB session's configured timezone before truncating - on a
+        # server whose Postgres session timezone isn't UTC (confirmed:
+        # this deployment's is `Asia/Kuala_Lumpur`, UTC+8), that silently
+        # shifts a session's date by up to a day for roughly a third of
+        # every day, excluding today's real sessions from the average.
+        # Converting to UTC explicitly before truncating keeps this
+        # consistent with the UTC date the caller actually passes in -
+        # `Visit.visit_date` (used by `status_counts` above) doesn't have
+        # this problem because it's a stored plain `Date` column, not a
+        # timezone-sensitive cast of a timestamp.
         filters = [
             ConsultationSession.clinic_id == clinic_id,
             ConsultationSession.status == ConsultationSessionStatus.ENDED,
             ConsultationSession.duration_seconds.is_not(None),
-            func.date(ConsultationSession.started_at) == visit_date,
+            func.date(func.timezone("UTC", ConsultationSession.started_at)) == visit_date,
         ]
         if doctor_id is not None:
             filters.append(ConsultationSession.doctor_id == doctor_id)

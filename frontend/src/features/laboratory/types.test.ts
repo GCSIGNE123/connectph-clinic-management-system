@@ -47,6 +47,22 @@ describe("validateResultRows", () => {
     const warnings = validateResultRows([row(), row()]);
     expect(warnings).toContain("Duplicate parameter entry: 'hemoglobin' appears 2 times.");
   });
+
+  it("Phase 4H: does NOT flag two site-differentiated rows for the same requiresSite parameter as a duplicate", () => {
+    const warnings = validateResultRows([
+      row({ parameterName: "Result", resultType: "Categorical", structuredValue: { value: "Positive" }, site: "Skin" }),
+      row({ parameterName: "Result", resultType: "Categorical", structuredValue: { value: "Negative" }, site: "Vaginal" }),
+    ]);
+    expect(warnings.some((w) => w.includes("Duplicate parameter entry"))).toBe(false);
+  });
+
+  it("Phase 4H: still flags two rows with the same parameter name AND the same site as a real duplicate", () => {
+    const warnings = validateResultRows([
+      row({ parameterName: "Result", resultType: "Categorical", structuredValue: { value: "Positive" }, site: "Skin" }),
+      row({ parameterName: "Result", resultType: "Categorical", structuredValue: { value: "Negative" }, site: "Skin" }),
+    ]);
+    expect(warnings).toContain("Duplicate parameter entry: 'result' appears 2 times.");
+  });
 });
 
 describe("interpretResult", () => {

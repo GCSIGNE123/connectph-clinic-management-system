@@ -45,6 +45,18 @@ class QueueUpdate(BaseModel):
 class QueueStatusUpdate(BaseModel):
     status: QueueStatus
     note: str | None = Field(default=None, max_length=500)
+    # Phase 5B (P1/P2, LR1): optional optimistic-concurrency guard, same
+    # convention as `LaboratoryResultsSubmit.expected_updated_at` (Phase
+    # 4I) - the client echoes back the `updated_at` it last saw on
+    # `GET .../queues/{id}` (see `QueueDetail.updated_at`, already
+    # present). `QueueService.change_status` does a plain read -> validate
+    # -> blind write with no row lock, so two concurrent transitions from
+    # the same starting status (e.g. Waiting -> Called and Waiting ->
+    # Skipped, both legal) can otherwise both succeed, with the second
+    # silently discarding the first's outcome from the live ticket state -
+    # a reproduced lost-update race. Left unset (`None`), the check is
+    # skipped entirely - every existing caller is unaffected.
+    expected_updated_at: datetime | None = None
 
 
 class QueueStatusHistoryRead(BaseModel):

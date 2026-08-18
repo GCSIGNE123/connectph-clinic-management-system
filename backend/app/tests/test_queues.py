@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.dependencies import get_db
 from app.core.security import hash_password
 from app.main import app
+from app.models.queue import Queue, QueueStatusHistory
 from app.models.role import Role
 
 pytestmark = pytest.mark.asyncio
@@ -907,3 +908,240 @@ async def test_queue_number_generation_concurrency_safe(engine, db_session: Asyn
     results = await asyncio.gather(*(_issue_one() for _ in range(20)))
     assert len(results) == len(set(results)) == 20
     assert sorted(results) == [f"A{str(i).zfill(3)}" for i in range(1, 21)]
+
+
+async def test_change_status_concurrent_requests_do_not_silently_lose_a_transition(
+    client: AsyncClient, make_clinic_with_owner, engine, db_session: AsyncSession
+) -> None:
+    """Phase 5B (P1/P2, LR1): reproduces the suspected race in
+    `QueueService.change_status` - it does a plain read (no row lock), a
+    Python-side legality check, then a blind attribute-set + flush (no
+    WHERE-old-status guard, no optimistic-concurrency token), the exact
+    same missing-protection pattern Laboratory's `enter_results` had
+    before its Phase 4I fix.
+
+    Methodology mirrors `test_queue_number_generation_concurrency_safe`
+    above: two GENUINELY independent `AsyncSession`s (own
+    `async_sessionmaker`, own DB connection - NOT the `client` fixture's
+    shared single-session override, which was tried first and produced a
+    misleading result: a shared session means a shared SQLAlchemy identity
+    map, so both "requests" were actually mutating the exact same Python
+    object rather than reproducing real cross-connection concurrency).
+    Both sessions call `QueueService.change_status` directly for the same
+    Waiting ticket with two different-but-both-legal targets (Called,
+    Skipped); a barrier forces both reads to complete before either
+    proceeds to write, deterministically forcing the interleaving rather
+    than hoping it manifests by chance. No production code was changed to
+    build this reproduction."""
+    import asyncio as _asyncio
+    from unittest.mock import patch
+
+    from app.repositories.queue_repository import QueueRepository
+    from app.models.queue import QueueStatus
+    from app.services.queue_service import QueueService
+
+    _clinic, owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    queue_id = uuid.UUID(queue["id"])
+    clinic_id = _clinic.id
+    assert queue["status"] == "Waiting"
+
+    original_get = QueueRepository.get_by_id_and_clinic
+    barrier = _asyncio.Barrier(2)
+
+    async def delayed_get(self, *args, **kwargs):
+        result = await original_get(self, *args, **kwargs)
+        try:
+            await _asyncio.wait_for(barrier.wait(), timeout=5)
+        except (TimeoutError, _asyncio.BrokenBarrierError):
+            pass
+        return result
+
+    session_maker = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+
+    async def _change_status(target: QueueStatus):
+        async with session_maker() as session:
+            service = QueueService(session)
+            result = await service.change_status(
+                queue_id, clinic_id=clinic_id, actor=owner, new_status=target, note=None
+            )
+            return result.status
+
+    with patch.object(QueueRepository, "get_by_id_and_clinic", delayed_get):
+        results = await _asyncio.gather(
+            _change_status(QueueStatus.CALLED), _change_status(QueueStatus.SKIPPED), return_exceptions=True
+        )
+
+    outcomes = [r if isinstance(r, Exception) else str(r) for r in results]
+    succeeded = [r for r in outcomes if not isinstance(r, Exception)]
+
+    row = (await db_session.execute(select(Queue).where(Queue.id == queue_id))).scalar_one()
+    history_rows = (
+        (await db_session.execute(select(QueueStatusHistory).where(QueueStatusHistory.queue_id == queue_id)))
+        .scalars()
+        .all()
+    )
+
+    # Both requests read Waiting and both had a LEGAL target from Waiting,
+    # so the backend has no basis to reject either on legality grounds -
+    # confirms this reproduces a genuine lost-update race (not merely an
+    # already-guarded illegal-transition rejection): both succeed, and the
+    # final status silently reflects only whichever committed last - the
+    # other transition's real-world effect is not visible anywhere, with
+    # no conflict/error surfaced to either caller.
+    assert len(succeeded) == 2, f"Expected both concurrent legal transitions to succeed (race reproduced), got {outcomes}"
+    assert row.status in (QueueStatus.CALLED, QueueStatus.SKIPPED)
+    # Both transitions ARE recorded in history (that part isn't lost) - the
+    # actual defect is that the LOSING transition's real-world effect
+    # (whichever of Called/Skipped didn't "win" the final Queue.status) is
+    # silently discarded from the live ticket state with no indication to
+    # either caller that their action didn't stick.
+    assert len(history_rows) == 3  # ticket-created + both transitions, none silently dropped from history
+
+
+async def test_change_status_with_expected_updated_at_rejects_the_stale_sequential_save(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Phase 5B (P1/P2, LR1) fix verification, same methodology as
+    Laboratory's Phase 4I `test_phase_4i_stale_save_is_rejected_as_
+    conflict_not_silently_applied`: an optimistic-concurrency token
+    protects against the realistic "A saves, THEN B - who read before A's
+    save - saves from a now-stale snapshot" sequence (not a fully
+    simultaneous double-read, which no read-then-compare-at-write-time
+    token can distinguish, by definition - both technicians reading the
+    literal same instant have no earlier/later to detect). Technician A
+    and B both fetch the ticket (same `updated_at`); A transitions
+    Waiting -> Called first (bumping `updated_at`); B's Waiting -> Skipped,
+    built from their now-stale snapshot, is rejected (409) instead of
+    silently overwriting A's already-persisted transition."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    queue_id = queue["id"]
+    shared_updated_at = queue["updated_at"]
+
+    save_a = await client.patch(
+        f"/api/v1/queues/{queue_id}/status", headers=owner_headers,
+        json={"status": "Called", "expected_updated_at": shared_updated_at},
+    )
+    assert save_a.status_code == 200, save_a.text
+
+    save_b = await client.patch(
+        f"/api/v1/queues/{queue_id}/status", headers=owner_headers,
+        json={"status": "Skipped", "expected_updated_at": shared_updated_at},
+    )
+    assert save_b.status_code == 409, save_b.text
+
+    final = (await client.get(f"/api/v1/queues/{queue_id}", headers=owner_headers)).json()
+    assert final["status"] == "Called"
+
+
+async def test_change_status_without_expected_updated_at_is_unaffected(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """The concurrency check is opt-in - a caller that never supplies
+    `expected_updated_at` (every pre-Phase-5B caller) behaves exactly as
+    before, unaffected by the new check."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    queue_id = queue["id"]
+
+    resp = await client.patch(
+        f"/api/v1/queues/{queue_id}/status", headers=owner_headers, json={"status": "Called"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "Called"
+
+
+async def test_phase_8_queue_creation_rolls_back_completely_on_downstream_failure_then_retry_succeeds(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Phase 8 (item 5/10): deliberate failure-injection test.
+    `create_queue` creates the Queue row, its history row, and an audit
+    event, THEN calls `VisitService.create_visit_for_queue` in the SAME
+    uncommitted transaction (single `session.commit()` at the very end -
+    see queue_service.py's Phase 6 comment). If that downstream call
+    raises, `get_session()`'s outer try/except rolls back the whole
+    request (app/db/session.py) - nothing should have been durably
+    written: no orphan Queue row, no orphan history row, no orphan audit
+    event. A clean retry of the identical request afterward should then
+    succeed normally, ending in exactly one valid state (one Queue, one
+    linked Visit) - never two, never a half-created one left behind from
+    the failed attempt."""
+    from unittest.mock import patch
+
+    from app.models.queue import Queue
+    from app.services.visit_service import VisitService
+
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    payload = _queue_payload(deps)
+
+    original_create_visit_for_queue = VisitService.create_visit_for_queue
+
+    async def failing_create_visit_for_queue(self, *args, **kwargs):
+        raise RuntimeError("Simulated downstream failure (Phase 8 failure-injection test)")
+
+    # httpx's ASGITransport (used by the `client` fixture) re-raises an
+    # unhandled server exception to the caller by default rather than
+    # converting it to a response - a test-client-only difference from a
+    # real deployed server, which routes it through `main.py`'s registered
+    # catch-all Exception handler and returns 500 (confirmed separately by
+    # code reading, not re-proven here). What this test needs to prove is
+    # the DB-level consequence: the request never durably completes.
+    with patch.object(VisitService, "create_visit_for_queue", failing_create_visit_for_queue):
+        with pytest.raises(RuntimeError, match="Simulated downstream failure"):
+            await client.post("/api/v1/queues", headers=owner_headers, json=payload)
+
+    # The `client` fixture's test-only `get_db` override (conftest.py)
+    # simply yields the shared `db_session` with no try/except - unlike
+    # the real `get_session()` (app/db/session.py), which rolls back on
+    # any unhandled exception. Explicitly rolling back here reproduces
+    # that same real-world cleanup for this shared session, so the
+    # orphan-check below reflects true post-rollback durability rather
+    # than merely seeing this session's own still-uncommitted flush.
+    await db_session.rollback()
+
+    # Full rollback verification: no orphan Queue row survived the failed
+    # attempt for this patient/department/day.
+    orphans = (
+        await db_session.execute(
+            select(Queue).where(
+                Queue.patient_id == uuid.UUID(deps["patient_id"]),
+                Queue.department_id == uuid.UUID(deps["department_id"]),
+            )
+        )
+    ).scalars().all()
+    assert len(orphans) == 0, "A failed queue-creation attempt left an orphan Queue row - transaction did not fully roll back"
+
+    # Retry (patch removed, exact same payload) - the system recovers to
+    # exactly one valid, complete state.
+    retried = await client.post("/api/v1/queues", headers=owner_headers, json=payload)
+    assert retried.status_code == 201, retried.text
+    queue_id = retried.json()["id"]
+    assert retried.json()["status"] == "Waiting"
+
+    final_rows = (
+        await db_session.execute(
+            select(Queue).where(
+                Queue.patient_id == uuid.UUID(deps["patient_id"]),
+                Queue.department_id == uuid.UUID(deps["department_id"]),
+            )
+        )
+    ).scalars().all()
+    assert len(final_rows) == 1
+    assert str(final_rows[0].id) == queue_id
+
+    # The failed attempt's audit log never claims success - no queue.created
+    # audit event exists for a Queue id that was never actually created
+    # (the only queue.created event on record is for the successful retry).
+    from app.models.audit_log import AuditLog
+
+    audit_rows = (
+        await db_session.execute(
+            select(AuditLog).where(AuditLog.action == "queue.created", AuditLog.entity_id == queue_id)
+        )
+    ).scalars().all()
+    assert len(audit_rows) == 1

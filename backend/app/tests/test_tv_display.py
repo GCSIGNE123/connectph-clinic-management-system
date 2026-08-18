@@ -645,3 +645,76 @@ async def test_long_public_slug_url_still_works_after_short_code_feature_added(
     resp = await client.get(f"/api/v1/public/tv-display/{config['public_slug']}")
     assert resp.status_code == 200
     assert resp.json()["display_name"] == "No Code TV"
+
+
+async def test_released_laboratory_result_removes_ticket_from_now_serving(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Bug fix regression: a queue ticket Called for a Laboratory-only
+    encounter (never Serving) previously stayed on the TV display's "Now
+    Serving" list forever once the lab work finished, because nothing ever
+    moved `Queue.status` off Called. This goes through the REAL laboratory
+    release endpoint (not a direct DB/queue-status write) and asserts the
+    ticket disappears from the public TV snapshot - proving the underlying
+    Queue state changed (it's excluded via the existing
+    `ACTIVE_QUEUE_STATUSES` filter every other ticket already uses), not
+    that a Laboratory-specific filter was bolted onto the TV display
+    itself."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    config = (
+        await client.post(
+            "/api/v1/tv-displays", headers=owner_headers,
+            json={"branch_id": deps["branch_id"], "display_name": "Public TV", "is_public": True},
+        )
+    ).json()
+    slug = config["public_slug"]
+
+    await client.post(
+        "/api/v1/laboratory/templates", headers=owner_headers,
+        json={"test_name": "CBC", "default_price": "0", "parameters": []},
+    )
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    visit_id = queue["visit_id"]
+
+    doc_email, _doc_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor", doctor_id=deps["doctor_id"])
+    doc_token_resp = await client.post("/api/v1/auth/login", json={"email_or_username": doc_email, "password": "TestPass123!"})
+    doc_headers = {"Authorization": f"Bearer {doc_token_resp.json()['access_token']}"}
+
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+
+    # Confirm the ticket IS on Now Serving before release - proves this test
+    # actually exercises the bug's visible symptom, not just backend state.
+    before = (await client.get(f"/api/v1/public/tv-display/{slug}")).json()
+    assert any(e["queue_number"] == queue["queue_number"] for e in before["now_serving"]), (
+        "expected the Called laboratory ticket to appear under now_serving before release"
+    )
+
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    order = (
+        await client.post(
+            f"/api/v1/consultations/{opened['id']}/orders", headers=doc_headers,
+            json={"order_category": "Laboratory", "items": [{"item_name": "CBC"}]},
+        )
+    ).json()
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_id = next(lo for lo in lab_orders if lo["order_id"] == order["id"])["id"]
+
+    lab_email, _lab_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Laboratory")
+    lab_token_resp = await client.post("/api/v1/auth/login", json={"email_or_username": lab_email, "password": "TestPass123!"})
+    lab_headers = {"Authorization": f"Bearer {lab_token_resp.json()['access_token']}"}
+
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/collect", headers=lab_headers)
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/start-processing", headers=lab_headers)
+    await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/results", headers=lab_headers,
+        json={"results": [{"parameter_name": "Note", "result_type": "Text", "text_value": "ok"}]},
+    )
+    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    assert released.status_code == 200, released.text
+
+    after = (await client.get(f"/api/v1/public/tv-display/{slug}")).json()
+    assert not any(e["queue_number"] == queue["queue_number"] for e in after["now_serving"]), (
+        "released laboratory ticket must no longer appear under now_serving"
+    )
+    assert not any(e["queue_number"] == queue["queue_number"] for e in after["next_waiting"])

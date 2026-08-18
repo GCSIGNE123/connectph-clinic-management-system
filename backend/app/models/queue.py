@@ -72,7 +72,20 @@ ACTIVE_QUEUE_STATUSES = (QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.SE
 # accept no further transitions.
 QUEUE_STATUS_TRANSITIONS: dict[QueueStatus, set[QueueStatus]] = {
     QueueStatus.WAITING: {QueueStatus.CALLED, QueueStatus.CANCELLED, QueueStatus.SKIPPED, QueueStatus.NO_SHOW},
-    QueueStatus.CALLED: {QueueStatus.SERVING, QueueStatus.SKIPPED, QueueStatus.NO_SHOW, QueueStatus.CANCELLED, QueueStatus.WAITING},
+    # Called -> Completed (direct, no Serving in between) is legal because a
+    # Laboratory-only queue ticket is Called but never enters a doctor
+    # consultation - there is no "Serving" moment for it to pass through.
+    # LaboratoryService syncs a ticket straight to Completed when its
+    # LaboratoryOrder is Released - see laboratory_service.py's
+    # `_sync_queue_on_release`. The Doctor/Consultation path is unaffected:
+    # it always reaches Completed via Serving already (IN_CONSULTATION maps
+    # to Serving before COMPLETED does - see doctor_workspace_service.py's
+    # `_VISIT_TO_QUEUE_STATUS`), so this is a purely additive extra edge,
+    # not a change to how consultation tickets already transition.
+    QueueStatus.CALLED: {
+        QueueStatus.SERVING, QueueStatus.SKIPPED, QueueStatus.NO_SHOW, QueueStatus.CANCELLED,
+        QueueStatus.WAITING, QueueStatus.COMPLETED,
+    },
     QueueStatus.SERVING: {QueueStatus.COMPLETED, QueueStatus.CANCELLED},
     QueueStatus.COMPLETED: set(),
     QueueStatus.SKIPPED: {QueueStatus.WAITING},

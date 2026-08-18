@@ -89,11 +89,13 @@ YYYY-MM-DD
 | BUG-035 | `backend/app/services/queue_service.py` (already committed at `HEAD`) imports `app.services.sync_queue_service`, but `backend/app/services/sync_queue_service.py` itself was never committed — a fresh `git clone` of `origin/main` fails `import app.main` immediately (`ImportError: cannot import name 'sync_queue_service'`). Discovered incidentally while scoping an unrelated commit (TV Display 50/50 Queue + Information Panel) — not caused by, or related to, that feature. The dev environment "works" right now only because `sync_queue_service.py` still exists as an uncommitted/untracked file on disk alongside the rest of the not-yet-committed Cloud Backup work; the moment that untracked file is removed (or a teammate clones fresh), the backend cannot start at all. | Critical | Open | backend | unassigned |
 | BUG-034 | Running `app/tests/test_queues.py` together with `test_tv_display.py`/`test_doctor_workspace.py` (or even `test_queues.py` alone in full) intermittently but reproducibly 429s 2 of its own tests (`test_doctor_scoped_prefix_override_and_independent_sequencing`, `test_tenant_isolation`) with `"Too many attempts. Please try again later."` — both tests pass individually every time. Root cause: `RATE_LIMIT_LOGIN_MAX_ATTEMPTS=10` per 60s (`core/config.py`) is a real, shared, non-test-mode-bypassed limiter, and `test_queues.py` alone calls `_login()` well past 10 times across its full suite; running it back-to-back with other login-heavy files within the same ~60s window exhausts the budget for whichever test happens to log in last. Not caused by, or specific to, the Multi-Department TV Queue Display feature — reproduced twice, both times against the pre-existing `_login`/`_owner_headers` test helper shared by every test in the file, unrelated to any of this feature's own code. A real test-infra gap (the rate limiter should be disabled or reset between tests in the test environment), not a product bug — logged rather than fixed inline per this feature's "no unrelated changes" scope. | Medium | Open | infra | unassigned |
 | BUG-036 | Real POS-80 thermal printer (Windows driver "POS-80 11.3.0.1", a generic Zjiang/ZPrinter-style GDI driver) fed a long blank strip of paper before cutting, even after the queue ticket's print CSS/layout was fixed — driver only exposes fixed-length paper sizes, none of them "auto" | Low | Closed (resolved via printer configuration, not a code fix) | deployment | unassigned |
+| BUG-037 | `LaboratoryService.enter_results()` returns a stale `invoice_item_id: null` on the first results submission that creates the invoice line item, because the response snapshot is taken before `_sync_billing()` runs | Medium | Open | backend | unassigned |
 
 ## Resolved Bugs
 
 | ID | Title | Severity | Resolved | PR/Commit |
 |---|---|---|---|---|
+| BUG-038 | `ClinicalOrdersService.create_order()` committed the parent `Order` in its own transaction *before* creating the Laboratory/Vaccination-category child record in a separate follow-up commit — any failure in that follow-up step (most concretely the shared daily order-number counter's first-of-day race, see BUG-013) could leave a durably committed `Order` with no matching `LaboratoryOrder`, surfacing as "Could not create order" on the frontend even though the parent Order existed after a refresh, while the Laboratory Technician's worklist correctly showed nothing because the child row genuinely never existed | High | 2026-08-16 | `backend/app/services/clinical_orders_service.py` (`create_order`: single transaction/commit for the Order and its category-specific child record), `backend/app/services/laboratory_service.py` (`create_from_order` no longer commits/enqueues independently; added `build_sync_payload`), `backend/app/services/vaccination_service.py` (same fix, mirrored), `backend/app/services/clinical_number_generator.py` (`_DailyNumberGenerator._get_or_create_counter`: SAVEPOINT + retry on the first-of-day counter race, closing the gap BUG-013 explicitly left open for this shared Order/Prescription/Appointment counter), `backend/app/services/sync_queue_service.py` (new `enqueue_lazy` helper so a payload-serialization failure can't turn an already-committed success into a 500), `backend/app/tests/test_clinical_orders.py` (6 new regression tests: both-rows-created, forced-failure-rolls-back-parent, non-Laboratory-category-atomicity, sync-payload-failure-doesn't-500, and a 20-way concurrent first-of-day counter race) |
 | BUG-032 | `POST /platform-admin/tenants/{clinic_id}/users` (and by extension the pre-existing `lock`/`unlock`/`reset-password` endpoints it shares a helper with) returned a 500 on a genuinely fresh backend process/DB session — `TenantUserAdminService._get_user()` was missing `selectinload(User.role)`, so the response's `user.role.name if user.role else None` triggered an async lazy-load, which SQLAlchemy's async ORM cannot do outside an explicit eager-load. Existing tests never caught this because the test session's SQLAlchemy identity map already had the `Role` row warmed from an earlier query in the same test, masking the missing eager-load. First surfaced live while building Vaccination Administration's Nurse test account. | High | 2026-08-07 | `backend/app/services/tenant_user_admin_service.py` (`_get_user`: added `selectinload(User.role)`, matching the pattern already used in `list_tenant_users`). Verified live against a genuinely fresh backend process (not just re-running pytest): create/lock/unlock all returned 200 with the correct `role` field afterward. |
 | BUG-031 | `next build` (real production build, required for Vercel deployment) failed outright with a prerender error on `/messages` — `useSearchParams()` was read directly in the page component with no `<Suspense>` boundary, which Next.js 15's App Router requires for a page to be statically prerenderable. `next dev` never surfaced this (dev doesn't statically prerender), so it went undetected through every prior phase since Milestone 2's messaging feature shipped — only surfaced when Phase 2.5 specifically required running a real `npm run build`, which no prior phase's verification had done. A genuine Vercel-deployment blocker, not cosmetic. | High | 2026-08-06 | `frontend/src/app/(dashboard)/messages/page.tsx` — split into an outer `MessagesPage` wrapping a new `MessagesPageInner` (the actual `useSearchParams()` consumer) in `<Suspense fallback={<MessagesPageFallback />}>`. Verified: `npm run build` now completes cleanly, `/messages` prerenders, all 49 routes build. |
 | BUG-030 | `PUT /consultations/{id}/soap` (Doctor's Assessment/Plan save) silently wiped every Subjective/Objective/vitals field back to `null` whenever the request didn't re-include them — which the Assessment/Plan UI has no reason to do, since Reception already saved vitals separately | Critical | 2026-08-06 | `backend/app/api/v1/consultations.py` (`save_soap`: `payload.model_dump(exclude_unset=True)`), `backend/app/services/consultation_service.py` (`ConsultationService.save_soap`: merge against existing row instead of blind overwrite, matching the sibling `save_soap_subjective_objective`) |
@@ -1071,6 +1073,102 @@ No code change. Selecting **`ZPrinter Paper(80 x 3276mm)`** in Chrome's print di
 
 **Resolution date**
 2026-08-11
+
+---
+
+### BUG-037: `LaboratoryService.enter_results()` returns a stale `invoice_item_id: null` on the first results submission that creates the invoice line item
+
+- **Reported by:** self-discovered while running Feature 3 (Laboratory Templates + Reference Ranges + Automatic Interpretation) integration tests live against a real Postgres instance for the first time this session
+- **Date reported:** 2026-08-15
+- **Severity:** Medium
+- **Status:** Open
+- **Area:** backend
+
+**Description**
+`LaboratoryService.enter_results()` (`backend/app/services/laboratory_service.py`) builds the `LaboratoryOrderRead` object it returns to the client (`result_read = await self.get(laboratory_order_id, clinic_id=clinic_id)`) *before* it calls `_sync_billing()`, which is the method that actually creates the invoice line item and writes `laboratory_orders.invoice_item_id`:
+
+```python
+result_read = await self.get(laboratory_order_id, clinic_id=clinic_id)   # snapshot taken here - invoice_item_id still null
+await sync_queue_service.enqueue(...)
+
+if completed_at == now:
+    await self._sync_billing(lab_order, clinic_id=clinic_id, actor_id=actor_id)  # invoice_item_id written here, too late
+
+return result_read   # returns the pre-billing-sync snapshot
+```
+
+The database row is correctly updated by the time the HTTP response is actually sent (the function awaits `_sync_billing()` to completion before returning), but the response *body* still reflects the earlier snapshot, so the very first results submission that triggers invoice-item creation always reports `invoice_item_id: null` even though billing succeeded.
+
+**How it was found:** `backend/app/tests/test_laboratory.py::test_completing_priced_order_creates_invoice_line_item` and `::test_billing_sync_idempotent_on_resubmit` both failed when run against a real Postgres test database (`connectph_clinic_test`) for the first time this session (the DB had been unreachable in the sandbox for the entire preceding Feature 3 work, so these pre-existing tests had never actually executed live until this verification pass). Direct `psql` inspection of the exact rows written during the failing runs confirmed the invoice, the `ConsultationFee` line item, and the `Laboratory` line item (correct `unit_price`) were all written correctly, and `laboratory_orders.invoice_item_id` was correctly persisted — only the HTTP response body was stale. This code path is unchanged by Feature 3 (`git diff` on `laboratory_service.py` shows zero changes around `_sync_billing`/`enter_results`'s billing-sync call site) — a pre-existing defect surfaced for the first time by this being the first live-database run of this test file this session, not a regression introduced by Feature 3.
+
+**Steps to reproduce**
+1. Create a Laboratory order against a template with `default_price > 0` (e.g. CBC, ₱350.00).
+2. Collect the specimen, start processing.
+3. `POST /laboratory/orders/{id}/results` with a full result set (first submission, order not yet `Completed`).
+4. Inspect the response body's `invoice_item_id` — it is `null`.
+5. `GET /visits/{visit_id}/invoice` (or query `laboratory_orders.invoice_item_id` directly) — the Laboratory line item and the correct `invoice_item_id` are both present.
+
+**Expected behavior**
+The first results-submission response should already reflect the `invoice_item_id` written by `_sync_billing()` during that same request.
+
+**Actual behavior**
+The first response returns `invoice_item_id: null`; only a subsequent `GET` (or a second results submission) reflects the real value. This also makes `test_billing_sync_idempotent_on_resubmit` fail, since it compares the (stale, null) first response's `invoice_item_id` against the second response's `invoice_item_id`, which by then correctly reflects the real UUID.
+
+**Root cause**
+Response-snapshot-before-side-effect ordering bug: `result_read` is computed and captured before `_sync_billing()` runs, and is never re-fetched or patched afterward before being returned.
+
+**Suggested fix (not applied here)**
+Re-fetch (or in-place-update) `result_read`'s `invoice_item_id` after `_sync_billing()` completes — e.g. call `self.get()` again after the billing-sync block, or have `_sync_billing()` return the new item id and patch `result_read.invoice_item_id` directly — before returning from `enter_results()`. Out of scope for Feature 3 (which does not touch this code path); logged here per this session's "don't fix unrelated bugs inline" instruction, to be picked up as its own task.
+
+**Resolution date**
+Not yet resolved.
+
+---
+
+### BUG-038: Laboratory order creation could commit the parent Order while silently failing to create its LaboratoryOrder child, showing "Could not create order" despite the Order existing, and leaving the Laboratory Technician's worklist empty
+
+- **Reported by:** clinic simulation UAT — a Laboratory order create appeared to fail in the UI, but the Order was visible after a refresh, and the corresponding Laboratory request never appeared in the Laboratory Technician's worklist
+- **Date reported:** 2026-08-16
+- **Date resolved:** 2026-08-16
+- **Severity:** High
+- **Status:** Fixed
+- **Area:** backend
+
+**Description**
+This bug had two observed symptoms that were investigated together and confirmed to share one root cause — NOT two separate bugs, and NOT the same defect as BUG-037 (which is a stale-response-field bug in `enter_results()`, an unrelated code path with no commit-ordering issue):
+
+1. **"Could not create order" despite the parent Order appearing after refresh.** The frontend's `useCreateOrder` mutation showed the generic "Could not create order" toast (`frontend/src/features/clinical-orders/hooks/use-clinical-orders.ts`) after a `POST /consultations/{id}/orders` request came back as a raw 500 — but refreshing the page showed the Order had, in fact, been created.
+2. **Laboratory Technician cannot see the corresponding laboratory request.** `GET /laboratory/orders` (the Laboratory worklist) never showed the order the doctor had just created, even though the worklist query itself applies no status/date/branch/technician filter that would explain hiding a freshly-created `Requested` row (audited and confirmed correct — see below).
+
+**Root cause**
+`ClinicalOrdersService.create_order()` (`backend/app/services/clinical_orders_service.py`) committed the parent `Order` row in its own `session.commit()` call, and only *afterward* invoked `LaboratoryService.create_from_order()` (or `VaccinationService.create_from_order()` for Vaccination-category orders), which did its own, separate follow-up `session.commit()`. Anything that raised between those two commits left the `Order` durably persisted with no matching `LaboratoryOrder` child row — a real, unhandled exception, not a cosmetic response-handling issue. One concretely identified, previously-flagged trigger: the shared daily order-number counter (`_DailyNumberGenerator._get_or_create_counter` in `clinical_number_generator.py`, used by `OrderNumberGenerator`/`PrescriptionNumberGenerator`/`AppointmentNumberGenerator`) had the exact same first-of-day `INSERT` race BUG-013 identified and fixed for the appointment-booking caller only — BUG-013's own writeup explicitly noted "the shared Phase 9 counter implementation itself (also used by Orders/Prescriptions) was not touched." A losing concurrent request (e.g. a double-click before the Save button's pending-disabled guard takes effect, or any two near-simultaneous first-orders-of-the-day for a clinic) surfaced a raw `IntegrityError`/500 from that counter step. A second, structurally identical but narrower risk was also found and closed: `sync_queue_service.enqueue(payload=_to_read(...).model_dump(mode="json"), ...)` evaluated that payload expression in the *caller's* stack frame, before `enqueue()`'s own protective `try/except` was ever entered — violating `enqueue()`'s documented "never raises" contract for the payload-construction step specifically.
+
+Part B (the Laboratory Technician seeing nothing) was **not** an independent visibility/filtering/permissions bug — `LaboratoryRepository.list_for_clinic()`, `LaboratoryService.list_for_dashboard()`, the `GET /laboratory/orders` route, and the frontend worklist stack were all audited and confirmed correct (no status filter excludes `Requested` rows, role gating is correctly scoped). The technician correctly saw nothing because, in the failure window above, the `laboratory_orders` row genuinely never existed — a direct downstream consequence of Part A's split commit boundary, not a separate defect.
+
+**Steps to reproduce**
+1. Create a Laboratory-category order via `POST /consultations/{id}/orders` under conditions that cause the follow-up `LaboratoryOrder` creation step to fail after the `Order`'s own commit has already succeeded (most concretely: two concurrent first-orders-of-the-day for a clinic racing the daily counter's `INSERT`, per BUG-013's identical race).
+2. Observe a raw 500 / "Could not create order" in the frontend.
+3. Refresh / `GET /visits/{id}/orders` — the parent `Order` exists.
+4. Log in as a Laboratory Technician, `GET /laboratory/orders` — no corresponding Laboratory request appears, because the `laboratory_orders` row was never committed.
+
+**Expected behavior**
+Order creation (including its Laboratory/Vaccination-category child record) is atomic: either both the `Order` and its child record are committed together, or neither is — no split state, and no user-visible "failure" for an operation that actually partially succeeded.
+
+**Actual behavior**
+The `Order` could commit independently of its child record, producing exactly the split state described above.
+
+**Fix applied**
+- `ClinicalOrdersService.create_order()` restructured so the `Order`, its timeline event, its audit log entry, and its Laboratory/Vaccination-category child record are all created in the same uncommitted transaction, committed together in a single `session.commit()`. Any failure anywhere in that sequence now rolls back everything, including the `Order` — never a partially-committed result.
+- `LaboratoryService.create_from_order()` / `VaccinationService.create_from_order()` no longer commit or enqueue a sync job independently; they flush and return the child record for the caller to commit as part of the single transaction above. Added `build_sync_payload()` to each service so the caller can enqueue the sync job (via the new `enqueue_lazy` below) only after that single commit has succeeded.
+- `_DailyNumberGenerator._get_or_create_counter()` (`clinical_number_generator.py`) now wraps the first-of-day counter `INSERT` in a `SAVEPOINT` (`session.begin_nested()`), catches the `IntegrityError` on the losing side of the race, and re-selects the winner's row instead of letting a raw `IntegrityError` propagate — closing the gap BUG-013 left open for this shared generator (also used by `AppointmentNumberGenerator`, which inherits the same base class). Number formats unchanged; the unique constraint backing the race (`uq_system_setting_clinic_key`) was not weakened.
+- `sync_queue_service.enqueue_lazy()` added: evaluates its payload-building callable *inside* its own `try/except`, so a payload-serialization failure can no longer escape the "never raises" contract. Applied to every identified call site with this pattern: `create_order`'s Laboratory/Vaccination follow-up, `create_prescription`, `enter_results`, `release_results`, and `VaccinationService.administer`.
+- No database migration was required — this was purely a transaction-boundary and exception-handling defect, not a schema defect. The Laboratory status workflow, worklist filtering, and permissions were audited and confirmed correct; none were changed.
+
+**Tests added**
+`backend/app/tests/test_clinical_orders.py`: `test_laboratory_order_creation_creates_both_order_and_laboratory_order`, `test_forced_failure_in_laboratory_child_creation_rolls_back_parent_order`, `test_non_laboratory_order_categories_remain_atomic_on_unrelated_failure`, `test_sync_queue_payload_failure_does_not_turn_success_into_500`, `test_order_number_counter_concurrent_first_of_day_creation_is_race_safe` (20-way real concurrency test mirroring BUG-013's own appointment-booking concurrency test pattern).
+
+**Verified**
+`test_clinical_orders.py` (18/18 passed), `test_laboratory.py` (34/36 passed — the 2 failures are pre-existing BUG-037, confirmed unrelated and unaffected), `test_vaccinations.py` (6/6 passed), `test_patient_appointment_booking.py` + `test_appointments.py` (10/11 passed — the 1 failure, `test_role_gating`, confirmed via `git stash` to fail identically on the pre-fix baseline, unrelated to this change), `npx tsc --noEmit` clean (no frontend files touched).
 
 ---
 

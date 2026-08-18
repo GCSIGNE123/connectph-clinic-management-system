@@ -544,11 +544,28 @@ class QueueService:
         return detail
 
     async def change_status(
-        self, queue_id: UUID, *, clinic_id: UUID, actor: User, new_status: QueueStatus, note: str | None
+        self,
+        queue_id: UUID,
+        *,
+        clinic_id: UUID,
+        actor: User,
+        new_status: QueueStatus,
+        note: str | None,
+        expected_updated_at: datetime | None = None,
     ) -> QueueDetail:
         queue = await self.repo.get_by_id_and_clinic(queue_id, clinic_id)
         if queue is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Queue ticket not found")
+
+        # Phase 5B (P1/P2, LR1): optimistic-concurrency guard against the
+        # reproduced lost-update race - see `QueueStatusUpdate.expected_
+        # updated_at`'s docstring. Same pattern as Laboratory's
+        # `enter_results` (Phase 4I).
+        if expected_updated_at is not None and queue.updated_at != expected_updated_at:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This queue ticket was updated by someone else since you last saw it. Reload and try again.",
+            )
 
         allowed = QUEUE_STATUS_TRANSITIONS.get(queue.status, set())
         if new_status not in allowed:

@@ -1,10 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
 import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
 import { LaboratoryAttachmentList } from "@/features/laboratory/components/LaboratoryAttachmentList";
+import { LaboratoryReportDialog } from "@/features/laboratory/components/LaboratoryReportDialog";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
+
+const REPORT_ELIGIBLE_STATUSES = new Set(["Completed", "Released"]);
 
 /** Feature 5 Part B: read-only laboratory order details, opened by
  * clicking a row in the Patient's Visit History -> Visit Details
@@ -24,7 +29,10 @@ export function LaboratoryOrderDetailDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const [reportOpen, setReportOpen] = useState(false);
+
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
@@ -32,9 +40,18 @@ export function LaboratoryOrderDetailDialog({
         </DialogHeader>
         {order ? (
           <div className="space-y-4 text-sm">
-            <div className="flex flex-wrap items-center gap-2">
-              <LaboratoryStatusBadge status={order.status} />
-              {order.priority ? <span className="text-xs text-muted-foreground">Priority: {order.priority}</span> : null}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <LaboratoryStatusBadge status={order.status} />
+                {order.priority ? <span className="text-xs text-muted-foreground">Priority: {order.priority}</span> : null}
+              </div>
+              {/* Phase 4G: the report is only meaningful once results are
+                  final - gated on status, not on which test this is. */}
+              {REPORT_ELIGIBLE_STATUSES.has(order.status) ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => setReportOpen(true)}>
+                  Print Report
+                </Button>
+              ) : null}
             </div>
 
             <div>
@@ -67,5 +84,7 @@ export function LaboratoryOrderDetailDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+    <LaboratoryReportDialog orderId={order?.id ?? null} open={reportOpen} onOpenChange={setReportOpen} />
+    </>
   );
 }

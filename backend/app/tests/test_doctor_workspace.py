@@ -497,3 +497,49 @@ async def test_role_gating_receptionist_read_only_doctor_scoped(
         f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers={"Authorization": f"Bearer {doc2_token}"}
     )
     assert unauthorized.status_code == 403
+
+
+async def test_avg_consultation_seconds_not_lost_across_db_timezone_date_boundary(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """Phase 9 (Failure #2): deterministic regression for the root cause -
+    `DoctorWorkspaceRepository.avg_duration_seconds` compared `func.date
+    (ConsultationSession.started_at)` (implicitly converted to the DB
+    session's configured timezone before truncating) against a UTC-
+    computed `visit_date`. On a deployment whose Postgres session
+    timezone isn't UTC (confirmed: `Asia/Kuala_Lumpur`, UTC+8, in this
+    environment), a session started late in the UTC day falls on the
+    *next* local-timezone date, silently excluding it from "today's"
+    average for roughly a third of every day.
+
+    Deterministically reproduces this independent of wall-clock time by
+    inserting a `ConsultationSession` with `started_at` fixed at
+    22:00 UTC - which is already 06:00 the next day in Asia/Kuala_Lumpur
+    (UTC+8) - and confirming `avg_duration_seconds` still finds it when
+    queried with the correct UTC date."""
+    from app.models.consultation_session import ConsultationSession, ConsultationSessionStatus
+    from app.repositories.doctor_workspace_repository import DoctorWorkspaceRepository
+
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    queue = await _create_visit(client, owner_headers, deps)
+    visit_id = uuid.UUID(queue["visit_id"])
+
+    utc_date = datetime(2026, 3, 15, tzinfo=UTC).date()
+    started_at = datetime(2026, 3, 15, 22, 0, 0, tzinfo=UTC)  # 06:00 next day in Asia/Kuala_Lumpur
+
+    session = ConsultationSession(
+        clinic_id=clinic.id, visit_id=visit_id, doctor_id=uuid.UUID(deps["doctor_id"]),
+        started_at=started_at, ended_at=started_at + timedelta(minutes=5),
+        duration_seconds=300, status=ConsultationSessionStatus.ENDED,
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    repo = DoctorWorkspaceRepository(db_session)
+    avg_seconds = await repo.avg_duration_seconds(clinic_id=clinic.id, doctor_id=None, visit_date=utc_date)
+    assert avg_seconds == 300.0, (
+        "A consultation session started at 22:00 UTC (already the next calendar day in "
+        "Asia/Kuala_Lumpur) was excluded from the UTC-date average - the date comparison "
+        "is not timezone-consistent."
+    )

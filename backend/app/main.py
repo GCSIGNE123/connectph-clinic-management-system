@@ -75,11 +75,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     setup_logging()
 
+    # Phase 5B (P2, LR4): Swagger/ReDoc/OpenAPI schema are disabled in
+    # production - they were previously exposed unconditionally, publicly
+    # revealing the full API surface (including internal/admin routes).
+    # Development/test behavior is unchanged (docs stay available).
+    docs_enabled = settings.ENV != "production"
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         description="Multi-tenant Medical Clinic Management SaaS - backend foundation.",
         lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     app.add_middleware(

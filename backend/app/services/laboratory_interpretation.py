@@ -15,6 +15,19 @@ Deliberately has zero dependency on the ORM/DB session - callable in
 isolation, which is what makes the "thoroughly test this first" ordering
 in the Feature 3 design report possible before wiring it into
 `LaboratoryService.enter_results`.
+
+Phase 2A (Structured Result Backend Foundation): `critical_low`/
+`critical_high` are additive, keyword-only, default-`None` parameters. No
+existing caller passes them, so every existing call site's behavior is
+byte-for-byte unchanged. They are intentionally NOT wired into
+`LaboratoryService.enter_results`/`_resolve_interpretation` in this phase -
+per Phase 2A's scope, this stays a foundation piece a future phase can call
+with resolved reference-range values, not a live behavior change today. If
+a caller does supply both, an out-of-critical-range numeric value takes
+precedence over the ordinary Low/Normal/High result (checked first) -
+still returns `None` (never guesses) if the critical bounds themselves are
+only partially configured (one of the two is None) or the result value is
+missing, matching this function's existing "never guess" contract.
 """
 
 from decimal import Decimal
@@ -30,14 +43,21 @@ def interpret_result(
     range_low: Decimal | None,
     range_high: Decimal | None,
     expected_normal_text: str | None,
+    critical_low: Decimal | None = None,
+    critical_high: Decimal | None = None,
 ) -> LaboratoryInterpretation | None:
     """Returns the suggested interpretation, or `None` if it cannot be
     safely computed (missing range/expected value, or missing/invalid
     result value)."""
     if result_type == LaboratoryResultType.NUMERIC:
-        if range_low is None or range_high is None:
-            return None
         if numeric_value is None:
+            return None
+        if critical_low is not None and critical_high is not None:
+            if numeric_value < critical_low:
+                return LaboratoryInterpretation.CRITICAL_LOW
+            if numeric_value > critical_high:
+                return LaboratoryInterpretation.CRITICAL_HIGH
+        if range_low is None or range_high is None:
             return None
         if numeric_value < range_low:
             return LaboratoryInterpretation.LOW

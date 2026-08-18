@@ -44,6 +44,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
         <TableHeader>
           <TableRow>
             <TableHead>Order #</TableHead>
+            <TableHead>Queue #</TableHead>
             <TableHead>Visit #</TableHead>
             <TableHead>Patient</TableHead>
             <TableHead>Doctor</TableHead>
@@ -60,6 +61,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
             return (
               <TableRow key={order.id}>
                 <TableCell className="font-medium">{order.orderNumber ?? "-"}</TableCell>
+                <TableCell>{order.queueNumber ?? "-"}</TableCell>
                 <TableCell>{order.visitNumber ?? "-"}</TableCell>
                 <TableCell>{order.patientName ?? "-"}</TableCell>
                 <TableCell>{order.doctorName ?? "-"}</TableCell>

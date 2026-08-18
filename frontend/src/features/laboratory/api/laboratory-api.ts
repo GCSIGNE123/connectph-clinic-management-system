@@ -27,6 +27,8 @@ function toResult(raw: any): LaboratoryResult {
     rangeHigh: raw.range_high === null || raw.range_high === undefined ? null : Number(raw.range_high),
     enteredBy: raw.entered_by ?? null,
     enteredAt: raw.entered_at ?? null,
+    structuredValue: raw.structured_value ?? null,
+    site: raw.site ?? null,
   };
 }
 
@@ -49,6 +51,7 @@ function toOrder(raw: any): LaboratoryOrder {
     orderNumber: raw.order_number ?? null,
     visitId: raw.visit_id,
     visitNumber: raw.visit_number ?? null,
+    queueNumber: raw.queue_number ?? null,
     patientId: raw.patient_id,
     patientName: raw.patient_name ?? null,
     doctorId: raw.doctor_id ?? null,
@@ -69,6 +72,8 @@ function toOrder(raw: any): LaboratoryOrder {
     createdAt: raw.created_at,
     results: (raw.results ?? []).map(toResult),
     attachments: (raw.attachments ?? []).map(toAttachment),
+    clinicName: raw.clinic_name ?? null,
+    updatedAt: raw.updated_at,
   };
 }
 
@@ -83,6 +88,9 @@ function toTemplateParameter(raw: any): LaboratoryTemplateParameter {
     rangeLow: raw.range_low === null || raw.range_low === undefined ? null : Number(raw.range_low),
     rangeHigh: raw.range_high === null || raw.range_high === undefined ? null : Number(raw.range_high),
     expectedNormalText: raw.expected_normal_text ?? null,
+    options: raw.options ?? null,
+    section: raw.section ?? null,
+    requiresSite: raw.requires_site ?? false,
   };
 }
 
@@ -121,6 +129,9 @@ function fromTemplateParameterInput(p: LaboratoryTemplateParameter) {
     range_low: p.rangeLow ?? null,
     range_high: p.rangeHigh ?? null,
     expected_normal_text: p.expectedNormalText ?? null,
+    options: p.options ?? null,
+    section: p.section ?? null,
+    requires_site: p.requiresSite ?? false,
   };
 }
 
@@ -142,7 +153,7 @@ export const laboratoryApi = {
 
   startProcessing: (id: string) => apiClient.post<any>(`/laboratory/orders/${id}/start-processing`).then(toOrder),
 
-  enterResults: (id: string, results: LaboratoryResultInput[]) =>
+  enterResults: (id: string, results: LaboratoryResultInput[], expectedUpdatedAt?: string | null) =>
     apiClient
       .post<any>(`/laboratory/orders/${id}/results`, {
         results: results.map((r) => ({
@@ -157,7 +168,11 @@ export const laboratoryApi = {
           range_low: r.rangeLow ?? null,
           range_high: r.rangeHigh ?? null,
           expected_normal_text: r.expectedNormalText ?? null,
+          structured_value: r.structuredValue ?? null,
+          site: r.site ?? null,
         })),
+        // Phase 4I: optimistic-concurrency token - see LaboratoryOrder.updatedAt.
+        expected_updated_at: expectedUpdatedAt ?? null,
       })
       .then(toOrder),
 

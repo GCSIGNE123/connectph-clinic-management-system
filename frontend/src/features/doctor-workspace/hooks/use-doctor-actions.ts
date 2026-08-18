@@ -3,13 +3,26 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { doctorWorkspaceApi } from "@/features/doctor-workspace/api/doctor-workspace-api";
 import { doctorWorkspaceKeys } from "@/features/doctor-workspace/hooks/use-doctor-dashboard";
+import { visitKeys } from "@/features/visits/hooks/use-visits";
 import { useToast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api-client";
 import { announceQueueNumber } from "@/lib/queue-announcer";
 
+/** Phase 5B (P1, D4): Doctor Workspace actions change a Visit's status,
+ * but previously only invalidated `doctorWorkspaceKeys` - the standalone
+ * Visit Details page (`visitKeys.detail`) has no WebSocket/poll refresh of
+ * its own, so it could show a stale status indefinitely after another
+ * staff member completed/called/cancelled the same visit elsewhere. Also
+ * invalidating `visitKeys.detail(visitId)` here (the exact query key the
+ * Visit Details page reads) is the same targeted-invalidation convention
+ * `features/clinical-orders/hooks/use-clinical-orders.ts` already uses
+ * correctly for this same page. */
 function useInvalidateWorkspace() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: doctorWorkspaceKeys.all });
+  return (visitId?: string) => {
+    queryClient.invalidateQueries({ queryKey: doctorWorkspaceKeys.all });
+    if (visitId) queryClient.invalidateQueries({ queryKey: visitKeys.detail(visitId) });
+  };
 }
 
 function useSimpleAction<TResult>(
@@ -21,10 +34,10 @@ function useSimpleAction<TResult>(
   const invalidate = useInvalidateWorkspace();
   return useMutation({
     mutationFn: (visitId: string) => fn(visitId),
-    onSuccess: (data) => {
+    onSuccess: (data, visitId) => {
       toast({ title: successMessage, variant: "success" });
       onSuccessExtra?.(data);
-      invalidate();
+      invalidate(visitId);
     },
     onError: (error) => {
       toast({
@@ -66,9 +79,9 @@ export function useCancelVisit() {
   const invalidate = useInvalidateWorkspace();
   return useMutation({
     mutationFn: ({ visitId, reason }: { visitId: string; reason?: string }) => doctorWorkspaceApi.cancel(visitId, reason),
-    onSuccess: () => {
+    onSuccess: (_data, { visitId }) => {
       toast({ title: "Visit cancelled", variant: "success" });
-      invalidate();
+      invalidate(visitId);
     },
     onError: (error) => {
       toast({

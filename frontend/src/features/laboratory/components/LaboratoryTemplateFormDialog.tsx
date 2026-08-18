@@ -15,7 +15,7 @@ interface LaboratoryTemplateFormDialogProps {
 }
 
 function emptyParameter(): LaboratoryTemplateParameter {
-  return { parameterName: "", unit: "", normalRange: "", resultType: "Numeric", rangeLow: null, rangeHigh: null, expectedNormalText: "" };
+  return { parameterName: "", unit: "", normalRange: "", resultType: "Numeric", rangeLow: null, rangeHigh: null, expectedNormalText: "", options: null };
 }
 
 /** Administrator-only CRUD for the configurable test catalog - the piece
@@ -148,9 +148,13 @@ export function LaboratoryTemplateFormDialog({ open, onOpenChange, template }: L
                   <Input placeholder="Normal Range" value={p.normalRange ?? ""} onChange={(e) => updateParam(index, { normalRange: e.target.value })} />
                 </div>
                 <div className="col-span-2">
-                  <Select value={p.resultType} onChange={(e) => updateParam(index, { resultType: e.target.value as "Numeric" | "Text" })}>
+                  <Select
+                    value={p.resultType}
+                    onChange={(e) => updateParam(index, { resultType: e.target.value as "Numeric" | "Text" | "Categorical" })}
+                  >
                     <option value="Numeric">Numeric</option>
                     <option value="Text">Text</option>
+                    <option value="Categorical">Categorical</option>
                   </Select>
                 </div>
                 <div className="col-span-1 flex items-center justify-end">
@@ -176,6 +180,22 @@ export function LaboratoryTemplateFormDialog({ open, onOpenChange, template }: L
                         onChange={(e) => updateParam(index, { rangeHigh: e.target.value === "" ? null : Number(e.target.value) })}
                       />
                     </div>
+                  </div>
+                ) : p.resultType === "Categorical" ? (
+                  <div className="col-span-12 sm:col-span-8">
+                    <label className="text-[11px] text-muted-foreground">Options (comma-separated, e.g. A, B, AB, O)</label>
+                    <Input
+                      placeholder="e.g. A, B, AB, O"
+                      value={(p.options ?? []).join(", ")}
+                      onChange={(e) =>
+                        updateParam(index, {
+                          options: e.target.value
+                            .split(",")
+                            .map((o) => o.trim())
+                            .filter((o) => o.length > 0),
+                        })
+                      }
+                    />
                   </div>
                 ) : (
                   <div className="col-span-12 sm:col-span-8">

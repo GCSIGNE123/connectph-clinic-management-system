@@ -335,7 +335,19 @@ async def test_visit_tenant_isolation(client: AsyncClient, make_clinic_with_owne
 
 async def test_existing_queue_endpoints_still_work(client: AsyncClient, make_clinic_with_owner) -> None:
     """Regression check: Phase 5 queue list/status-transition/cancel/slip
-    endpoints keep working unmodified after the Phase 6 visit hook."""
+    endpoints keep working unmodified after the Phase 6 visit hook.
+
+    Phase 9 note: this test previously fetched the slip with no vitals
+    recorded, which now correctly 400s - `QueueService.get_slip` enforces
+    "vital signs must be taken before printing the queue ticket" as of the
+    Reception Queue Workflow Improvements (Feature 1), a deliberate,
+    documented, backend-enforced business rule (see the docstring on
+    `get_slip` in `queue_service.py`) that simply postdates this test and
+    was never backfilled here. This is a stale test expectation (Option
+    B), not a production defect - the correct fix is to make the test
+    follow the real intended workflow (record vitals before printing),
+    exactly like `test_queues.py`'s own `_enter_vitals` helper already
+    does for its own slip-related tests."""
     _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, headers)
     created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
@@ -350,10 +362,42 @@ async def test_existing_queue_endpoints_still_work(client: AsyncClient, make_cli
     assert status_change.status_code == 200
     assert status_change.json()["status"] == "Called"
 
+    # Record vitals first - the real prerequisite `get_slip` enforces -
+    # before attempting to print the slip.
+    consultation = (
+        await client.post(f"/api/v1/visits/{created['visit_id']}/consultation/open-for-reception", headers=headers)
+    ).json()
+    vitals = await client.put(
+        f"/api/v1/consultations/{consultation['id']}/soap/subjective-objective",
+        headers=headers,
+        json={
+            "blood_pressure": "120/80", "pulse_rate": 72, "respiratory_rate": 18,
+            "temperature": 36.8, "height_cm": 170, "weight_kg": 65, "oxygen_saturation": 98,
+        },
+    )
+    assert vitals.status_code == 200, vitals.text
+
     slip = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
-    assert slip.status_code == 200
+    assert slip.status_code == 200, slip.text
     assert slip.json()["queue_number"] == created["queue_number"]
+    assert slip.json()["vitals_taken"] is True
 
     cancel = await client.post(f"/api/v1/queues/{created['id']}/cancel", headers=headers)
     assert cancel.status_code == 200
     assert cancel.json()["status"] == "Cancelled"
+
+
+async def test_slip_without_vitals_is_rejected_for_non_laboratory_tickets(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Phase 9 regression coverage: proves the intended, documented
+    behavior this test file was missing direct coverage for - printing a
+    non-Laboratory queue ticket's slip before vitals are recorded is
+    rejected with a clear 400, not silently allowed."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    created = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    slip = await client.get(f"/api/v1/queues/{created['id']}/slip", headers=headers)
+    assert slip.status_code == 400, slip.text
+    assert "vital signs" in slip.json()["detail"].lower()

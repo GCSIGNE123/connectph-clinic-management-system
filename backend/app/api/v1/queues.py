@@ -104,7 +104,8 @@ async def update_queue_status(
 ) -> QueueDetail:
     service = QueueService(db)
     return await service.change_status(
-        queue_id, clinic_id=clinic_id, actor=current_user, new_status=payload.status, note=payload.note
+        queue_id, clinic_id=clinic_id, actor=current_user, new_status=payload.status, note=payload.note,
+        expected_updated_at=payload.expected_updated_at,
     )
 
 

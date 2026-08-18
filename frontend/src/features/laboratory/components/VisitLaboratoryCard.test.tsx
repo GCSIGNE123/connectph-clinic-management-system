@@ -21,16 +21,18 @@ URL.revokeObjectURL = vi.fn();
 function labOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-20260101-000001", visitId: "visit-1", visitNumber: "VIS-1",
+    queueNumber: "A001",
     patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: "doctor-1", doctorName: "Jose Rizal",
     templateId: null, template: null, testType: "CBC", priority: "Routine", status: "Completed",
     scheduledDate: null, collectedAt: null, collectedBy: null, processingStartedAt: null,
     completedAt: "2026-01-01T00:00:00Z", releasedAt: null, releasedBy: null, invoiceItemId: null,
-    createdAt: "2026-01-01T00:00:00Z",
+    createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
     results: [
       {
         id: "res-1", parameterName: "Hemoglobin", resultType: "Numeric", numericValue: 10, textValue: null,
         normalRange: "12.0-16.0", units: "g/dL", interpretation: "Low", remarks: null,
         rangeLow: 12, rangeHigh: 16, enteredBy: "user-1", enteredAt: "2026-01-01T00:00:00Z",
+        structuredValue: null, site: null,
       },
     ],
     attachments: [],

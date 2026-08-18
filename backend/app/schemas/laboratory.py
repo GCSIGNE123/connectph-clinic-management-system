@@ -1,13 +1,15 @@
 """Pydantic schemas for Laboratory Management (Phase 10)."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.laboratory_order import LaboratoryOrderStatus
 from app.models.laboratory_result import LaboratoryInterpretation, LaboratoryResultType
+from app.models.patient import Gender
 
 
 # --- Templates ---
@@ -26,6 +28,18 @@ class LaboratoryTemplateParameterCreate(BaseModel):
     range_low: Decimal | None = None
     range_high: Decimal | None = None
     expected_normal_text: str | None = Field(default=None, max_length=100)
+    # Phase 2A: additive/optional - see laboratory_template.py's module
+    # docstring. `options` holds a Categorical choice list or a Microscopy
+    # sub-field definition; `requires_site` flags a per-entry specimen site
+    # (e.g. "KOH Mount per site"). Left unset, every existing Numeric/Text
+    # parameter is unaffected.
+    options: list[Any] | None = None
+    requires_site: bool = False
+    # Phase 4A: additive/optional generic grouping label (e.g. "Physical
+    # Examination") - see laboratory_template.py's module docstring. Null
+    # for every existing CBC/Blood Typing parameter and any template with
+    # no natural sections.
+    section: str | None = Field(default=None, max_length=100)
 
 
 class LaboratoryTemplateParameterRead(BaseModel):
@@ -40,6 +54,9 @@ class LaboratoryTemplateParameterRead(BaseModel):
     range_low: Decimal | None = None
     range_high: Decimal | None = None
     expected_normal_text: str | None = None
+    options: list[Any] | None = None
+    requires_site: bool = False
+    section: str | None = None
 
 
 class LaboratoryTemplateCreate(BaseModel):
@@ -96,6 +113,12 @@ class LaboratoryResultInput(BaseModel):
     range_low: Decimal | None = None
     range_high: Decimal | None = None
     expected_normal_text: str | None = Field(default=None, max_length=100)
+    # Phase 2A: additive/optional. `site` is only meaningful for a parameter
+    # with `requires_site=True`; `structured_value` carries Categorical/
+    # Microscopy kind-specific fields. numeric_value/text_value stay the
+    # storage for Numeric/Text/Titer, unchanged.
+    site: str | None = Field(default=None, max_length=100)
+    structured_value: dict[str, Any] | None = None
 
 
 class LaboratoryResultRead(BaseModel):
@@ -114,10 +137,23 @@ class LaboratoryResultRead(BaseModel):
     range_high: Decimal | None = None
     entered_by: UUID | None = None
     entered_at: datetime | None = None
+    site: str | None = None
+    structured_value: dict[str, Any] | None = None
 
 
 class LaboratoryResultsSubmit(BaseModel):
     results: list[LaboratoryResultInput] = Field(min_length=1)
+    # Phase 4I: optional optimistic-concurrency guard - the client echoes
+    # back the `updated_at` it last saw on `GET .../orders/{id}` (see
+    # `LaboratoryOrderRead.updated_at`). `upsert_results` is a full
+    # replace-all of the submitted result set (Phase 2A design, unchanged),
+    # so two technicians editing the same order from stale form snapshots
+    # could otherwise have the second save silently discard the first
+    # save's changes (a classic lost-update race) - see
+    # `LaboratoryService.enter_results`'s conflict check. Left unset
+    # (`None`), the check is skipped entirely - existing callers (and any
+    # untemplated/ad-hoc submission flow) are byte-for-byte unaffected.
+    expected_updated_at: datetime | None = None
 
 
 # --- Attachments ---
@@ -148,6 +184,10 @@ class LaboratoryOrderRead(BaseModel):
     order_number: str | None = None
     visit_id: UUID
     visit_number: str | None = None
+    # Reception Queue ticket number for this order's visit (e.g. "L003"),
+    # via the existing Visit.queue relationship - None for orders whose
+    # visit has no linked queue ticket (e.g. legacy/direct-visit data).
+    queue_number: str | None = None
     patient_id: UUID
     patient_name: str | None = None
     doctor_id: UUID | None = None
@@ -160,6 +200,16 @@ class LaboratoryOrderRead(BaseModel):
     # (test_type didn't match any active template's name), unchanged from
     # before.
     template: LaboratoryTemplateRead | None = None
+    # Phase 4G: report/print header branding, additive and optional -
+    # populated only by `GET /laboratory/orders/{id}` (same one-line
+    # `db.get(Clinic, clinic_id)` convention `ReceiptPayload.clinic_name`
+    # already uses), left unset (None) everywhere else (list/collect/
+    # process/results/release responses), unchanged from before.
+    clinic_name: str | None = None
+    # Phase 4I: exposes the existing `TimestampMixin.updated_at` column -
+    # the optimistic-concurrency token `LaboratoryResultsSubmit.
+    # expected_updated_at` is checked against. No new column.
+    updated_at: datetime
     test_type: str
     priority: str | None = None
     status: LaboratoryOrderStatus
@@ -183,3 +233,46 @@ class LaboratoryDashboardStats(BaseModel):
     completed_today: int
     stat_orders: int
     cancelled: int
+
+
+# --- Reference Ranges (Phase 2A - Structured Result Backend Foundation) ---
+# Additive companion to LaboratoryTemplateParameter's own range_low/
+# range_high/expected_normal_text, which remain the default/fallback - see
+# laboratory_reference_range.py's module docstring.
+
+class LaboratoryReferenceRangeCreate(BaseModel):
+    sex: Gender | None = None
+    age_min_years: int | None = Field(default=None, ge=0)
+    age_max_years: int | None = Field(default=None, ge=0)
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
+    qualitative_expected: str | None = Field(default=None, max_length=100)
+    # REQUIRES LABORATORY/CLINICAL VALIDATION - never populated by this
+    # codebase; only ever used by interpret_result() when configured.
+    critical_low: Decimal | None = None
+    critical_high: Decimal | None = None
+    is_active: bool = True
+    effective_from: date | None = None
+
+
+class LaboratoryReferenceRangeUpdate(BaseModel):
+    is_active: bool | None = None
+
+
+class LaboratoryReferenceRangeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    template_parameter_id: UUID
+    sex: Gender | None = None
+    age_min_years: int | None = None
+    age_max_years: int | None = None
+    range_low: Decimal | None = None
+    range_high: Decimal | None = None
+    qualitative_expected: str | None = None
+    critical_low: Decimal | None = None
+    critical_high: Decimal | None = None
+    is_active: bool
+    effective_from: date | None = None
+    created_by: UUID | None = None
+    created_at: datetime

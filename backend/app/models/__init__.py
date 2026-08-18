@@ -39,6 +39,7 @@ from app.models.invoice_counter import InvoiceCounter
 from app.models.invoice_item import InvoiceItem, InvoiceItemType
 from app.models.laboratory_attachment import LaboratoryAttachment, LaboratoryAttachmentType
 from app.models.laboratory_order import LaboratoryOrder, LaboratoryOrderStatus, LABORATORY_ORDER_STATUS_TRANSITIONS
+from app.models.laboratory_reference_range import LaboratoryReferenceRange
 from app.models.laboratory_result import LaboratoryInterpretation, LaboratoryResult, LaboratoryResultType
 from app.models.laboratory_template import LaboratoryTemplate, LaboratoryTemplateParameter
 from app.models.migration_batch import (

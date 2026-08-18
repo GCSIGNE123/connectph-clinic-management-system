@@ -16,18 +16,24 @@ place (`InvoiceService.update_item`) instead of adding a new one, so
 re-completing an order (e.g. after a correction) never double-charges.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.invoice_item import InvoiceItemType
 from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.laboratory_order import LABORATORY_ORDER_STATUS_TRANSITIONS, LaboratoryOrder, LaboratoryOrderStatus
-from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES
+from app.models.laboratory_reference_range import LaboratoryReferenceRange
+from app.models.laboratory_result import LaboratoryResultType
+from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES, LaboratoryTemplateParameter
 from app.models.order import Order, OrderCategory, OrderStatus
+from app.models.patient import Patient
+from app.models.queue import QUEUE_STATUS_TRANSITIONS, QueueStatus
+from app.models.user import User
 from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
 from app.repositories.laboratory_repository import LaboratoryRepository
@@ -36,6 +42,7 @@ from app.schemas.laboratory import LaboratoryAttachmentRead, LaboratoryOrderRead
 from app.services.audit_service import AuditService
 from app.services.invoice_service import InvoiceService
 from app.services.laboratory_interpretation import interpret_result
+from app.services.queue_service import QueueService
 from app.services import sync_queue_service
 
 # Maps LaboratoryOrderStatus -> the underlying Phase 9 Order's OrderStatus.
@@ -97,6 +104,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         order_number=order.order_number if order else None,
         visit_id=lab_order.visit_id,
         visit_number=None,
+        queue_number=lab_order.visit.queue.queue_number if lab_order.visit and lab_order.visit.queue else None,
         patient_id=lab_order.patient_id,
         patient_name=_full_name(lab_order.patient),
         doctor_id=lab_order.doctor_id,
@@ -115,6 +123,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         released_by=lab_order.released_by,
         invoice_item_id=lab_order.invoice_item_id,
         created_at=lab_order.created_at,
+        updated_at=lab_order.updated_at,
         results=[LaboratoryResultRead.model_validate(r, from_attributes=True) for r in lab_order.results],
         attachments=[attachment_to_read(a) for a in lab_order.attachments],
     )
@@ -137,6 +146,7 @@ class LaboratoryService:
         self.audit_service = AuditService(session)
         self.invoice_service = InvoiceService(session)
         self.orders_repo = ClinicalOrdersRepository(session)
+        self.queue_service = QueueService(session)
 
     async def _sync_order_status(self, lab_order: LaboratoryOrder, *, clinic_id: UUID) -> None:
         """Mirrors `lab_order.status` onto the underlying Phase 9 `orders`
@@ -222,7 +232,9 @@ class LaboratoryService:
 
     async def get(self, laboratory_order_id: UUID, *, clinic_id: UUID) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
-        return _to_read(lab_order)
+        order_read = _to_read(lab_order)
+        await self._overlay_resolved_ranges(order_read, lab_order, clinic_id=clinic_id)
+        return order_read
 
     async def list_for_dashboard(self, *, clinic_id: UUID) -> list[LaboratoryOrderRead]:
         rows = await self.repo.list_for_clinic(clinic_id)
@@ -299,7 +311,13 @@ class LaboratoryService:
         return result
 
     async def enter_results(
-        self, laboratory_order_id: UUID, results: list[dict], *, clinic_id: UUID, actor_id: UUID
+        self,
+        laboratory_order_id: UUID,
+        results: list[dict],
+        *,
+        clinic_id: UUID,
+        actor_id: UUID,
+        expected_updated_at: datetime | None = None,
     ) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
         if lab_order.status not in {LaboratoryOrderStatus.COLLECTED, LaboratoryOrderStatus.PROCESSING, LaboratoryOrderStatus.COMPLETED}:
@@ -307,7 +325,19 @@ class LaboratoryService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot enter results while the order is {lab_order.status.value}.",
             )
+        # Phase 4I: optimistic-concurrency guard against the lost-update
+        # race `upsert_results`' replace-all semantics otherwise allow - if
+        # the client's snapshot is stale (someone else saved in between),
+        # reject rather than silently overwrite their save. Skipped
+        # entirely when the client doesn't supply a token (backward
+        # compatible with any caller that predates this check).
+        if expected_updated_at is not None and lab_order.updated_at != expected_updated_at:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This order was updated by someone else since you opened it. Reload and try again.",
+            )
         now = datetime.now(UTC)
+        results = [await self._apply_resolved_range_to_result(lab_order, r) for r in results]
         results = [self._resolve_interpretation(r) for r in results]
         await self.repo.upsert_results(laboratory_order_id, clinic_id, results, actor_id=actor_id)
         # The `results` relationship on the already-loaded `lab_order`
@@ -334,17 +364,62 @@ class LaboratoryService:
         )
         await self.session.commit()
 
+        # Phase 6: billing sync must run BEFORE the response snapshot is
+        # read, not after - `_sync_billing` sets `lab_order.invoice_item_id`
+        # and commits, but the old ordering took the `get()` snapshot first,
+        # so the response the client actually received always had a stale
+        # (null, on first completion) `invoice_item_id` even though the
+        # invoice line item really was created moments later in the same
+        # request. Root cause of the persistent
+        # test_completing_priced_order_creates_invoice_line_item /
+        # test_billing_sync_idempotent_on_resubmit failures - a genuine
+        # ordering defect, not a test/environment issue.
+        if completed_at == now:
+            await self._sync_billing(lab_order, clinic_id=clinic_id, actor_id=actor_id)
+
         result_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
         await sync_queue_service.enqueue_lazy(
             entity_type="laboratory_result", record_id=laboratory_order_id, operation="update",
             clinic_id=clinic_id, build_payload=lambda: result_read.model_dump(mode="json"),
         )
 
-        # Billing integration - fires once the order first reaches Completed.
-        if completed_at == now:
-            await self._sync_billing(lab_order, clinic_id=clinic_id, actor_id=actor_id)
-
         return result_read
+
+    async def _sync_queue_on_release(self, lab_order: LaboratoryOrder, *, clinic_id: UUID, actor_id: UUID) -> None:
+        """Mirrors a Released LaboratoryOrder onto its Visit's linked
+        Reception Queue ticket, if any - a Laboratory-only queue ticket is
+        Called but never enters a doctor consultation, so nothing else
+        ever moves it off the TV/queue display; releasing the lab result
+        is the natural "this patient's visit here is finished" signal for
+        that ticket. Mirrors `DoctorWorkspaceService._sync_queue_status`'s
+        exact pattern: never mutates `Queue.status` directly, always goes
+        through `QueueService.change_status()` (so history/audit/broadcast/
+        sync-queue all fire through the one existing mechanism); no-ops if
+        there's no linked queue, the queue is already Completed
+        (idempotent - a second `release_results` call can't even reach
+        here since `_transition` above already rejects re-releasing an
+        already-Released order, but this stays independently safe), or the
+        transition isn't currently legal (e.g. the ticket was independently
+        cancelled/skipped by Reception - the queue ticket owns its own
+        status, this sync never forces an illegal transition onto it).
+        Only Called->Completed is affected; a doctor/consultation ticket
+        already reaches Completed via Serving (see `_VISIT_TO_QUEUE_STATUS`
+        in doctor_workspace_service.py) and is untouched by this."""
+        visit = lab_order.visit
+        if visit is None or visit.queue_id is None:
+            return
+        queue = visit.queue
+        if queue is None or queue.status == QueueStatus.COMPLETED:
+            return
+        if QueueStatus.COMPLETED not in QUEUE_STATUS_TRANSITIONS.get(queue.status, set()):
+            return
+        actor = await self.session.get(User, actor_id)
+        if actor is None:
+            return
+        await self.queue_service.change_status(
+            visit.queue_id, clinic_id=clinic_id, actor=actor, new_status=QueueStatus.COMPLETED,
+            note="Laboratory results released",
+        )
 
     async def release_results(self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
@@ -361,6 +436,7 @@ class LaboratoryService:
             entity_type="laboratory_order", entity_id=str(lab_order.id),
         )
         await self.session.commit()
+        await self._sync_queue_on_release(lab_order, clinic_id=clinic_id, actor_id=actor_id)
         released_read = await self.get(laboratory_order_id, clinic_id=clinic_id)
         await sync_queue_service.enqueue_lazy(
             entity_type="laboratory_order", record_id=laboratory_order_id, operation="update",
@@ -515,3 +591,231 @@ class LaboratoryService:
             )
             await self.session.commit()
         return [LaboratoryTemplateRead.model_validate(t, from_attributes=True) for t in created]
+
+    # --- Reference Ranges (Phase 2A - Structured Result Backend Foundation) ---
+    # Additive companion to each LaboratoryTemplateParameter's own default
+    # range_low/range_high/expected_normal_text (unchanged). Not yet wired
+    # into `enter_results`/`_resolve_interpretation` above - see this
+    # module's Phase 2A note there and `laboratory_repository.py`'s
+    # `resolve_reference_range` docstring.
+
+    async def _require_template_parameter(self, template_parameter_id: UUID, clinic_id: UUID):
+        stmt = select(LaboratoryTemplateParameter).where(
+            LaboratoryTemplateParameter.id == template_parameter_id,
+            LaboratoryTemplateParameter.clinic_id == clinic_id,
+        )
+        parameter = (await self.session.execute(stmt)).scalar_one_or_none()
+        if parameter is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Laboratory template parameter not found")
+        return parameter
+
+    async def create_reference_range(
+        self, template_parameter_id: UUID, payload: dict, *, clinic_id: UUID, actor_id: UUID
+    ) -> LaboratoryReferenceRange:
+        await self._require_template_parameter(template_parameter_id, clinic_id)
+        reference_range = await self.repo.create_reference_range(
+            clinic_id=clinic_id, template_parameter_id=template_parameter_id, created_by=actor_id, **payload
+        )
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="laboratory.reference_range_created",
+            entity_type="laboratory_reference_range", entity_id=str(reference_range.id),
+            metadata={"template_parameter_id": str(template_parameter_id)},
+        )
+        await self.session.commit()
+        return reference_range
+
+    async def list_reference_ranges(
+        self, template_parameter_id: UUID, *, clinic_id: UUID, active_only: bool = False
+    ) -> list[LaboratoryReferenceRange]:
+        await self._require_template_parameter(template_parameter_id, clinic_id)
+        return await self.repo.list_reference_ranges_for_parameter(template_parameter_id, clinic_id, active_only=active_only)
+
+    async def set_reference_range_active(
+        self, reference_range_id: UUID, is_active: bool, *, clinic_id: UUID, actor_id: UUID
+    ) -> LaboratoryReferenceRange:
+        reference_range = await self.repo.get_reference_range(reference_range_id, clinic_id)
+        if reference_range is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Laboratory reference range not found")
+        reference_range = await self.repo.update_reference_range(reference_range, is_active=is_active)
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor_id,
+            action="laboratory.reference_range_activated" if is_active else "laboratory.reference_range_deactivated",
+            entity_type="laboratory_reference_range", entity_id=str(reference_range.id),
+        )
+        await self.session.commit()
+        return reference_range
+
+    @staticmethod
+    def _age_years(birth_date: date, *, as_of: date) -> int:
+        years = as_of.year - birth_date.year
+        if (as_of.month, as_of.day) < (birth_date.month, birth_date.day):
+            years -= 1
+        return years
+
+    @staticmethod
+    def _format_resolved_range_text(range_low: Decimal | None, range_high: Decimal | None, qualitative_expected: str | None) -> str | None:
+        """A `LaboratoryReferenceRange` has no free-text `normal_range`
+        column of its own (only structured range_low/range_high/
+        qualitative_expected) - the template parameter's own `normal_range`
+        is a separate, human-authored display string. When a demographic-
+        specific range is actually resolved, synthesize a display string
+        from its structured bounds so the existing "Normal Range" field the
+        frontend already renders (unchanged UI) reflects the range that's
+        actually in effect, not a stale template-wide description."""
+        if range_low is not None and range_high is not None:
+            return f"{range_low}-{range_high}"
+        if qualitative_expected is not None:
+            return qualitative_expected
+        return None
+
+    async def _resolved_parameter_range(
+        self, parameter: LaboratoryTemplateParameter, patient: Patient | None, *, clinic_id: UUID
+    ) -> tuple[Decimal | None, Decimal | None, str | None, str | None]:
+        """Phase 2B: THE single authoritative range-resolution call, used by
+        both `get()` (so Result Entry's prefill - which only ever reads
+        `order.template.parameters[i].range_low/range_high/
+        expected_normal_text/normal_range`, unchanged since Phase 2A - sees
+        the resolved value) and `enter_results` (so the range
+        interpretation/storage is based on, and the range persisted to
+        `LaboratoryResult`, are the same resolved value the technician was
+        shown). Neither the frontend nor any other backend code path
+        computes or overrides a range independently. `patient` should
+        already be the order's own eager-loaded `Patient` (no extra query)
+        - `None` (shouldn't happen for a real order, but defensively
+        handled) skips straight to the template default. Precedence: an
+        active, demographic-matching `LaboratoryReferenceRange` if one
+        exists, else the template parameter's own default - identical rule
+        as `resolve_reference_range_for_patient`, just reusing the
+        already-loaded Patient instead of re-querying it.
+
+        Returns `(range_low, range_high, expected_normal_text, normal_range_display)`
+        - the 4th element is only non-None when an actual
+        `LaboratoryReferenceRange` was matched (see
+        `_format_resolved_range_text`); `None` means "caller should leave
+        the template parameter's own free-text normal_range untouched" -
+        exactly today's fallback behavior."""
+        if patient is not None:
+            age_years = self._age_years(patient.birth_date, as_of=datetime.now(UTC).date())
+            reference_range = await self.repo.resolve_reference_range(
+                parameter.id, clinic_id, sex=patient.gender, age_years=age_years
+            )
+            if reference_range is not None:
+                display_text = self._format_resolved_range_text(
+                    reference_range.range_low, reference_range.range_high, reference_range.qualitative_expected
+                )
+                return reference_range.range_low, reference_range.range_high, reference_range.qualitative_expected, display_text
+        return parameter.range_low, parameter.range_high, parameter.expected_normal_text, None
+
+    async def _overlay_resolved_ranges(
+        self, order_read: LaboratoryOrderRead, lab_order: LaboratoryOrder, *, clinic_id: UUID
+    ) -> None:
+        """Phase 2B: overlays the patient-resolved range (see
+        `_resolved_parameter_range`) onto each parameter of the read
+        model's embedded template, in place - the ONLY place this happens
+        for a read/display path. Only mutates this in-memory response
+        object, never the template/parameter rows themselves, so every
+        other order for the same template (a different patient) resolves
+        independently on its own next read."""
+        if order_read.template is None or lab_order.template is None or lab_order.patient is None:
+            return
+        resolved_by_id = {
+            parameter.id: await self._resolved_parameter_range(parameter, lab_order.patient, clinic_id=clinic_id)
+            for parameter in lab_order.template.parameters
+        }
+        for param_read in order_read.template.parameters:
+            resolved = resolved_by_id.get(param_read.id)
+            if resolved is None:
+                continue
+            range_low, range_high, expected_normal_text, display_text = resolved
+            param_read.range_low, param_read.range_high, param_read.expected_normal_text = range_low, range_high, expected_normal_text
+            if display_text is not None:
+                param_read.normal_range = display_text
+
+    @staticmethod
+    def _validate_categorical_value(parameter: LaboratoryTemplateParameter, result: dict) -> None:
+        """Phase 3: the backend, not the browser, is the enforcement point
+        for a Categorical parameter's allowed values - a hand-crafted
+        request submitting an unconfigured value (or no value at all) for
+        a parameter that DOES have `options` configured is rejected with a
+        400, exactly as a malicious/modified client bypassing the
+        frontend's `<Select>` must be. A parameter with no `options`
+        configured (or a non-Categorical parameter) has nothing to
+        validate against and is left alone - same "never guess/never
+        invent a constraint that wasn't configured" principle used
+        throughout this module (range/critical-value resolution)."""
+        if parameter.result_type != LaboratoryResultType.CATEGORICAL:
+            return
+        options = parameter.options
+        if not options:
+            return
+        structured_value = result.get("structured_value")
+        selected = structured_value.get("value") if isinstance(structured_value, dict) else None
+        if selected is None or selected not in options:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{result.get('parameter_name')}' must be one of: {', '.join(str(o) for o in options)}."
+                ),
+            )
+
+    async def _apply_resolved_range_to_result(self, lab_order: LaboratoryOrder, result: dict) -> dict:
+        """Phase 2B: the `enter_results` counterpart to `_overlay_resolved_ranges`
+        - re-resolves the authoritative range for the submitted parameter
+        (matched by name against the order's linked template, same
+        case-insensitive-exact-match convention `create_from_order` already
+        uses to link a template in the first place) and overwrites whatever
+        range_low/range_high/expected_normal_text arrived in the request
+        with it, so interpretation and the persisted `LaboratoryResult` are
+        always based on the backend's own resolution - never a value the
+        frontend merely echoed back. A parameter with no template match
+        (untemplated order, or a free-text/ad-hoc row with no matching
+        template parameter name) is left exactly as submitted - unchanged
+        fallback behavior for every order without a usable template match,
+        identical to pre-Phase-2B.
+
+        Phase 3: also validates a matched Categorical parameter's submitted
+        `structured_value` against its configured `options` (see
+        `_validate_categorical_value`) - the same single per-parameter
+        match this method already does for range resolution is reused,
+        not a second lookup/engine."""
+        if lab_order.template is None:
+            return result
+        parameter_name = (result.get("parameter_name") or "").strip().lower()
+        parameter = next(
+            (p for p in lab_order.template.parameters if p.parameter_name.strip().lower() == parameter_name), None
+        )
+        if parameter is None:
+            return result
+        self._validate_categorical_value(parameter, result)
+        range_low, range_high, expected_normal_text, display_text = await self._resolved_parameter_range(
+            parameter, lab_order.patient, clinic_id=lab_order.clinic_id
+        )
+        result = dict(result)
+        result["range_low"] = range_low
+        result["range_high"] = range_high
+        result["expected_normal_text"] = expected_normal_text
+        if display_text is not None:
+            result["normal_range"] = display_text
+        return result
+
+    async def resolve_reference_range_for_patient(
+        self, template_parameter_id: UUID, patient_id: UUID, *, clinic_id: UUID
+    ) -> LaboratoryReferenceRange | None:
+        """Phase 2A foundation: resolves the demographic-specific reference
+        range that applies to `patient_id` for this parameter, per the
+        future precedence rule (see `laboratory_repository.py`'s
+        `resolve_reference_range` docstring) - `None` means "no matching
+        override; caller should fall back to the template parameter's own
+        default range_low/range_high/expected_normal_text", exactly as
+        every result-entry call already does today. Does not itself change
+        any existing behavior - callable standalone ahead of being wired
+        into the live result-entry path in a future phase."""
+        await self._require_template_parameter(template_parameter_id, clinic_id)
+        stmt = select(Patient).where(Patient.id == patient_id, Patient.clinic_id == clinic_id)
+        patient = (await self.session.execute(stmt)).scalar_one_or_none()
+        if patient is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+        age_years = self._age_years(patient.birth_date, as_of=datetime.now(UTC).date())
+        return await self.repo.resolve_reference_range(
+            template_parameter_id, clinic_id, sex=patient.gender, age_years=age_years
+        )

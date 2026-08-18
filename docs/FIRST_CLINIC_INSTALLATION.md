@@ -90,24 +90,19 @@ display, etc.) — this document assumes that layout is already in place.
 
 ## Backup & Restore
 
-- **What to back up**: `.devdb\data\` (the live Postgres data directory).
-  Do not edit or manually touch its files — only back it up via `pg_dump`
-  or a filesystem-level copy while Postgres is stopped.
-- **Daily backup** (recommended — a Scheduled Task, not covered by this
-  phase's auto-start scripts since it's a separate operational concern):
+**See `docs/BACKUP.md` for the full, authoritative procedure** (scheduling, retention, restore, restore-drill verification, and attachment-file coverage) — the summary below is a pointer, not a duplicate, to avoid the two documents drifting apart again (see `docs/BACKUP.md`'s "Historical note" for why this matters: an earlier version of this section recommended a `pg_dump -F c` / `pg_restore` custom-format procedure that was actually incompatible with the format the app's own backup mechanism produces).
+
+- **What to back up**: `.devdb\data\` (the live Postgres data directory, via `pg_dump`) **and** `backend\var\laboratory_attachments\` / `backend\var\consultation_attachments\` (uploaded files — not in Postgres at all). `deploy\windows\run_backup.bat` (§2 below and `docs/BACKUP.md` §2/§6) handles both automatically.
+- **Daily backup — set up once, on this clinic's Server PC**:
   ```
-  "<repo>\.devdb\pgsql\bin\pg_dump.exe" -p 5433 -U clinic_user -F c -f "<backup-folder>\connectph_%date%.dump" connectph_clinic
+  schtasks /create /tn "CONNECT.PH Daily Backup" /tr "\"<repo>\deploy\windows\run_backup.bat\"" /sc daily /st 02:00 /ru SYSTEM
   ```
-  Store `<backup-folder>` on a **second** drive or external media — a
-  backup on the same disk as the live data protects against nothing.
-- **Restore drill** (practice this before go-live, not after a real
-  failure):
+  Edit `BACKUP_DEST` inside `run_backup.bat` first if a second drive is available — a backup on the same disk as the live data protects against nothing.
+- **Restore drill** (practice this before go-live, not after a real failure) — the safe, non-destructive check:
   ```
-  deploy\windows\stop_clinic.bat
-  "<repo>\.devdb\pgsql\bin\pg_restore.exe" -p 5433 -U clinic_user -d connectph_clinic --clean "<backup-folder>\connectph_YYYY-MM-DD.dump"
-  deploy\windows\start_clinic.bat
-  deploy\windows\check_health.bat
+  deploy\windows\run_restore_drill.bat "<backup-folder>\scheduled-backup-YYYYMMDDTHHMMSS.sql"
   ```
+  For an actual full restore (only when truly needed — this overwrites live data), follow `docs/BACKUP.md` §4 step by step.
 - Cloud backup (uploading to a Phase 2.5 Cloud Server) is a separate,
   optional, opt-in mechanism (`DEPLOYMENT_MODE=hybrid` + `CLOUD_*` vars) —
   not required for this local install to be considered backed up, and not

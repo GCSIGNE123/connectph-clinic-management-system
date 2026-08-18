@@ -116,7 +116,8 @@ export function useEnterResults() {
   const { toast } = useToast();
   const invalidateAll = useInvalidateAllLabViews();
   return useMutation({
-    mutationFn: ({ id, results }: { id: string; results: LaboratoryResultInput[] }) => laboratoryApi.enterResults(id, results),
+    mutationFn: ({ id, results, expectedUpdatedAt }: { id: string; results: LaboratoryResultInput[]; expectedUpdatedAt?: string | null }) =>
+      laboratoryApi.enterResults(id, results, expectedUpdatedAt),
     onSuccess: (order) => {
       invalidateAll(order);
       toast({ title: "Results saved", variant: "success" });

@@ -3,7 +3,17 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Phase 5B (P1, D3): the literal default below is public (committed to the
+# repo) - if `JWT_SECRET_KEY` is ever left unset in a real deployment, the
+# app would otherwise boot normally and silently sign/verify tokens with a
+# secret anyone can find, a full auth bypass. `Settings._reject_insecure_
+# production_secret` below fails fast instead - but ONLY when `ENV`
+# indicates production, so existing development/test behavior (which
+# never sets a real secret) is completely unaffected.
+INSECURE_DEFAULT_JWT_SECRET_KEY = "change-me-to-a-random-secret-in-production"
 
 
 class Settings(BaseSettings):
@@ -35,7 +45,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://clinic_user:clinic_password@localhost:5432/connectph_clinic"
 
     # --- JWT / Auth ---
-    JWT_SECRET_KEY: str = "change-me-to-a-random-secret-in-production"
+    JWT_SECRET_KEY: str = INSECURE_DEFAULT_JWT_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -140,6 +150,20 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def _reject_insecure_production_secret(self) -> "Settings":
+        """Phase 5B (P1, D3): fail fast rather than silently booting with a
+        publicly-known JWT signing secret. Scoped to `ENV == "production"`
+        only (the exact value `docker-compose.prod.yml` sets) - development/
+        test/staging environments, which never set a real secret, are
+        completely unaffected."""
+        if self.ENV == "production" and self.JWT_SECRET_KEY == INSECURE_DEFAULT_JWT_SECRET_KEY:
+            raise ValueError(
+                "JWT_SECRET_KEY is still set to the insecure default. "
+                "Set a real, random JWT_SECRET_KEY before starting in production."
+            )
+        return self
 
 
 @lru_cache
