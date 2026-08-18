@@ -318,6 +318,24 @@ require_clinical_orders_view_role = require_roles(*CLINICAL_ORDERS_VIEW_ROLES)
 require_clinical_orders_edit_role = require_roles(*CLINICAL_ORDERS_EDIT_ROLES)
 require_clinical_orders_lab_view_role = require_roles(*CLINICAL_ORDERS_LAB_VIEW_ROLES)
 
+# Medical Certificates.
+# View/print: broader than Clinical Orders' own view set - product decision
+# explicitly adds Cashier (alongside Receptionist) so front-desk staff can
+# reprint an already-issued certificate for a returning patient, without
+# granting either role any create/edit/issue/cancel capability.
+MEDICAL_CERTIFICATE_VIEW_ROLES = {"Owner", "Administrator", "Doctor", "Receptionist", "Cashier"}
+# Edit (create draft/update draft/issue/cancel/reissue): enforced further in
+# the service layer to "only the visit's assigned doctor" - Owner/
+# Administrator pass this gate for the view-capable endpoints but are never
+# granted `can_edit=True` (product decision v1: Owner/Administrator must NOT
+# issue on a doctor's behalf), mirroring the Consultation/Clinical Orders
+# pattern exactly.
+MEDICAL_CERTIFICATE_EDIT_ROLES = {"Owner", "Administrator", "Doctor"}
+MEDICAL_CERTIFICATE_PRIVILEGED_ROLES = {"Owner", "Administrator"}
+
+require_medical_certificate_view_role = require_roles(*MEDICAL_CERTIFICATE_VIEW_ROLES)
+require_medical_certificate_edit_role = require_roles(*MEDICAL_CERTIFICATE_EDIT_ROLES)
+
 # Post-RC1: Vaccination administration. A doctor ORDERS a vaccination via the
 # normal Clinical Orders flow above (CLINICAL_ORDERS_EDIT_ROLES); actually
 # ADMINISTERING it (recording lot/site/route/dose and marking it given) is a

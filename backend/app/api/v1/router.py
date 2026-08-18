@@ -22,6 +22,7 @@ from app.api.v1 import (
     holidays,
     internal_messages,
     laboratory,
+    medical_certificates,
     migration,
     operating_hours,
     patients,
@@ -78,6 +79,9 @@ api_router.include_router(consultations.router)
 
 # Phase 9: Clinical Orders & Prescriptions
 api_router.include_router(clinical_orders.router)
+
+# Medical Certificates
+api_router.include_router(medical_certificates.router)
 
 # Phase 12: Billing & Cashier (renumbered - developed before Laboratory and
 # before Appointments, but placed at 12 in the final sequence to make room

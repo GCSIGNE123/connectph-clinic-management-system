@@ -3,6 +3,84 @@ export type OrderPriority = "Routine" | "STAT";
 export type OrderStatus = "Requested" | "Collected" | "Processing" | "Completed" | "Cancelled";
 export type PrescriptionStatus = "Draft" | "Finalized" | "Cancelled";
 
+export type MedicalCertificateType = "MedicalCertificate" | "FitToWork" | "SickLeave" | "Custom";
+export type MedicalCertificateStatus = "Draft" | "Issued" | "Cancelled";
+
+export const MEDICAL_CERTIFICATE_TYPE_LABELS: Record<MedicalCertificateType, string> = {
+  MedicalCertificate: "Medical Certificate",
+  FitToWork: "Fit to Work",
+  SickLeave: "Sick Leave",
+  Custom: "Custom",
+};
+
+/** Sensible neutral default wording per certificate type, clearly isolated
+ * here (not hardcoded inline in the form/print template) so it can be
+ * adjusted later without touching component logic - explicitly NOT
+ * authoritative legal wording, see `MedicalCertificateService`'s module
+ * docstring. The doctor edits this before issuing either way. */
+export const MEDICAL_CERTIFICATE_TEMPLATE_TEXT: Record<MedicalCertificateType, { findings: string; recommendation: string }> = {
+  MedicalCertificate: {
+    findings: "",
+    recommendation: "This is to certify that the above-named patient was examined and treated at this clinic.",
+  },
+  FitToWork: {
+    findings: "",
+    recommendation: "This is to certify that the above-named patient is fit to return to work.",
+  },
+  SickLeave: {
+    findings: "",
+    recommendation: "This is to certify that the above-named patient is advised to rest for the period indicated below.",
+  },
+  Custom: { findings: "", recommendation: "" },
+};
+
+export interface MedicalCertificate {
+  id: string;
+  consultationId: string;
+  visitId: string;
+  patientId: string;
+  doctorId: string;
+  certificateNumber: string | null;
+  certificateType: MedicalCertificateType;
+  status: MedicalCertificateStatus;
+  findings: string | null;
+  recommendation: string | null;
+  restDays: number | null;
+  dateFrom: string | null;
+  dateTo: string | null;
+  notes: string | null;
+  issuedAt: string | null;
+  cancelledAt: string | null;
+  cancelledReason: string | null;
+  cancelledBy: string | null;
+  supersededById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  // Live-pulled display fields - never stored on the row itself, see
+  // `MedicalCertificateService._to_detail` on the backend.
+  patientName: string | null;
+  patientAge: number | null;
+  patientSex: string | null;
+  doctorName: string | null;
+  doctorPrcLicense: string | null;
+  doctorPtrNumber: string | null;
+  clinicName: string | null;
+  clinicLogoUrl: string | null;
+  clinicAddress: string | null;
+  clinicLicenseNumber: string | null;
+  visitNumber: string | null;
+}
+
+export interface MedicalCertificateDraftInput {
+  certificateType: MedicalCertificateType;
+  findings?: string | null;
+  recommendation?: string | null;
+  restDays?: number | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  notes?: string | null;
+}
+
 export interface OrderItem {
   id: string;
   itemName: string;

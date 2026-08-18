@@ -28,6 +28,7 @@ import type { AttachmentType, DiagnosisStatus, DiagnosisType, SoapNoteInput } fr
 import { computeBmi } from "@/features/consultation/bmi";
 import { ClinicalOrdersTab } from "@/features/clinical-orders/components/ClinicalOrdersTab";
 import { PrescriptionTab } from "@/features/clinical-orders/components/PrescriptionTab";
+import { MedicalCertificateTab } from "@/features/clinical-orders/components/MedicalCertificateTab";
 import { ApiError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ const TABS = [
   { key: "diagnosis", label: "Diagnosis" },
   { key: "orders", label: "Orders" },
   { key: "prescription", label: "Prescription" },
+  { key: "certificate", label: "Medical Certificate" },
   { key: "attachments", label: "Attachments" },
   { key: "timeline", label: "Timeline" },
   { key: "audit", label: "Audit Log" },
@@ -423,6 +425,17 @@ export default function ConsultationPage() {
           doctorName={consultation.doctorName}
           doctorPrcLicense={consultation.doctorPrcLicense}
           doctorPtrNumber={consultation.doctorPtrNumber}
+          visitNumber={visit.visitNumber}
+        />
+      ) : null}
+
+      {activeTab === "certificate" && consultation ? (
+        <MedicalCertificateTab
+          consultationId={consultation.id}
+          visitId={visitId}
+          patientId={patient?.id}
+          canEdit={canEdit}
+          diagnoses={consultation.diagnoses}
           visitNumber={visit.visitNumber}
         />
       ) : null}

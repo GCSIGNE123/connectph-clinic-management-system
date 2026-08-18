@@ -125,6 +125,13 @@ class VisitTimelineEventType(str, enum.Enum):
     # timeline once an Appointment check-in creates this Visit (mirrors how
     # `QUEUED`/`CHECKED_IN` already work for walk-ins).
     APPOINTMENT_CHECKED_IN = "AppointmentCheckedIn"
+    # Medical Certificates - same visit-scoped timeline reuse as Phase 9's
+    # Order/Procedure/Referral/Prescription events above. Only emitted on
+    # Issue/Cancel (and Reissue, which emits both) - Draft save/edit does
+    # not touch the timeline, mirroring how a Prescription's Draft status
+    # still only gets ONE `PRESCRIPTION_CREATED` event regardless of status.
+    CERTIFICATE_ISSUED = "CertificateIssued"
+    CERTIFICATE_CANCELLED = "CertificateCancelled"
 
 
 # Legal forward transitions for a visit. Cancel/NoShow allowed from

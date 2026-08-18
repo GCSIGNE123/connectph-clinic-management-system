@@ -90,3 +90,11 @@ class OrderNumberGenerator(_DailyNumberGenerator):
 class PrescriptionNumberGenerator(_DailyNumberGenerator):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, key_prefix="prescription_number_counter", number_prefix="RX")
+
+
+class MedicalCertificateNumberGenerator(_DailyNumberGenerator):
+    """Format: `MC-YYYYMMDD-000001`. Only called at issue time (a Draft has
+    no number yet) - see `MedicalCertificateService.issue`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, key_prefix="medical_certificate_number_counter", number_prefix="MC")

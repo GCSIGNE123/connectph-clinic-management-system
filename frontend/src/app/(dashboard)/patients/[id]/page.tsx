@@ -18,6 +18,7 @@ import { useVisitsForPatient } from "@/features/visits/hooks/use-visits";
 import { VisitTable } from "@/features/visits/components/VisitTable";
 import { PatientBillingHistory } from "@/features/billing/components/PatientBillingHistory";
 import { PatientPrescriptionsHistory } from "@/features/clinical-orders/components/PatientPrescriptionsHistory";
+import { PatientMedicalCertificatesHistory } from "@/features/clinical-orders/components/PatientMedicalCertificatesHistory";
 import { PatientLaboratoryHistory } from "@/features/laboratory/components/PatientLaboratoryHistory";
 import { PatientAppointmentsHistory } from "@/features/appointments/components/PatientAppointmentsHistory";
 import { PatientFormDialog } from "@/features/patients/components/PatientFormDialog";
@@ -32,6 +33,7 @@ const TABS = [
   { key: "billing", label: "Billing" },
   { key: "laboratory", label: "Laboratory" },
   { key: "prescriptions", label: "Prescriptions" },
+  { key: "certificates", label: "Medical Certificates" },
   { key: "documents", label: "Documents" },
   { key: "audit", label: "Audit Logs" },
 ] as const;
@@ -304,6 +306,17 @@ export default function PatientProfilePage() {
           </CardHeader>
           <CardContent className="p-0">
             <PatientPrescriptionsHistory patientId={patientId} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeTab === "certificates" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Medical Certificates</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <PatientMedicalCertificatesHistory patientId={patientId} />
           </CardContent>
         </Card>
       ) : null}
