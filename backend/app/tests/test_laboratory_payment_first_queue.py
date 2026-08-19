@@ -66,13 +66,16 @@ async def _setup(
     department_code: str | None = None, price: str = "250.00",
 ) -> dict:
     # Defaults to the seeded "LAB" code for a Laboratory-named department -
-    # `QueueService.get_slip`'s PRE-EXISTING (unrelated to this feature)
-    # vitals-exemption check keys off `department_code == "LAB"` specifically
-    # (see that method's own comment), so a Laboratory ticket here must use
-    # that code for the slip's vitals gate to behave as it does for a real
-    # seeded clinic. `test_walk_in_laboratory_queue.py` deliberately uses a
-    # NON-"LAB" code instead, to cover the (separate) NAME-based convention
-    # `_is_laboratory_department`/lab-order-auto-creation relies on.
+    # historically `QueueService.get_slip`'s vitals-exemption check keyed
+    # off `department_code == "LAB"` specifically, which was a latent bug
+    # (a clinic with its own custom-coded Laboratory department was not
+    # exempted - see `test_lab_payment_first_queue_slip_with_custom_department_code`
+    # below, which uses a non-"LAB" code deliberately). `get_slip` now
+    # shares the same NAME-based `_is_laboratory_department` convention
+    # `_is_laboratory_department`/lab-order-auto-creation already used, so
+    # the department code no longer matters for either path - kept
+    # defaulting to "LAB" here only to match a real seeded clinic's data,
+    # not because it's required for correctness anymore.
     resolved_code = department_code or ("LAB" if department_name == "Laboratory" else f"D{uuid.uuid4().hex[:4]}")
     branch = (await client.post("/api/v1/branches", headers=headers, json={"name": "Main Branch", "code": "MAIN"})).json()
     department = (
@@ -150,6 +153,51 @@ async def test_lab_payment_first_happy_path_and_paid_queue_slip(client: AsyncCli
     assert slip_resp.status_code == 200, slip_resp.text
     slip = slip_resp.json()
     assert slip["is_paid"] is True
+
+
+async def test_lab_payment_first_queue_slip_with_custom_department_code(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Regression: `get_slip`'s Laboratory vitals-exemption used to check
+    `department.department_code == "LAB"` directly - which only matches the
+    *seeded* default Laboratory department. A clinic that creates its own
+    Laboratory department manually (a real, observed case - e.g. one live
+    clinic's Laboratory department has code "D03") was NOT exempted, so a
+    freshly-created Laboratory Pay-First queue ticket (genuinely no
+    vitals - Laboratory has no consultation/SOAP note) would 400 with
+    "Vital signs must be taken before printing the queue ticket." on its
+    very first print, right after payment succeeded. `get_slip` now shares
+    the same NAME-based `_is_laboratory_department` helper queue creation's
+    payment gate already used, so this must succeed regardless of the
+    department's code - proven here with a deliberately non-"LAB" code."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, department_code="D03")
+    visit = await _create_draft_visit(client, headers, deps)
+
+    invoice = (await client.post(f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers)).json()
+    pay_resp = await client.post(
+        f"/api/v1/invoices/{invoice['id']}/payments", headers=headers,
+        json={"payments": [{"payment_method": "Cash", "amount": "250.00"}]},
+    )
+    assert pay_resp.status_code == 200, pay_resp.text
+
+    queue = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, visit["id"]))).json()
+
+    slip_resp = await client.get(f"/api/v1/queues/{queue['id']}/slip", headers=headers)
+    assert slip_resp.status_code == 200, slip_resp.text
+    slip = slip_resp.json()
+    assert slip["is_paid"] is True
+    # No vitals were ever recorded for this Laboratory visit - `vitals_taken`
+    # correctly stays False (it means "complete", not "printable"); only the
+    # print-blocking 400 is what the Laboratory exemption removes.
+    assert slip["vitals_taken"] is False
+
+    # Queue viewing (the list endpoint) must also not choke on this ticket -
+    # same batched vitals-completeness computation `get_slip` mirrors.
+    list_resp = await client.get("/api/v1/queues", headers=headers)
+    assert list_resp.status_code == 200, list_resp.text
+    listed = next(q for q in list_resp.json()["items"] if q["id"] == queue["id"])
+    assert listed["vitals_taken"] is False
 
 
 # --- 2: unpaid path rejected, no queue created ---

@@ -888,11 +888,17 @@ class QueueService:
         #
         # Laboratory tickets are exempt: a walk-in lab order has no
         # consultation/SOAP note to carry vitals in, so the requirement
-        # doesn't apply to that department - identified by the same
-        # `department_code == "LAB"` convention already used for the seeded
-        # Laboratory department/service (see `models/department.py`,
-        # `models/clinic_service.py`), not by matching the display name.
-        is_laboratory_department = queue.department is not None and queue.department.department_code == "LAB"
+        # doesn't apply to that department. BUG FIX: this used to check
+        # `department.department_code == "LAB"` directly, which only matches
+        # the *seeded* default Laboratory department - a clinic that creates
+        # its own Laboratory department manually (a real, observed case;
+        # e.g. one live clinic's Laboratory department has code "D03") was
+        # silently NOT exempted here, even though queue *creation*
+        # (`_is_laboratory_department`, used by the Pay-First payment gate
+        # above) already treats it as Laboratory. Reuse that exact same
+        # shared, name-based helper here so both checks can never drift
+        # apart again - one department, one definition of "Laboratory".
+        is_laboratory_department = queue.department is not None and _is_laboratory_department(queue.department)
 
         vitals_taken = True
         if queue.visit_id is not None:
