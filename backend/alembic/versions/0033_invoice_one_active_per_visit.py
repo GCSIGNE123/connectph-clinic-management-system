@@ -45,7 +45,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0033_invoice_one_active_per_visit"
-down_revision: str | None = "0032_lab_template_section"
+down_revision: str | None = "0032a_widen_alembic_version"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
