@@ -19,7 +19,32 @@ REM    5. Builds only the backend/frontend images (docker/docker-compose.prod.ym
 REM    6. Restarts only backend/frontend - postgres and redis are left
 REM       running untouched, their data volumes are never touched.
 REM    7. Shows `docker compose ps`.
-REM    8. Runs basic HTTP health checks and reports success/failure.
+REM    8. Runs basic HTTP health checks, PLUS a production CORS preflight
+REM       check (see below), and reports success/failure.
+REM
+REM  Why the CORS preflight check exists: a real incident showed the
+REM  backend running with an effective CORS configuration that didn't
+REM  include the actual production frontend origin, even though
+REM  docker-compose.prod.yml's own CORS_ORIGINS mapping was correct in the
+REM  repo - the RUNNING container just hadn't picked it up (e.g. restarted
+REM  without this override file in effect). The browser then failed every
+REM  login with "OPTIONS /api/v1/auth/login -> 400", which looked healthy
+REM  in `docker compose ps` and passed the plain `/health` check, since
+REM  neither of those exercises CORS at all. This step catches that class
+REM  of drift automatically, right after every deploy, instead of waiting
+REM  for a receptionist to report a broken login.
+REM
+REM  What the backend actually reads: `CORS_ORIGINS` (see
+REM  `backend/app/core/config.py`'s `Settings.CORS_ORIGINS` /
+REM  `cors_origins_list`) - NOT `CORS_ALLOWED_ORIGINS`, which exists only
+REM  as a dead key in the base `docker-compose.yml` and is silently
+REM  ignored by the app. `docker-compose.prod.yml` maps this project's
+REM  `.env`-supplied `CLINIC_FRONTEND_ORIGIN` (the production source of
+REM  truth for "what origin should the backend accept from") onto the
+REM  real `CORS_ORIGINS` env var for the backend container - this step
+REM  reads `CLINIC_FRONTEND_ORIGIN` the same way, straight from `.env`, so
+REM  it always checks the same origin the backend was actually configured
+REM  with, on any clinic Server PC/IP - no hardcoded IP in this script.
 REM
 REM  Deliberately does NOT:
 REM    - run `git reset --hard`, or any destructive git command
@@ -157,6 +182,54 @@ if errorlevel 1 (
 ) else (
     echo   OK - frontend responding.
 )
+
+REM --- 8b. CORS preflight check (production login) --------------------------
+REM Resolve the expected frontend origin from .env's CLINIC_FRONTEND_ORIGIN
+REM (the same variable docker-compose.prod.yml maps onto CORS_ORIGINS for
+REM the backend container) - falling back to the documented production
+REM default if it's unset/commented out in .env, matching
+REM docker-compose.prod.yml's own `${CLINIC_FRONTEND_ORIGIN:-...}` default.
+set CORS_EXPECTED_ORIGIN=
+for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if /i "%%A"=="CLINIC_FRONTEND_ORIGIN" set CORS_EXPECTED_ORIGIN=%%B
+)
+if not defined CORS_EXPECTED_ORIGIN set CORS_EXPECTED_ORIGIN=http://192.168.68.106:3000
+
+set CORS_TMP_HEADERS=%TEMP%\connectph_deploy_cors_headers.tmp
+set CORS_TMP_STATUS=%TEMP%\connectph_deploy_cors_status.tmp
+del /q "%CORS_TMP_HEADERS%" >nul 2>&1
+del /q "%CORS_TMP_STATUS%" >nul 2>&1
+
+curl -s -o nul -D "%CORS_TMP_HEADERS%" -w "%%{http_code}" -X OPTIONS "http://127.0.0.1:8000/api/v1/auth/login" -H "Origin: %CORS_EXPECTED_ORIGIN%" -H "Access-Control-Request-Method: POST" > "%CORS_TMP_STATUS%"
+
+set CORS_STATUS=
+set /p CORS_STATUS=<"%CORS_TMP_STATUS%"
+
+set CORS_ORIGIN_OK=
+findstr /I /C:"access-control-allow-origin: %CORS_EXPECTED_ORIGIN%" "%CORS_TMP_HEADERS%" >nul 2>&1
+if not errorlevel 1 set CORS_ORIGIN_OK=1
+
+set CORS_OK=1
+if not "%CORS_STATUS%"=="200" set CORS_OK=0
+if not defined CORS_ORIGIN_OK set CORS_OK=0
+
+if "%CORS_OK%"=="1" (
+    echo   OK - CORS preflight for %CORS_EXPECTED_ORIGIN% allowed.
+) else (
+    echo   FAILED: CORS preflight for %CORS_EXPECTED_ORIGIN% was rejected
+    echo   ^(OPTIONS /api/v1/auth/login returned HTTP %CORS_STATUS%, expected
+    echo   200 with Access-Control-Allow-Origin: %CORS_EXPECTED_ORIGIN%^).
+    echo   The backend's EFFECTIVE CORS_ORIGINS does not include this
+    echo   origin, even though .env/docker-compose.prod.yml may look
+    echo   correct - the running container likely needs to be recreated
+    echo   with both Compose files in effect ^(this script already does
+    echo   that above, so re-running after fixing .env should resolve it^).
+    echo   Browsers will fail every login from %CORS_EXPECTED_ORIGIN% until
+    echo   this is fixed.
+    set HEALTH_OK=0
+)
+del /q "%CORS_TMP_HEADERS%" >nul 2>&1
+del /q "%CORS_TMP_STATUS%" >nul 2>&1
 
 echo.
 echo ============================================================
