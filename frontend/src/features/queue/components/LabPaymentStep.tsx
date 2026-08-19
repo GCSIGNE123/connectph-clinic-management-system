@@ -6,6 +6,7 @@ import { billingApi } from "@/features/billing/api/billing-api";
 import { useInvoice, useSyncInvoiceCache } from "@/features/billing/hooks/use-invoice";
 import { PaymentDialog } from "@/features/billing/components/PaymentDialog";
 import { ApiError } from "@/lib/api-client";
+import type { Invoice } from "@/features/billing/types";
 
 /**
  * Laboratory pay-first workflow: the "pay before queueing" step embedded
@@ -37,48 +38,64 @@ export function LabPaymentStep({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const paidHandledRef = useRef(false);
   // React 18 dev-mode (StrictMode) mounts every effect twice (mount ->
-  // cleanup -> mount again) specifically to surface missing cleanup bugs -
-  // without this guard, that double-invocation fires this one-shot "create
-  // the invoice" call twice for the same visit. The backend itself is
-  // race-safe now (see `InvoiceService.create_draft_invoice_for_laboratory_visit`'s
-  // SAVEPOINT-guarded retry), so a real double-fire no longer errors, but
-  // there is still no reason to make two network calls when one is enough.
-  const startedForVisitRef = useRef<string | null>(null);
+  // cleanup -> mount again) for the SAME component instance, specifically to
+  // surface missing-cleanup bugs. BUG-FIX (previously stuck on "Preparing
+  // invoice..." forever): a closure-local `cancelled` flag combined with a
+  // ref that only guarded RE-FIRING doesn't work here - StrictMode's first
+  // effect invocation's cleanup marks ITS OWN `cancelled` true before the
+  // real network response arrives, and the second invocation returns early
+  // (via the ref guard) without ever attaching its own handler to that
+  // response - so the successful result is silently discarded and nothing
+  // ever calls `setPreparing(false)`. Fixed with a genuine single-flight
+  // pattern instead: the in-flight/completed PROMISE itself (not just a
+  // "did we start yet" boolean) is shared across every effect invocation
+  // via a ref, so only one real network request is ever made, but EVERY
+  // invocation that awaits it - including whichever one is still mounted
+  // when it resolves - gets a chance to apply the result. Each invocation
+  // still has its own `active` liveness flag so a truly unmounted/replaced
+  // invocation doesn't call setState after the fact; the difference is the
+  // flag is scoped per-invocation as intended, not leaked onto the one
+  // invocation that's still current.
+  const inFlightRef = useRef<{ visitId: string; promise: Promise<Invoice> } | null>(null);
 
   const syncInvoiceCache = useSyncInvoiceCache();
   const { data: invoice } = useInvoice(invoiceId);
 
   useEffect(() => {
-    if (startedForVisitRef.current === visitId) return;
-    startedForVisitRef.current = visitId;
+    let active = true;
 
-    let cancelled = false;
-    setPreparing(true);
-    setPrepareError(null);
-    billingApi
-      .createLaboratoryInvoiceForVisit(visitId)
-      .then((inv) => {
-        if (cancelled) return;
+    async function prepareInvoice() {
+      if (inFlightRef.current?.visitId !== visitId) {
+        inFlightRef.current = { visitId, promise: billingApi.createLaboratoryInvoiceForVisit(visitId) };
+      }
+      const inFlight = inFlightRef.current;
+      setPreparing(true);
+      setPrepareError(null);
+      try {
+        const inv = await inFlight.promise;
+        if (!active) return;
         syncInvoiceCache(inv);
         setInvoiceId(inv.id);
         if (inv.status !== "Paid") {
           setPaymentOpen(true);
         }
-      })
-      .catch((err) => {
-        if (cancelled) return;
+      } catch (err) {
+        if (!active) return;
         // Requirement: if invoice creation fails, no queue is created - this
         // step simply never calls `onPaid`, and the receptionist can Back
         // out or retry from here without a queue ticket ever existing.
-        // Reset the started-for guard so Retry can actually re-attempt.
-        startedForVisitRef.current = null;
+        // Clear the in-flight record so Retry (or a future mount) actually
+        // re-attempts instead of re-awaiting the same failed promise.
+        if (inFlightRef.current === inFlight) inFlightRef.current = null;
         setPrepareError(err instanceof ApiError ? err.message : "Could not create the Laboratory invoice.");
-      })
-      .finally(() => {
-        if (!cancelled) setPreparing(false);
-      });
+      } finally {
+        if (active) setPreparing(false);
+      }
+    }
+
+    void prepareInvoice();
     return () => {
-      cancelled = true;
+      active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visitId]);
@@ -96,14 +113,16 @@ export function LabPaymentStep({
     setInvoiceId(null);
     setPreparing(true);
     setPrepareError(null);
-    billingApi
-      .createLaboratoryInvoiceForVisit(visitId)
+    const promise = billingApi.createLaboratoryInvoiceForVisit(visitId);
+    inFlightRef.current = { visitId, promise };
+    promise
       .then((inv) => {
         syncInvoiceCache(inv);
         setInvoiceId(inv.id);
         if (inv.status !== "Paid") setPaymentOpen(true);
       })
       .catch((err) => {
+        if (inFlightRef.current?.promise === promise) inFlightRef.current = null;
         setPrepareError(err instanceof ApiError ? err.message : "Could not create the Laboratory invoice.");
       })
       .finally(() => setPreparing(false));

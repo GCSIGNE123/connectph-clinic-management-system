@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -65,6 +66,22 @@ function renderStep(onPaid = vi.fn(), onBack = vi.fn()) {
   return { ...utils, onPaid, onBack };
 }
 
+/** Renders under `React.StrictMode`, which double-invokes effects (mount ->
+ * cleanup -> mount again) for the SAME component instance in dev - the
+ * exact scenario that used to leave `LabPaymentStep` stuck forever on
+ * "Preparing invoice..." (see the fix's comment in `LabPaymentStep.tsx`). */
+function renderStepStrict(onPaid = vi.fn(), onBack = vi.fn()) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const utils = render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <LabPaymentStep visitId="visit-1" onPaid={onPaid} onBack={onBack} />
+      </QueryClientProvider>
+    </StrictMode>
+  );
+  return { ...utils, onPaid, onBack };
+}
+
 describe("LabPaymentStep", () => {
   it("C: creates the invoice and opens the real PaymentDialog when payment is actually required (balance > 0)", async () => {
     mockCreateInvoice.mockReset().mockResolvedValue(buildInvoice());
@@ -113,5 +130,50 @@ describe("LabPaymentStep", () => {
     await screen.findByRole("heading", { name: "Record payment" });
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  describe("React 18 StrictMode regression (BUG: previously stuck forever on 'Preparing invoice...')", () => {
+    it("A/B: under StrictMode, the invoice is created exactly once logically, 'Preparing invoice...' resolves, and payment UI becomes available", async () => {
+      mockCreateInvoice.mockReset().mockResolvedValue(buildInvoice());
+      renderStepStrict();
+
+      // "Preparing invoice..." must not persist forever - it should resolve
+      // to the real PaymentDialog once the (single) invoice-creation
+      // request completes.
+      expect(await screen.findByRole("heading", { name: "Record payment" })).toBeInTheDocument();
+      expect(screen.queryByText("Preparing invoice...")).not.toBeInTheDocument();
+
+      // Only one LOGICAL invoice-creation call: StrictMode may re-run the
+      // effect, but the single-flight ref must dedupe the actual network
+      // call to exactly one.
+      expect(mockCreateInvoice).toHaveBeenCalledTimes(1);
+      expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1");
+    });
+
+    it("D: a zero-priced Laboratory invoice under StrictMode still skips payment and calls onPaid", async () => {
+      mockCreateInvoice.mockReset().mockResolvedValue(
+        buildInvoice({ status: "Paid", grandTotal: 0, balanceDue: 0, amountPaid: 0 })
+      );
+      const onPaid = vi.fn();
+      renderStepStrict(onPaid);
+
+      await waitFor(() => expect(onPaid).toHaveBeenCalledWith("invoice-1"));
+      expect(screen.queryByRole("heading", { name: "Record payment" })).not.toBeInTheDocument();
+      expect(mockCreateInvoice).toHaveBeenCalledTimes(1);
+    });
+
+    it("E: under StrictMode, a failed invoice creation still surfaces the error (not stuck) and Retry still works", async () => {
+      mockCreateInvoice.mockReset().mockRejectedValue(new Error("network down"));
+      const onPaid = vi.fn();
+      const user = userEvent.setup();
+      renderStepStrict(onPaid);
+
+      expect(await screen.findByText(/Could not create the Laboratory invoice/i)).toBeInTheDocument();
+      expect(onPaid).not.toHaveBeenCalled();
+
+      mockCreateInvoice.mockResolvedValue(buildInvoice());
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Record payment" })).toBeInTheDocument());
+    });
   });
 });
