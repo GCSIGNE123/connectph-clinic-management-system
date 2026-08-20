@@ -31,6 +31,7 @@ import {
   Volume2,
   Wallet,
   Wifi,
+  Pill,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/types";
@@ -63,6 +64,10 @@ const NAV_ITEMS: (NavItem & { icon: ComponentType<{ className?: string }> })[] =
   { label: "Doctor Workspace", href: "/doctor-workspace", icon: ClipboardCheck },
   { label: "Laboratory", href: "/laboratory", icon: FlaskConical },
   { label: "Vaccinations", href: "/vaccinations", icon: Syringe },
+  // Medicine Inventory Phase 1: not role-gated in this list (same pattern as
+  // most nav items here) - the backend still enforces Doctor as view-only
+  // and 403s Cashier/Laboratory/Pharmacy/Viewer entirely (INVENTORY_VIEW_ROLES).
+  { label: "Medicines", href: "/medicines", icon: Pill },
   { label: "Billing", href: "/billing", icon: Receipt },
   // Phase 21: Receptionist Shift Management - not role-gated in this list
   // (same pattern as most nav items here); the backend still only lets a

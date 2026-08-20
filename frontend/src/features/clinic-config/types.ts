@@ -189,3 +189,45 @@ export interface ClinicSettings {
 }
 
 export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+/** Medicine Inventory Phase 1 - catalog + batch/lot tracking. See
+ * `features/medicines/` for the list/detail pages that consume these. */
+export interface Medicine {
+  id: string;
+  clinic_id: string;
+  generic_name: string;
+  brand_name?: string | null;
+  strength?: string | null;
+  dosage_form?: string | null;
+  unit?: string | null;
+  reorder_level?: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type MedicineBatchStatus = "Active" | "Expired" | "Depleted" | "Recalled";
+
+export interface MedicineBatch {
+  // Index signature required so this type can be passed directly to the
+  // generic `MasterDataFormDialog<T extends Record<string, unknown>>` -
+  // this page uses that dialog standalone (batches aren't a MasterDataPage
+  // resource, since MasterDataPage always renders a Delete action and
+  // batches don't have one in Phase 1) rather than through MasterDataPage,
+  // which normally passes its own unconstrained `T` through without
+  // triggering this check.
+  [key: string]: unknown;
+  id: string;
+  clinic_id: string;
+  medicine_id: string;
+  batch_number: string;
+  quantity_received: number;
+  quantity_remaining: number;
+  expiry_date: string;
+  received_date?: string | null;
+  supplier?: string | null;
+  cost_per_unit?: string | null;
+  status: MedicineBatchStatus;
+  created_at: string;
+  updated_at: string;
+}

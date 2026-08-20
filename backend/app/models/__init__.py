@@ -42,6 +42,7 @@ from app.models.laboratory_order import LaboratoryOrder, LaboratoryOrderStatus, 
 from app.models.laboratory_reference_range import LaboratoryReferenceRange
 from app.models.laboratory_result import LaboratoryInterpretation, LaboratoryResult, LaboratoryResultType
 from app.models.laboratory_template import LaboratoryTemplate, LaboratoryTemplateParameter
+from app.models.medicine import Medicine, MedicineBatch, MedicineBatchStatus
 from app.models.migration_batch import (
     MigrationBatch,
     MigrationBatchStatus,
@@ -203,6 +204,9 @@ __all__ = [
     "QueueCounter",
     "QueuePriority",
     "InternalMessage",
+    "Medicine",
+    "MedicineBatch",
+    "MedicineBatchStatus",
     "QueueSetting",
     "QueueStatus",
     "QueueStatusHistory",

@@ -598,3 +598,20 @@ SHIFT_REOPEN_ROLES = {"Owner", "Administrator"}
 
 require_shift_manage_role = require_roles(*SHIFT_MANAGE_ROLES)
 require_shift_reopen_role = require_roles(*SHIFT_REOPEN_ROLES)
+
+# Medicine Inventory Phase 1 (Medicine catalog + MedicineBatch).
+# View: Receptionist/Doctor/Nurse per the client's explicit request (Doctor
+# is view-only - can check availability/expiry but never edit), plus Owner/
+# Administrator. Deliberately narrower than CONFIG_VIEW_ROLES/PATIENT_VIEW_
+# ROLES (no Cashier/Laboratory/Pharmacy/Viewer) - the client's spec named
+# exactly Owner/Administrator/Receptionist/Doctor/Nurse and explicitly said
+# not to invent a Pharmacy role for this feature.
+INVENTORY_VIEW_ROLES = {"Owner", "Administrator", "Receptionist", "Doctor", "Nurse"}
+# Manage (create/edit medicine catalog, receive/add batches, edit batch
+# quantities): Receptionist owns day-to-day stock receiving per the client's
+# spec, plus Owner/Administrator per the general admin-override pattern used
+# throughout this codebase. Doctor is intentionally excluded - view only.
+INVENTORY_MANAGE_ROLES = {"Owner", "Administrator", "Receptionist"}
+
+require_inventory_view_role = require_roles(*INVENTORY_VIEW_ROLES)
+require_inventory_manage_role = require_roles(*INVENTORY_MANAGE_ROLES)

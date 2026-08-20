@@ -23,6 +23,7 @@ from app.api.v1 import (
     internal_messages,
     laboratory,
     medical_certificates,
+    medicines,
     migration,
     operating_hours,
     patients,
@@ -57,6 +58,7 @@ api_router.include_router(services.router)
 api_router.include_router(queue_settings.router)
 api_router.include_router(operating_hours.router)
 api_router.include_router(holidays.router)
+api_router.include_router(medicines.router)
 
 # Phase 20: Internal staff messaging (item 14)
 api_router.include_router(internal_messages.router)
