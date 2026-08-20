@@ -231,3 +231,24 @@ export interface MedicineBatch {
   created_at: string;
   updated_at: string;
 }
+
+/** Medicine Inventory Phase 2 - stock movement ledger. `Dispensed` exists on
+ * the type for future compatibility only; the UI never offers it as a
+ * normal user action in this phase (see `medicines/[id]/page.tsx`). */
+export type MedicineStockMovementType = "Received" | "Adjustment" | "Dispensed" | "Expired" | "Recalled";
+
+export interface MedicineStockMovement {
+  [key: string]: unknown;
+  id: string;
+  clinic_id: string;
+  batch_id: string;
+  movement_type: MedicineStockMovementType;
+  quantity_delta: number;
+  resulting_quantity: number;
+  reason?: string | null;
+  performed_by?: string | null;
+  performed_by_name?: string | null;
+  reference_type?: string | null;
+  reference_id?: string | null;
+  created_at: string;
+}

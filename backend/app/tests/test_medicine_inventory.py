@@ -184,16 +184,11 @@ async def test_quantity_remaining_exceeds_received_rejected(client: AsyncClient,
         json=_batch_payload(quantity_received=10, quantity_remaining=20),
     )
     assert resp.status_code == 422, resp.text
-
-    # Same rule enforced on update too, merging existing + partial payload.
-    created = (
-        await client.post(f"/api/v1/medicines/{medicine['id']}/batches", headers=headers, json=_batch_payload(batch_number="B1"))
-    ).json()
-    resp2 = await client.put(
-        f"/api/v1/medicines/{medicine['id']}/batches/{created['id']}", headers=headers,
-        json={"quantity_remaining": created["quantity_received"] + 1},
-    )
-    assert resp2.status_code == 422, resp2.text
+    # Phase 2: quantity_received/quantity_remaining are no longer accepted
+    # on PUT at all (see test_medicine_stock_movements.py for the ledger-
+    # enforced equivalent of this rule on the movement-create endpoint) -
+    # this batch-creation-time rejection is the only place left to test it
+    # at the batch level.
 
 
 # --- 10. Medicine with multiple batches returns all batches ---
@@ -219,11 +214,14 @@ async def test_edit_batch(client: AsyncClient, make_clinic_with_owner) -> None:
 
     resp = await client.put(
         f"/api/v1/medicines/{medicine['id']}/batches/{batch['id']}", headers=headers,
-        json={"quantity_remaining": 100, "supplier": "New Supplier"},
+        json={"supplier": "New Supplier"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["quantity_remaining"] == 100
     assert resp.json()["supplier"] == "New Supplier"
+    # Phase 2: quantity is no longer PUT-editable at all - even if a client
+    # sends it, it's silently ignored (not a declared field on
+    # MedicineBatchUpdate) rather than applied.
+    assert resp.json()["quantity_remaining"] == batch["quantity_remaining"]
 
 
 # --- 12. Batch status behavior ---

@@ -1,5 +1,6 @@
-"""Medicine Inventory Phase 1: Medicine catalog CRUD + nested MedicineBatch
-CRUD, tenant-scoped and role-gated (see `core/dependencies.py`)."""
+"""Medicine Inventory: Medicine catalog CRUD + nested MedicineBatch CRUD
+(Phase 1), plus the nested MedicineStockMovement ledger (Phase 2) -
+tenant-scoped and role-gated (see `core/dependencies.py`)."""
 
 from uuid import UUID
 
@@ -22,6 +23,9 @@ from app.schemas.medicine import (
     MedicineListResponse,
     MedicineRead,
     MedicineSearchParams,
+    MedicineStockMovementCreate,
+    MedicineStockMovementListResponse,
+    MedicineStockMovementRead,
     MedicineUpdate,
 )
 from app.services.medicine_service import MedicineService
@@ -127,3 +131,32 @@ async def update_medicine_batch(
 ) -> MedicineBatchRead:
     service = MedicineService(db)
     return await service.update_batch(medicine_id, batch_id, payload, clinic_id=clinic_id, actor=current_user)
+
+
+@router.get("/{medicine_id}/batches/{batch_id}/movements", response_model=MedicineStockMovementListResponse)
+async def list_batch_movements(
+    medicine_id: UUID,
+    batch_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_inventory_view_role),
+) -> MedicineStockMovementListResponse:
+    service = MedicineService(db)
+    movements = await service.list_movements(medicine_id, batch_id, clinic_id=clinic_id)
+    return MedicineStockMovementListResponse(
+        items=[MedicineStockMovementRead.model_validate(m) for m in movements], total=len(movements)
+    )
+
+
+@router.post("/{medicine_id}/batches/{batch_id}/movements", response_model=MedicineStockMovementRead, status_code=201)
+async def create_batch_movement(
+    medicine_id: UUID,
+    batch_id: UUID,
+    payload: MedicineStockMovementCreate,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_inventory_manage_role),
+) -> MedicineStockMovementRead:
+    service = MedicineService(db)
+    movement = await service.create_movement(medicine_id, batch_id, payload, clinic_id=clinic_id, actor=current_user)
+    return MedicineStockMovementRead.model_validate(movement)

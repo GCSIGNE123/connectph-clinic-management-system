@@ -35,3 +35,22 @@ class MedicineBatchRepository(BaseRepository[MedicineBatch]):
         )
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows)
+
+    async def get_for_update(self, batch_id: UUID, medicine_id: UUID, clinic_id: UUID) -> MedicineBatch | None:
+        """Locks the batch row (`SELECT ... FOR UPDATE`) for the duration of
+        the caller's transaction - same concurrency pattern as
+        `VisitNumberGenerator`/`QueueNumberGenerator` - so two concurrent
+        stock movements against the same batch serialize on this row
+        instead of racing on `quantity_remaining`."""
+        stmt = (
+            select(MedicineBatch)
+            .where(
+                MedicineBatch.id == batch_id,
+                MedicineBatch.medicine_id == medicine_id,
+                MedicineBatch.clinic_id == clinic_id,
+                MedicineBatch.is_deleted.is_(False),
+            )
+            .with_for_update()
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()

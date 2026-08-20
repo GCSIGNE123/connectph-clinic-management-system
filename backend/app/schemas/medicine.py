@@ -1,5 +1,5 @@
-"""Pydantic schemas for the Medicine Inventory Phase 1 resources (Medicine
-catalog + MedicineBatch)."""
+"""Pydantic schemas for the Medicine Inventory resources: Medicine catalog,
+MedicineBatch (Phase 1), and MedicineStockMovement (Phase 2)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.medicine import MedicineBatchStatus
+from app.models.medicine import MedicineBatchStatus, MedicineStockMovementType
 
 
 class MedicineBase(BaseModel):
@@ -79,20 +79,25 @@ class MedicineBatchCreate(MedicineBatchBase):
 
 class MedicineBatchUpdate(BaseModel):
     """All fields optional (PATCH-style via PUT, matching this codebase's
-    other `*Update` schemas). `quantity_received`/`quantity_remaining`
-    cross-validation is enforced in `MedicineService` against the batch's
-    resulting merged values, since either field alone may be omitted here."""
+    other `*Update` schemas).
+
+    Phase 2: `quantity_received`/`quantity_remaining` are deliberately NOT
+    accepted here anymore (they were in Phase 1) - now that
+    `MedicineStockMovement` exists, every post-creation quantity change must
+    go through `POST .../batches/{batch_id}/movements` so it is ledgered and
+    auditable. This is the one intentional behavior change from Phase 1's
+    "Edit Batch" form; see the Phase 2 report."""
 
     batch_number: str | None = Field(default=None, min_length=1, max_length=100)
-    quantity_received: int | None = Field(default=None, ge=0)
-    quantity_remaining: int | None = Field(default=None, ge=0)
     expiry_date: date | None = None
     received_date: date | None = None
     supplier: str | None = Field(default=None, max_length=255)
     cost_per_unit: Decimal | None = Field(default=None, ge=0)
     # Manual override only meaningful for RECALLED (see model docstring) -
     # any other value is rejected in the service layer since ACTIVE/EXPIRED/
-    # DEPLETED are always computed, never set directly by a client.
+    # DEPLETED are always computed, never set directly by a client. Kept as
+    # an alternative to a RECALLED movement for a no-quantity-change recall
+    # (e.g. flagging a batch before any units have actually been pulled).
     status: MedicineBatchStatus | None = None
 
 
@@ -109,4 +114,44 @@ class MedicineBatchRead(MedicineBatchBase):
 
 class MedicineBatchListResponse(BaseModel):
     items: list[MedicineBatchRead]
+    total: int
+
+
+class MedicineStockMovementCreate(BaseModel):
+    """`reference_type`/`reference_id` are intentionally NOT accepted here -
+    they exist on the model only for a future phase's integration (e.g.
+    prescription dispensing) to set internally; a Phase 2 client can never
+    set them. The backend computes `resulting_quantity`; a client cannot
+    supply it."""
+
+    movement_type: MedicineStockMovementType
+    quantity_delta: int = Field(description="Signed quantity change. Must not be zero.")
+    reason: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _quantity_delta_not_zero(self) -> "MedicineStockMovementCreate":
+        if self.quantity_delta == 0:
+            raise ValueError("quantity_delta cannot be zero")
+        return self
+
+
+class MedicineStockMovementRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clinic_id: UUID
+    batch_id: UUID
+    movement_type: MedicineStockMovementType
+    quantity_delta: int
+    resulting_quantity: int
+    reason: str | None
+    performed_by: UUID | None
+    performed_by_name: str | None
+    reference_type: str | None
+    reference_id: UUID | None
+    created_at: datetime
+
+
+class MedicineStockMovementListResponse(BaseModel):
+    items: list[MedicineStockMovementRead]
     total: int
