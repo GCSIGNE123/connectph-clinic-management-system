@@ -476,38 +476,56 @@ class QueueService:
             entity_type="visit", entity_id=str(visit.id), metadata={"queue_id": str(queue.id)},
         )
 
-        # Walk-in lab order: moved here from the direct-creation `create_queue`
-        # path (see that method's comment) since every Laboratory queue
-        # ticket now goes through this payment-gated path. Created in this
-        # SAME transaction, before the one commit below - same lesson as
-        # BUG-038: creating it after an independent commit risks a committed
-        # queue ticket with no matching lab order if anything failed in
-        # between.
+        # Walk-in lab order(s): moved here from the direct-creation
+        # `create_queue` path (see that method's comment) since every
+        # Laboratory queue ticket now goes through this payment-gated path.
+        # Created in this SAME transaction, before the one commit below -
+        # same lesson as BUG-038: creating it after an independent commit
+        # risks a committed queue ticket with no matching lab order if
+        # anything failed in between.
+        #
+        # Multi-Service Laboratory Pay-First: one LaboratoryOrder per
+        # Laboratory `InvoiceItem` on the now-paid invoice, each individually
+        # linked to ITS OWN item (not just the first) - this is what keeps
+        # every selected test individually identifiable on the worklist and
+        # is what lets `LaboratoryService._sync_billing` (unchanged) find an
+        # already-linked `invoice_item_id` for EACH order later and update
+        # that order's own line in place instead of adding a duplicate
+        # charge - the fix for the old "always exactly one Laboratory item"
+        # assumption this method used to make.
         from app.services.laboratory_service import LaboratoryService
 
-        lab_order = await LaboratoryService(self.session).create_from_queue_ticket(
-            visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
-            service_name=service.service_name, clinic_id=clinic_id,
-        )
-
-        # Idempotency (no duplicate Laboratory charge): link the already-paid
-        # invoice's Laboratory line item to this order NOW, so
-        # `LaboratoryService._sync_billing` (unchanged - runs later when
-        # results are entered) sees `invoice_item_id` already set and
-        # updates that existing line in place instead of adding a second one
-        # for the same test. The pay-first invoice always has exactly one
-        # Laboratory item (see `InvoiceService.create_draft_invoice_for_laboratory_visit`).
-        lab_item = next((i for i in invoice.items if i.item_type == InvoiceItemType.LABORATORY), None)
-        if lab_item is not None:
-            await LaboratoryService(self.session).repo.update_laboratory_order(lab_order, invoice_item_id=lab_item.id)
-            # `update_laboratory_order`'s flush touches a server-side
-            # `onupdate` column (`updated_at`), which SQLAlchemy always
-            # expires after any UPDATE regardless of `expire_on_commit` -
-            # `build_sync_payload(lab_order)` below reads that column
-            # directly, and an expired-attribute reload triggers a lazy
-            # (sync) load that `MissingGreenlet`s under asyncio. Refresh
-            # just that one column explicitly rather than lazily.
-            await self.session.refresh(lab_order, attribute_names=["updated_at"])
+        lab_service = LaboratoryService(self.session)
+        lab_items = [i for i in invoice.items if i.item_type == InvoiceItemType.LABORATORY]
+        if not lab_items:
+            # Safety net for any pre-existing invoice with no distinct
+            # Laboratory line (shouldn't happen via the normal pay-first
+            # path, but preserves the old single-order behavior rather than
+            # silently creating nothing) - falls back to the queue's own
+            # selected service, unlinked to any invoice item.
+            lab_orders = [
+                await lab_service.create_from_queue_ticket(
+                    visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
+                    service_name=service.service_name, clinic_id=clinic_id,
+                )
+            ]
+        else:
+            lab_orders = []
+            for lab_item in lab_items:
+                lab_order = await lab_service.create_from_queue_ticket(
+                    visit_id=visit.id, branch_id=payload.branch_id, patient_id=payload.patient_id,
+                    service_name=lab_item.description, clinic_id=clinic_id,
+                )
+                await lab_service.repo.update_laboratory_order(lab_order, invoice_item_id=lab_item.id)
+                # `update_laboratory_order`'s flush touches a server-side
+                # `onupdate` column (`updated_at`), which SQLAlchemy always
+                # expires after any UPDATE regardless of `expire_on_commit` -
+                # `build_sync_payload(lab_order)` below reads that column
+                # directly, and an expired-attribute reload triggers a lazy
+                # (sync) load that `MissingGreenlet`s under asyncio. Refresh
+                # just that one column explicitly rather than lazily.
+                await self.session.refresh(lab_order, attribute_names=["updated_at"])
+                lab_orders.append(lab_order)
 
         await self.session.commit()
 
@@ -524,10 +542,11 @@ class QueueService:
         )
         from app.services.laboratory_service import build_sync_payload
 
-        await sync_queue_service.enqueue(
-            entity_type="laboratory_order", record_id=lab_order.id, operation="create",
-            payload=build_sync_payload(lab_order), clinic_id=clinic_id,
-        )
+        for lab_order in lab_orders:
+            await sync_queue_service.enqueue(
+                entity_type="laboratory_order", record_id=lab_order.id, operation="create",
+                payload=build_sync_payload(lab_order), clinic_id=clinic_id,
+            )
         return detail
 
     async def create_queue(

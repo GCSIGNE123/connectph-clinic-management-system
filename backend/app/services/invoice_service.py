@@ -169,7 +169,7 @@ class InvoiceService:
         return await self.repo.get_by_id(invoice.id, clinic_id)
 
     async def create_draft_invoice_for_laboratory_visit(
-        self, *, clinic_id: UUID, visit_id: UUID, actor_id: UUID | None
+        self, *, clinic_id: UUID, visit_id: UUID, actor_id: UUID | None, service_ids: list[UUID] | None = None
     ) -> Invoice:
         """Laboratory pay-first workflow: the invoice for a walk-in
         Laboratory ticket, created against the draft Visit
@@ -188,12 +188,25 @@ class InvoiceService:
 
         Idempotent: returns the existing non-cancelled invoice for this visit
         if one already exists, exactly like `create_draft_invoice_for_consultation`
-        - a retried "prepare payment" call never creates a duplicate invoice.
+        - a retried "prepare payment" call never creates a duplicate invoice
+        (and never adds a second round of line items for the same visit,
+        regardless of what `service_ids` a retry passes).
 
-        Zero-priced services: if the resolved `ClinicService.default_price`
-        is 0 (unset), the single Laboratory line item is still added (so the
-        invoice/receipt reflects what was ordered), but the invoice is
-        advanced straight to `Paid` with zero owed - there is nothing to
+        Multi-Service Laboratory Pay-First: `service_ids`, when provided,
+        creates ONE Laboratory line item per service (same order given),
+        each priced from its own `ClinicService.default_price` - reusing
+        `InvoiceRepository.add_item` in a loop, exactly the same generic
+        multi-item mechanism already used for consultation/procedure/custom
+        invoice lines elsewhere; nothing about `InvoiceItem` or
+        `Invoice._recompute_totals` (already a sum-over-`invoice.items` loop)
+        needed to change. When omitted (`None`), falls back to the original
+        single-service behavior (the draft Visit's own `service_id`), so
+        every existing caller/test is unaffected.
+
+        Zero-priced services: if the resulting `grand_total` is 0 (every
+        selected service unpriced), the invoice is still created with its
+        line item(s) (so the invoice/receipt reflects what was ordered), but
+        advances straight to `Paid` with zero owed - there is nothing to
         collect, and requiring a $0 payment record would just be busywork.
         A clinic that wants payment enforcement for a given lab test should
         price that service in the catalog.
@@ -205,13 +218,19 @@ class InvoiceService:
         visit = await self.visit_repo.get_with_relations(visit_id, clinic_id)
         if visit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Visit not found")
-        if visit.service_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Visit has no service to invoice.")
 
-        service = await self.session.get(ClinicService, visit.service_id)
-        if service is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
-        unit_price = Decimal(str(service.default_price or 0))
+        resolved_service_ids = list(service_ids) if service_ids else ([visit.service_id] if visit.service_id else [])
+        if not resolved_service_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Visit has no service to invoice.")
+        if len(resolved_service_ids) != len(set(resolved_service_ids)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate Laboratory service selected.")
+
+        services: list[ClinicService] = []
+        for service_id in resolved_service_ids:
+            service = await self.session.get(ClinicService, service_id)
+            if service is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Service not found: {service_id}")
+            services.append(service)
 
         today = datetime.now(UTC).date()
         invoice_number = await self.number_generator.next_number(clinic_id, today)
@@ -236,10 +255,12 @@ class InvoiceService:
                     clinic_id=clinic_id, visit_id=visit_id, branch_id=visit.branch_id, patient_id=visit.patient_id,
                     doctor_id=visit.doctor_id, invoice_number=invoice_number, invoice_date=today, actor_id=actor_id,
                 )
-                await self.repo.add_item(
-                    invoice.id, clinic_id, description=service.service_name, item_type=InvoiceItemType.LABORATORY,
-                    quantity=Decimal("1"), unit_price=unit_price, discount_amount=Decimal("0"), line_total=unit_price,
-                )
+                for service in services:
+                    unit_price = Decimal(str(service.default_price or 0))
+                    await self.repo.add_item(
+                        invoice.id, clinic_id, description=service.service_name, item_type=InvoiceItemType.LABORATORY,
+                        quantity=Decimal("1"), unit_price=unit_price, discount_amount=Decimal("0"), line_total=unit_price,
+                    )
         except IntegrityError:
             # Lost the race: the winner's invoice now exists - return it
             # instead of failing the whole request.
@@ -263,14 +284,15 @@ class InvoiceService:
         return await self.repo.get_by_id(invoice.id, clinic_id)
 
     async def create_laboratory_invoice_for_visit_endpoint(
-        self, visit_id: UUID, *, clinic_id: UUID, actor_id: UUID | None
+        self, visit_id: UUID, *, clinic_id: UUID, actor_id: UUID | None, service_ids: list[UUID] | None = None
     ) -> InvoiceDetail:
         """`POST /visits/{visit_id}/laboratory-invoice` - thin wrapper
         returning the full detail shape the frontend's payment step needs
         (items/payments), matching `create_invoice_for_consultation_endpoint`'s
-        own wrapper convention below."""
+        own wrapper convention below. `service_ids` - see
+        `create_draft_invoice_for_laboratory_visit`'s docstring."""
         invoice = await self.create_draft_invoice_for_laboratory_visit(
-            clinic_id=clinic_id, visit_id=visit_id, actor_id=actor_id
+            clinic_id=clinic_id, visit_id=visit_id, actor_id=actor_id, service_ids=service_ids
         )
         return _to_detail(await self.repo.get_by_id(invoice.id, clinic_id))
 

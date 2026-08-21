@@ -94,6 +94,15 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
   const [labQueueError, setLabQueueError] = useState<string | null>(null);
   const [creatingLabDraft, setCreatingLabDraft] = useState(false);
   const [labDraftError, setLabDraftError] = useState<string | null>(null);
+  // Multiple Laboratory Services in One Queue Transaction: the selected set
+  // of Laboratory services for this ticket, in selection order. Deliberately
+  // separate from the `serviceId` form field (which every other department
+  // still uses as-is) - the pre-queue Visit and the Queue ticket itself
+  // still carry a single "primary" service (`labServiceIds[0]`, mirrored
+  // into `serviceId` when payment starts), but the invoice created for
+  // payment gets one line item per id here. See `LabPaymentStep`'s
+  // `serviceIds` prop.
+  const [labServiceIds, setLabServiceIds] = useState<string[]>([]);
 
   const shiftError = useShiftRequiredError();
   const createQueue = useCreateQueue(shiftError.handleError);
@@ -142,6 +151,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
       setShowLabPaymentStep(false);
       setLabQueueError(null);
       setLabDraftError(null);
+      setLabServiceIds([]);
     }
   }, [open, defaultBranchId, reset]);
 
@@ -225,15 +235,30 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
   }, [serviceId, patientId, draftVisit]);
 
   // Same invalidation rule as above, for the Laboratory draft/invoice - a
-  // changed patient/service/department means the invoice already created
-  // for the previous selection no longer applies.
+  // changed patient/department/selected-services set means the invoice
+  // already created for the previous selection no longer applies. Compared
+  // by a stable joined key (order-independent membership, not array
+  // identity) so re-rendering with the same selected services never
+  // spuriously invalidates an in-progress payment step.
+  const labServiceIdsKey = useMemo(() => [...labServiceIds].sort().join(","), [labServiceIds]);
   useEffect(() => {
-    if (labDraftVisit && (labDraftVisit.serviceId !== serviceId || labDraftVisit.patientId !== patientId || labDraftVisit.departmentId !== departmentId)) {
+    if (
+      labDraftVisit &&
+      (labDraftVisit.serviceId !== labServiceIds[0] || labDraftVisit.patientId !== patientId || labDraftVisit.departmentId !== departmentId)
+    ) {
       setLabDraftVisit(null);
       setShowLabPaymentStep(false);
       setLabQueueError(null);
     }
-  }, [serviceId, patientId, departmentId, labDraftVisit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labServiceIdsKey, patientId, departmentId, labDraftVisit]);
+
+  // Clears any selected Laboratory services when the department changes
+  // away from Laboratory (or to it, starting fresh) - the same pattern
+  // `requiresVitals`/vitals-step state already resets on service change.
+  useEffect(() => {
+    setLabServiceIds([]);
+  }, [departmentId]);
 
   async function handleEnterVitals() {
     setDraftError(null);
@@ -261,16 +286,23 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
 
   async function handleProceedToLabPayment() {
     setLabDraftError(null);
-    if (!patientId || !branchId || !departmentId || !serviceId) {
-      setLabDraftError("Select patient, branch, department, and service first.");
+    if (!patientId || !branchId || !departmentId || labServiceIds.length === 0) {
+      setLabDraftError("Select patient, branch, department, and at least one Laboratory service first.");
       return;
     }
     setCreatingLabDraft(true);
     try {
+      // The pre-queue Visit still carries one "primary" service (the first
+      // selected) - `serviceId` is kept in sync here purely so the existing
+      // draft-invalidation effect and `handleLabPaid`'s Queue-creation call
+      // (Queue.service_id also stays singular) both read a value that
+      // matches what was actually used. The full selected set is what
+      // matters for the invoice - see `LabPaymentStep`'s `serviceIds` prop.
+      setValue("serviceId", labServiceIds[0], { shouldValidate: false });
       // Doctor rule: never sent for Laboratory - the field is hidden below
       // and the backend treats it as fully optional for this department.
       const visit = labDraftVisit ?? (await visitsApi.createPreQueue({
-        patientId, branchId, doctorId: null, departmentId, serviceId,
+        patientId, branchId, doctorId: null, departmentId, serviceId: labServiceIds[0],
       }));
       setLabDraftVisit(visit);
       setLabQueueError(null);
@@ -470,21 +502,23 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                     ) : null}
                   </div>
                 ) : null}
-                <div className="space-y-1.5">
-                  <Label>Service</Label>
-                  <SearchableSelect
-                    value={serviceId}
-                    onChange={(id) => setValue("serviceId", id, { shouldValidate: true })}
-                    invalid={Boolean(errors.serviceId)}
-                    disabled={vitalsSaved}
-                    placeholder="Select service"
-                    emptyLabel="No services match."
-                    options={(services.data?.items ?? []).map((s) => ({
-                      value: s.id,
-                      label: `${s.service_name ?? s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}`,
-                    }))}
-                  />
-                </div>
+                {!isLaboratoryDepartment ? (
+                  <div className="space-y-1.5">
+                    <Label>Service</Label>
+                    <SearchableSelect
+                      value={serviceId}
+                      onChange={(id) => setValue("serviceId", id, { shouldValidate: true })}
+                      invalid={Boolean(errors.serviceId)}
+                      disabled={vitalsSaved}
+                      placeholder="Select service"
+                      emptyLabel="No services match."
+                      options={(services.data?.items ?? []).map((s) => ({
+                        value: s.id,
+                        label: `${s.service_name ?? s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}`,
+                      }))}
+                    />
+                  </div>
+                ) : null}
                 <div className="space-y-1.5">
                   <Label>Priority</Label>
                   <Select {...register("priority")}>
@@ -512,6 +546,64 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                   ) : null}
                 </div>
               </div>
+
+              {isLaboratoryDepartment ? (
+                <div className="space-y-1.5">
+                  <Label>Laboratory Services</Label>
+                  <SearchableSelect
+                    value=""
+                    onChange={(id) => {
+                      if (id && !labServiceIds.includes(id)) setLabServiceIds((prev) => [...prev, id]);
+                    }}
+                    placeholder="Select Laboratory Service"
+                    emptyLabel="No services match."
+                    // Already-selected services are excluded from the
+                    // dropdown entirely - the same service can never be
+                    // selected twice (no duplicate-quantity concept exists
+                    // for a Laboratory test), so there's nothing to reject
+                    // at click time; it simply isn't offered again.
+                    options={(services.data?.items ?? [])
+                      .filter((s) => !labServiceIds.includes(s.id))
+                      .map((s) => ({ value: s.id, label: s.service_name ?? s.name }))}
+                  />
+                  {labServiceIds.length > 0 ? (
+                    <div className="rounded-md border border-border">
+                      <div className="divide-y divide-border">
+                        {labServiceIds.map((id) => {
+                          const svc = (services.data?.items ?? []).find((s) => s.id === id);
+                          const price = Number(svc?.default_price ?? 0);
+                          return (
+                            <div key={id} className="flex items-center justify-between px-3 py-2 text-sm">
+                              <span>{svc?.service_name ?? svc?.name ?? id}</span>
+                              <span className="flex items-center gap-3">
+                                <span className="tabular-nums">₱{price.toFixed(2)}</span>
+                                <button
+                                  type="button"
+                                  className="text-xs text-destructive underline"
+                                  onClick={() => setLabServiceIds((prev) => prev.filter((x) => x !== id))}
+                                >
+                                  Remove
+                                </button>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between border-t border-border px-3 py-2 text-sm font-semibold">
+                        <span>Total</span>
+                        <span className="tabular-nums">
+                          ₱
+                          {labServiceIds
+                            .reduce((sum, id) => sum + Number((services.data?.items ?? []).find((s) => s.id === id)?.default_price ?? 0), 0)
+                            .toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Select at least one Laboratory service to proceed.</p>
+                  )}
+                </div>
+              ) : null}
 
               <div className="space-y-1.5">
                 <Label>Notes (optional)</Label>
@@ -569,6 +661,7 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
             ) : (
               <LabPaymentStep
                 visitId={labDraftVisit.id}
+                serviceIds={labServiceIds}
                 onPaid={handleLabPaid}
                 onBack={() => setShowLabPaymentStep(false)}
               />
@@ -585,7 +678,11 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                   {creatingDraft ? "Starting..." : "Enter Vitals"}
                 </Button>
               ) : isLaboratoryDepartment ? (
-                <Button type="button" onClick={handleProceedToLabPayment} disabled={creatingLabDraft}>
+                <Button
+                  type="button"
+                  onClick={handleProceedToLabPayment}
+                  disabled={creatingLabDraft || labServiceIds.length === 0}
+                >
                   {creatingLabDraft ? "Preparing..." : "Proceed to Payment"}
                 </Button>
               ) : (

@@ -41,7 +41,8 @@ vi.mock("@/features/clinic-config/api/crud-factory", () => ({
       if (path === "/services") {
         return Promise.resolve({
           items: [
-            { id: "svc-lab", service_name: "BLOOD CHEMISTRY", name: "BLOOD CHEMISTRY", service_code: "BLDCHEM" },
+            { id: "svc-lab", service_name: "BLOOD CHEMISTRY", name: "BLOOD CHEMISTRY", service_code: "BLDCHEM", default_price: "350.00" },
+            { id: "svc-lab-2", service_name: "URINALYSIS", name: "URINALYSIS", service_code: "URIN", default_price: "150.00" },
             { id: "svc-med", service_name: "Consultation - Follow-up Visit", name: "Follow-up", service_code: "OTHER" },
           ],
         });
@@ -86,9 +87,9 @@ vi.mock("@/features/queue/hooks/use-queue-mutations", () => ({
 // `NewQueueDialog`'s own orchestration: does it hide the doctor field, does
 // it gate the submit button, does it only create the queue after `onPaid`
 // fires, does cancelling avoid creating a queue.
-let lastLabPaymentStepProps: { onPaid: (invoiceId: string) => void; onBack: () => void } | null = null;
+let lastLabPaymentStepProps: { onPaid: (invoiceId: string) => void; onBack: () => void; serviceIds?: string[] } | null = null;
 vi.mock("@/features/queue/components/LabPaymentStep", () => ({
-  LabPaymentStep: (props: { visitId: string; onPaid: (invoiceId: string) => void; onBack: () => void }) => {
+  LabPaymentStep: (props: { visitId: string; serviceIds?: string[]; onPaid: (invoiceId: string) => void; onBack: () => void }) => {
     lastLabPaymentStepProps = props;
     return (
       <div data-testid="lab-payment-step">
@@ -121,8 +122,11 @@ async function selectPatient(user: ReturnType<typeof userEvent.setup>) {
 async function fillBranchAndService(user: ReturnType<typeof userEvent.setup>, serviceLabel: string) {
   await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
   await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
-  // SearchableSelect - open then click the matching option.
-  await user.click(screen.getByPlaceholderText(/select service/i));
+  // SearchableSelect - open then click the matching option. The Laboratory
+  // multi-select uses "Select Laboratory Service"; every other department
+  // uses the single "Select Service" field - either placeholder contains
+  // "Select" and ends in "Service".
+  await user.click(screen.getByPlaceholderText(/select (laboratory )?service/i));
   const option = await screen.findByText(serviceLabel);
   await user.click(option);
 }
@@ -238,6 +242,171 @@ describe("NewQueueDialog", () => {
 
     await waitFor(() => expect(mockCreateQueueMutateAsync).toHaveBeenCalled());
     expect(mockCreateQueueMutateAsync.mock.calls[0][0].doctorId).toBeNull();
+  });
+
+  describe("Multiple Laboratory Services in One Queue Transaction", () => {
+    async function selectLabService(user: ReturnType<typeof userEvent.setup>, label: string) {
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      const option = await screen.findByText(label);
+      await user.click(option);
+    }
+
+    it("1: renders the Laboratory multi-select with a running total, hides the single Service field", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+
+      expect(screen.getByText("Laboratory Services")).toBeInTheDocument();
+      expect(screen.queryByText("Service", { selector: "label" })).not.toBeInTheDocument();
+      expect(screen.getByText(/select at least one laboratory service/i)).toBeInTheDocument();
+    });
+
+    it("2/4: selecting two services lists both with prices and a correct running total", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await selectLabService(user, "URINALYSIS");
+
+      expect(screen.getByText("BLOOD CHEMISTRY")).toBeInTheDocument();
+      expect(screen.getByText("URINALYSIS")).toBeInTheDocument();
+      expect(screen.getByText("₱350.00")).toBeInTheDocument();
+      expect(screen.getByText("₱150.00")).toBeInTheDocument();
+      expect(screen.getByText("₱500.00")).toBeInTheDocument(); // Total
+    });
+
+    it("3: removing a selected service updates the total and re-offers it for selection", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await selectLabService(user, "URINALYSIS");
+      expect(screen.getByText("₱500.00")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+
+      expect(screen.queryByText("BLOOD CHEMISTRY")).not.toBeInTheDocument();
+      expect(screen.getByText("URINALYSIS")).toBeInTheDocument();
+      // Line price and Total both show ₱150.00 now that only one service
+      // remains - assert there are exactly two (not stale from before removal).
+      expect(screen.getAllByText("₱150.00")).toHaveLength(2);
+
+      // Removed service is selectable again.
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      expect(await screen.findByText("BLOOD CHEMISTRY")).toBeInTheDocument();
+    });
+
+    it("5: an already-selected service is not offered again (no duplicate selection)", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      // Only one "BLOOD CHEMISTRY" on screen - the selected-services list
+      // entry - not a second one in the (now-empty-of-it) dropdown options.
+      expect(screen.getAllByText("BLOOD CHEMISTRY")).toHaveLength(1);
+    });
+
+    it("6: Proceed to Payment stays disabled until at least one Laboratory service is selected", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      expect(screen.getByRole("button", { name: "Proceed to Payment" })).toBeDisabled();
+
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      expect(screen.getByRole("button", { name: "Proceed to Payment" })).toBeEnabled();
+    });
+
+    it("7: proceeding creates the draft visit with the first-selected service and passes every selected service id to LabPaymentStep", async () => {
+      mockCreatePreQueue.mockReset().mockResolvedValue({
+        id: "visit-multi", serviceId: "svc-lab", patientId: "pat-1", departmentId: "dept-lab", doctorId: null,
+      });
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await selectLabService(user, "URINALYSIS");
+      await user.click(screen.getByRole("button", { name: "Proceed to Payment" }));
+
+      await waitFor(() => expect(mockCreatePreQueue).toHaveBeenCalledTimes(1));
+      expect(mockCreatePreQueue.mock.calls[0][0]).toMatchObject({ serviceId: "svc-lab" });
+
+      expect(await screen.findByTestId("lab-payment-step")).toBeInTheDocument();
+      expect(lastLabPaymentStepProps?.serviceIds).toEqual(["svc-lab", "svc-lab-2"]);
+    });
+
+    it("9: paying for a multi-service selection still creates exactly one queue ticket", async () => {
+      mockCreatePreQueue.mockReset().mockResolvedValue({
+        id: "visit-multi-2", serviceId: "svc-lab", patientId: "pat-1", departmentId: "dept-lab", doctorId: null,
+      });
+      mockCreateQueueMutateAsync.mockReset().mockResolvedValue({ id: "queue-multi", queueNumber: "L010" });
+      const user = userEvent.setup();
+      const onCreated = vi.fn();
+      renderDialog(onCreated);
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await selectLabService(user, "URINALYSIS");
+      await user.click(screen.getByRole("button", { name: "Proceed to Payment" }));
+
+      expect(await screen.findByTestId("lab-payment-step")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Simulate Paid" }));
+
+      await waitFor(() => expect(mockCreateQueueMutateAsync).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onCreated).toHaveBeenCalledWith("queue-multi"));
+    });
+
+    it("11: the Doctor field remains hidden while multiple Laboratory services are selected", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+      await selectLabService(user, "BLOOD CHEMISTRY");
+      await selectLabService(user, "URINALYSIS");
+
+      expect(screen.queryByText(/^Doctor/)).not.toBeInTheDocument();
+    });
   });
 
   describe("inline Create New Patient form (address field)", () => {

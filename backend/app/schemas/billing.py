@@ -4,12 +4,31 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.discount import DiscountCalculationType, DiscountType
 from app.models.invoice import InvoiceStatus
 from app.models.invoice_item import InvoiceItemType
 from app.models.payment import PaymentMethod, PaymentStatus
+
+
+class LaboratoryInvoiceCreate(BaseModel):
+    """Body for `POST /visits/{visit_id}/laboratory-invoice` (Multi-Service
+    Laboratory Pay-First). `service_ids` is optional and defaults to `None`
+    - an omitted/empty body preserves the original single-service behavior
+    (`InvoiceService.create_draft_invoice_for_laboratory_visit` falls back
+    to the draft Visit's own `service_id`), so every existing caller/test
+    that posts no body keeps working unchanged. When provided, one
+    Laboratory line item is created per service id, in the given order."""
+
+    service_ids: list[UUID] | None = None
+
+    @field_validator("service_ids")
+    @classmethod
+    def _no_duplicate_services(cls, value: list[UUID] | None) -> list[UUID] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("Duplicate Laboratory service selected.")
+        return value
 
 
 # --- Invoice items ---

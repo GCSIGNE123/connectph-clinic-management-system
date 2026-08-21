@@ -42,6 +42,7 @@ from app.schemas.billing import (
     InvoiceItemUpdate,
     InvoiceListResponse,
     InvoiceSearchParams,
+    LaboratoryInvoiceCreate,
     PaymentCreate,
     ReceiptPayload,
     RecentPayment,
@@ -118,6 +119,7 @@ async def get_invoice_for_visit(
 @router.post("/visits/{visit_id}/laboratory-invoice", response_model=InvoiceDetail)
 async def create_laboratory_invoice_for_visit(
     visit_id: UUID,
+    payload: LaboratoryInvoiceCreate | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_billing_payment_record_role),
@@ -130,10 +132,19 @@ async def create_laboratory_invoice_for_visit(
     (Owner/Administrator/Cashier/Receptionist) rather than the stricter
     `require_billing_manage_role` (no Receptionist) - a Receptionist is the
     one who runs this walk-in flow at the counter, and this endpoint only
-    ever creates one fixed, system-priced line item, not arbitrary invoice
-    editing."""
+    ever creates system-priced Laboratory line items, not arbitrary invoice
+    editing.
+
+    Multi-Service Laboratory Pay-First: an optional body
+    `{"service_ids": [...]}"` creates one Laboratory line item per service
+    (in that order) instead of the single line item derived from the draft
+    Visit's own `service_id`. Omitting the body (or `service_ids`) preserves
+    the original single-service behavior exactly."""
     service = InvoiceService(db)
-    return await service.create_laboratory_invoice_for_visit_endpoint(visit_id, clinic_id=clinic_id, actor_id=current_user.id)
+    service_ids = payload.service_ids if payload is not None else None
+    return await service.create_laboratory_invoice_for_visit_endpoint(
+        visit_id, clinic_id=clinic_id, actor_id=current_user.id, service_ids=service_ids
+    )
 
 
 @router.get("/patients/{patient_id}/billing-history")

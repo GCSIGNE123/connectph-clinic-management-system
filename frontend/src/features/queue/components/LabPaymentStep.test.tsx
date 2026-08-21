@@ -56,11 +56,11 @@ function buildInvoice(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function renderStep(onPaid = vi.fn(), onBack = vi.fn()) {
+function renderStep(onPaid = vi.fn(), onBack = vi.fn(), serviceIds?: string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <LabPaymentStep visitId="visit-1" onPaid={onPaid} onBack={onBack} />
+      <LabPaymentStep visitId="visit-1" serviceIds={serviceIds} onPaid={onPaid} onBack={onBack} />
     </QueryClientProvider>
   );
   return { ...utils, onPaid, onBack };
@@ -91,7 +91,7 @@ describe("LabPaymentStep", () => {
     // created with a positive balance due.
     expect(await screen.findByRole("heading", { name: "Record payment" })).toBeInTheDocument();
     expect(screen.getByText(/Balance due:/)).toBeInTheDocument();
-    expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1");
+    expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1", undefined);
   });
 
   it("I: a zero-priced Laboratory service is already Paid on creation - no payment dialog, onPaid fires directly", async () => {
@@ -132,6 +132,57 @@ describe("LabPaymentStep", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  describe("Multiple Laboratory Services in One Queue Transaction", () => {
+    it("7: passes serviceIds through to invoice creation and lists every Laboratory line item with the full amount due", async () => {
+      mockCreateInvoice.mockReset().mockResolvedValue(
+        buildInvoice({
+          grandTotal: 400, balanceDue: 400,
+          items: [
+            { id: "item-1", invoiceId: "invoice-1", description: "CBC", itemType: "Laboratory", quantity: 1, unitPrice: 250, discountAmount: 0, taxAmount: null, lineTotal: 250, notes: null },
+            { id: "item-2", invoiceId: "invoice-1", description: "Urinalysis", itemType: "Laboratory", quantity: 1, unitPrice: 150, discountAmount: 0, taxAmount: null, lineTotal: 150, notes: null },
+          ],
+        })
+      );
+      renderStep(vi.fn(), vi.fn(), ["svc-cbc", "svc-urine"]);
+
+      expect(await screen.findByRole("heading", { name: "Record payment" })).toBeInTheDocument();
+      expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1", ["svc-cbc", "svc-urine"]);
+      expect(screen.getByText("CBC")).toBeInTheDocument();
+      expect(screen.getByText("Urinalysis")).toBeInTheDocument();
+      expect(screen.getByText("Amount due").nextSibling?.textContent).toBe("₱400.00");
+    });
+
+    it("8: a rejected multi-service invoice creation never calls onPaid (no queue is created)", async () => {
+      mockCreateInvoice.mockReset().mockRejectedValue(new Error("network down"));
+      const onPaid = vi.fn();
+      renderStep(onPaid, vi.fn(), ["svc-cbc", "svc-urine"]);
+
+      expect(await screen.findByText(/Could not create the Laboratory invoice/i)).toBeInTheDocument();
+      expect(onPaid).not.toHaveBeenCalled();
+    });
+
+    it("10: retry after failure re-sends the same serviceIds, not a stale/empty selection", async () => {
+      mockCreateInvoice.mockReset().mockRejectedValue(new Error("network down"));
+      const user = userEvent.setup();
+      renderStep(vi.fn(), vi.fn(), ["svc-cbc", "svc-urine"]);
+
+      await screen.findByText(/Could not create the Laboratory invoice/i);
+      mockCreateInvoice.mockResolvedValue(buildInvoice({ grandTotal: 400, balanceDue: 400 }));
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(mockCreateInvoice).toHaveBeenCalledTimes(2));
+      expect(mockCreateInvoice).toHaveBeenNthCalledWith(2, "visit-1", ["svc-cbc", "svc-urine"]);
+    });
+
+    it("single-service callers are unaffected - serviceIds omitted still calls createLaboratoryInvoiceForVisit with only visitId", async () => {
+      mockCreateInvoice.mockReset().mockResolvedValue(buildInvoice());
+      renderStep();
+
+      await screen.findByRole("heading", { name: "Record payment" });
+      expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1", undefined);
+    });
+  });
+
   describe("React 18 StrictMode regression (BUG: previously stuck forever on 'Preparing invoice...')", () => {
     it("A/B: under StrictMode, the invoice is created exactly once logically, 'Preparing invoice...' resolves, and payment UI becomes available", async () => {
       mockCreateInvoice.mockReset().mockResolvedValue(buildInvoice());
@@ -147,7 +198,7 @@ describe("LabPaymentStep", () => {
       // effect, but the single-flight ref must dedupe the actual network
       // call to exactly one.
       expect(mockCreateInvoice).toHaveBeenCalledTimes(1);
-      expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1");
+      expect(mockCreateInvoice).toHaveBeenCalledWith("visit-1", undefined);
     });
 
     it("D: a zero-priced Laboratory invoice under StrictMode still skips payment and calls onPaid", async () => {

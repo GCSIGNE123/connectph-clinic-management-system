@@ -187,9 +187,15 @@ export const billingApi = {
    * idempotent) invoice for a draft Laboratory Visit created via
    * `visitsApi.createPreQueue` - see
    * `InvoiceService.create_draft_invoice_for_laboratory_visit` on the
-   * backend. A zero-priced Laboratory service comes back already `Paid`. */
-  createLaboratoryInvoiceForVisit: async (visitId: string): Promise<Invoice> => {
-    const raw = await apiClient.post<any>(`/visits/${visitId}/laboratory-invoice`);
+   * backend. A zero-priced Laboratory service comes back already `Paid`.
+   * Multiple Laboratory Services in One Queue Transaction: `serviceIds`,
+   * when given (non-empty), creates one line item per service instead of
+   * the single line item derived from the draft Visit's own service. */
+  createLaboratoryInvoiceForVisit: async (visitId: string, serviceIds?: string[]): Promise<Invoice> => {
+    const raw = await apiClient.post<any>(
+      `/visits/${visitId}/laboratory-invoice`,
+      serviceIds && serviceIds.length > 0 ? { service_ids: serviceIds } : undefined
+    );
     return toInvoice(raw);
   },
   getBillingHistory: async (patientId: string): Promise<BillingHistoryItem[]> => {

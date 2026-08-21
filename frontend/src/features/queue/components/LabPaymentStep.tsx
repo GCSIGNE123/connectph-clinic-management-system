@@ -25,10 +25,16 @@ import type { Invoice } from "@/features/billing/types";
  */
 export function LabPaymentStep({
   visitId,
+  serviceIds,
   onPaid,
   onBack,
 }: {
   visitId: string;
+  /** Multiple Laboratory Services in One Queue Transaction: when provided
+   * (and non-empty), the invoice is created with one line item per service
+   * id instead of the single line item derived from the draft Visit's own
+   * service. Omitted/empty preserves the original single-service call. */
+  serviceIds?: string[];
   onPaid: (invoiceId: string) => void;
   onBack: () => void;
 }) {
@@ -66,7 +72,7 @@ export function LabPaymentStep({
 
     async function prepareInvoice() {
       if (inFlightRef.current?.visitId !== visitId) {
-        inFlightRef.current = { visitId, promise: billingApi.createLaboratoryInvoiceForVisit(visitId) };
+        inFlightRef.current = { visitId, promise: billingApi.createLaboratoryInvoiceForVisit(visitId, serviceIds) };
       }
       const inFlight = inFlightRef.current;
       setPreparing(true);
@@ -113,7 +119,7 @@ export function LabPaymentStep({
     setInvoiceId(null);
     setPreparing(true);
     setPrepareError(null);
-    const promise = billingApi.createLaboratoryInvoiceForVisit(visitId);
+    const promise = billingApi.createLaboratoryInvoiceForVisit(visitId, serviceIds);
     inFlightRef.current = { visitId, promise };
     promise
       .then((inv) => {
@@ -128,7 +134,11 @@ export function LabPaymentStep({
       .finally(() => setPreparing(false));
   }
 
-  const labItem = invoice?.items.find((i) => i.itemType === "Laboratory") ?? invoice?.items[0];
+  // Multiple Laboratory Services in One Queue Transaction: shows EVERY
+  // Laboratory line item on the invoice (not just the first) - a single-
+  // service ticket still renders correctly here, it's just a list of one.
+  const labItems = invoice?.items.filter((i) => i.itemType === "Laboratory") ?? [];
+  const displayItems = labItems.length > 0 ? labItems : invoice?.items.slice(0, 1) ?? [];
 
   return (
     <div className="space-y-3">
@@ -143,11 +153,15 @@ export function LabPaymentStep({
         </div>
       ) : invoice ? (
         <div className="space-y-2 rounded-md border border-border p-3 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Service</span>
-            <span className="font-medium">{labItem?.description ?? "—"}</span>
+          <div className="space-y-1">
+            {displayItems.map((item) => (
+              <div key={item.id} className="flex justify-between">
+                <span className="text-muted-foreground">{item.description}</span>
+                <span className="font-medium tabular-nums">₱{item.lineTotal.toFixed(2)}</span>
+              </div>
+            ))}
           </div>
-          <div className="flex justify-between text-base font-semibold">
+          <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
             <span>Amount due</span>
             <span>₱{invoice.balanceDue.toFixed(2)}</span>
           </div>
