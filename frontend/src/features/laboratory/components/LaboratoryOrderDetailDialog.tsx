@@ -9,7 +9,11 @@ import { LaboratoryAttachmentList } from "@/features/laboratory/components/Labor
 import { LaboratoryReportDialog } from "@/features/laboratory/components/LaboratoryReportDialog";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
-const REPORT_ELIGIBLE_STATUSES = new Set(["Completed", "Released"]);
+// Exported so other laboratory-order list surfaces (e.g.
+// `PatientLaboratoryHistory`) can gate their own "Print Results" actions
+// against the exact same eligibility rule, rather than duplicating the
+// literal set and risking drift.
+export const REPORT_ELIGIBLE_STATUSES = new Set(["Completed", "Released"]);
 
 /** Feature 5 Part B: read-only laboratory order details, opened by
  * clicking a row in the Patient's Visit History -> Visit Details
