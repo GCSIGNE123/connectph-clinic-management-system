@@ -637,10 +637,20 @@ function InlinePatientCreateDialog({
     gender: PatientGender.Male,
     civilStatus: PatientCivilStatus.Single,
     mobileNumber: "",
+    // Reuses the same `addressLine` field the full Patients-module form
+    // (`PatientFormDialog`) already registers - not a new address
+    // structure, just the one existing free-text line surfaced here too.
+    // Optional, matching the backend's nullable `address_line` column.
+    addressLine: "",
   });
 
   useEffect(() => {
-    if (open) setForm({ firstName: "", lastName: "", birthDate: "", gender: PatientGender.Male, civilStatus: PatientCivilStatus.Single, mobileNumber: "" });
+    if (open) {
+      setForm({
+        firstName: "", lastName: "", birthDate: "", gender: PatientGender.Male,
+        civilStatus: PatientCivilStatus.Single, mobileNumber: "", addressLine: "",
+      });
+    }
   }, [open]);
 
   async function handleCreate() {
@@ -696,6 +706,10 @@ function InlinePatientCreateDialog({
           <div className="space-y-1.5">
             <Label>Mobile number</Label>
             <Input value={form.mobileNumber} onChange={(e) => setForm((f) => ({ ...f, mobileNumber: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Address</Label>
+            <Input value={form.addressLine} onChange={(e) => setForm((f) => ({ ...f, addressLine: e.target.value }))} />
           </div>
         </div>
         <DialogFooter>

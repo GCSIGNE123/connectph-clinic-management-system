@@ -64,8 +64,9 @@ vi.mock("@/features/patients/api/patients-api", () => ({
   },
 }));
 
+const mockCreatePatientMutateAsync = vi.fn();
 vi.mock("@/features/patients/hooks/use-patient-mutations", () => ({
-  useCreatePatient: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreatePatient: () => ({ mutateAsync: mockCreatePatientMutateAsync, isPending: false }),
 }));
 
 const mockCreatePreQueue = vi.fn();
@@ -237,5 +238,99 @@ describe("NewQueueDialog", () => {
 
     await waitFor(() => expect(mockCreateQueueMutateAsync).toHaveBeenCalled());
     expect(mockCreateQueueMutateAsync.mock.calls[0][0].doctorId).toBeNull();
+  });
+
+  describe("inline Create New Patient form (address field)", () => {
+    // `Label`/`Input` here are plain sibling elements too (same reasoning
+    // as `getSelectByLabel` above) - scope by the label's parent and grab
+    // the input inside it directly, so this works for the `type="date"`
+    // Birth date field too (which isn't exposed with an ARIA `textbox` role
+    // in jsdom, unlike plain text inputs).
+    function getFieldByLabel(labelText: string): HTMLInputElement {
+      const label = screen.getByText(labelText, { selector: "label" });
+      return (label.parentElement as HTMLElement).querySelector("input") as HTMLInputElement;
+    }
+
+    async function openInlineForm(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole("button", { name: "+ Create new patient" }));
+      await screen.findByText("Create New Patient");
+    }
+
+    async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
+      await user.type(getFieldByLabel("First name"), "New");
+      await user.type(getFieldByLabel("Last name"), "Patient");
+      await user.type(getFieldByLabel("Birth date"), "1990-01-01");
+      await user.type(getFieldByLabel("Mobile number"), "+639171234567");
+    }
+
+    it("G: displays an Address field", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await openInlineForm(user);
+      expect(getFieldByLabel("Address")).toBeInTheDocument();
+    });
+
+    it("H: entering an address submits it to patient creation", async () => {
+      mockCreatePatientMutateAsync.mockReset().mockResolvedValue({
+        patient: { id: "pat-new", firstName: "New", lastName: "Patient", patientNumber: "PAT-002" },
+        duplicates: [],
+      });
+      const user = userEvent.setup();
+      renderDialog();
+
+      await openInlineForm(user);
+      await user.type(getFieldByLabel("Address"), "123 Rizal St., Brgy. San Jose");
+      await fillRequiredFields(user);
+      await user.click(screen.getByRole("button", { name: "Create & Select" }));
+
+      await waitFor(() => expect(mockCreatePatientMutateAsync).toHaveBeenCalled());
+      expect(mockCreatePatientMutateAsync.mock.calls[0][0].input).toMatchObject({
+        addressLine: "123 Rizal St., Brgy. San Jose",
+      });
+    });
+
+    it("I: address is blank by default and creation still works with a blank address", async () => {
+      mockCreatePatientMutateAsync.mockReset().mockResolvedValue({
+        patient: { id: "pat-new2", firstName: "No", lastName: "Address", patientNumber: "PAT-003" },
+        duplicates: [],
+      });
+      const user = userEvent.setup();
+      renderDialog();
+
+      await openInlineForm(user);
+      expect(getFieldByLabel("Address").value).toBe("");
+      await fillRequiredFields(user);
+      await user.click(screen.getByRole("button", { name: "Create & Select" }));
+
+      await waitFor(() => expect(mockCreatePatientMutateAsync).toHaveBeenCalled());
+      expect(mockCreatePatientMutateAsync.mock.calls[0][0].input).toMatchObject({ addressLine: "" });
+    });
+
+    it("J: the address value is retained in the form while typing (not cleared mid-entry)", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await openInlineForm(user);
+      const addressInput = getFieldByLabel("Address");
+      await user.type(addressInput, "456 Bonifacio Ave.");
+
+      expect(addressInput.value).toBe("456 Bonifacio Ave.");
+    });
+
+    it("K: existing required-field gating and patient-selection behavior remain unchanged", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await openInlineForm(user);
+      // Address is optional - the Create button stays disabled until the
+      // pre-existing required fields (name/birth date/mobile) are filled,
+      // regardless of whether address has been entered.
+      await user.type(getFieldByLabel("Address"), "Some Address");
+      expect(screen.getByRole("button", { name: "Create & Select" })).toBeDisabled();
+
+      await fillRequiredFields(user);
+      expect(screen.getByRole("button", { name: "Create & Select" })).toBeEnabled();
+    });
   });
 });
