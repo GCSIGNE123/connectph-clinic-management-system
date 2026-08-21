@@ -27,7 +27,7 @@ export default function ClinicSettingsPage() {
   const canManage = Boolean(currentUser && MANAGE_ROLES.has(currentUser.role));
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"general" | "branding" | "appearance">("general");
+  const [tab, setTab] = useState<"general" | "branding" | "appearance" | "inventory">("general");
 
   const { data: settings } = useQuery({
     queryKey: ["clinic-settings"],
@@ -36,11 +36,13 @@ export default function ClinicSettingsPage() {
 
   const [general, setGeneral] = useState<Partial<ClinicSettings>>({});
   const [branding, setBranding] = useState<Partial<ClinicSettings>>({});
+  const [inventory, setInventory] = useState<Partial<ClinicSettings>>({});
 
   useEffect(() => {
     if (settings) {
       setGeneral(settings);
       setBranding(settings);
+      setInventory(settings);
     }
   }, [settings]);
 
@@ -87,6 +89,21 @@ export default function ClinicSettingsPage() {
     onError: (err) => toast({ title: "Save failed", description: (err as Error).message, variant: "error" }),
   });
 
+  const saveInventory = useMutation({
+    mutationFn: () =>
+      apiClient.put<ClinicSettings>("/clinic-settings", {
+        medicine_expiry_warning_days_tier1: inventory.medicine_expiry_warning_days_tier1,
+        medicine_expiry_warning_days_tier2: inventory.medicine_expiry_warning_days_tier2,
+        medicine_expiry_warning_days_tier3: inventory.medicine_expiry_warning_days_tier3,
+        medicine_expiry_warning_days_tier4: inventory.medicine_expiry_warning_days_tier4,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clinic-settings"] });
+      toast({ title: "Expiry warning thresholds saved", variant: "success" });
+    },
+    onError: (err) => toast({ title: "Save failed", description: (err as Error).message, variant: "error" }),
+  });
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,7 +112,7 @@ export default function ClinicSettingsPage() {
       </div>
 
       <div className="flex gap-2 border-b border-border">
-        {(["general", "branding", "appearance"] as const).map((t) => (
+        {(["general", "branding", "appearance", "inventory"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -236,6 +253,51 @@ export default function ClinicSettingsPage() {
           </CardContent>
         </Card>
       ) : null}
+
+      {tab === "inventory" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Medicine Expiry Warning Thresholds</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <p className="text-sm text-muted-foreground sm:col-span-2">
+              Days-before-expiry thresholds used by the daily expiry check to warn Receptionists and Doctors.
+              Must be strictly descending: Tier 1 &gt; Tier 2 &gt; Tier 3 &gt; Tier 4.
+            </p>
+            <NumberField
+              label="Tier 1 (days)"
+              value={inventory.medicine_expiry_warning_days_tier1}
+              disabled={!canManage}
+              onChange={(v) => setInventory((s) => ({ ...s, medicine_expiry_warning_days_tier1: v }))}
+            />
+            <NumberField
+              label="Tier 2 (days)"
+              value={inventory.medicine_expiry_warning_days_tier2}
+              disabled={!canManage}
+              onChange={(v) => setInventory((s) => ({ ...s, medicine_expiry_warning_days_tier2: v }))}
+            />
+            <NumberField
+              label="Tier 3 (days)"
+              value={inventory.medicine_expiry_warning_days_tier3}
+              disabled={!canManage}
+              onChange={(v) => setInventory((s) => ({ ...s, medicine_expiry_warning_days_tier3: v }))}
+            />
+            <NumberField
+              label="Tier 4 (days)"
+              value={inventory.medicine_expiry_warning_days_tier4}
+              disabled={!canManage}
+              onChange={(v) => setInventory((s) => ({ ...s, medicine_expiry_warning_days_tier4: v }))}
+            />
+            {canManage ? (
+              <div className="sm:col-span-2">
+                <Button type="button" isLoading={saveInventory.isPending} onClick={() => saveInventory.mutate()}>
+                  Save thresholds
+                </Button>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }
@@ -255,6 +317,31 @@ function Field({
     <div className="space-y-1.5">
       <Label>{label}</Label>
       <Input value={value ?? ""} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value?: number | null;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Input
+        type="number"
+        min={1}
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
     </div>
   );
 }

@@ -49,6 +49,24 @@ class MedicineBatchStatus(str, enum.Enum):
     RECALLED = "Recalled"
 
 
+# Phase 3 (Expiry Alerts): severity ladder for `MedicineBatch.
+# last_alerted_expiry_tier`. Higher = more urgent. 0 means "no alert sent
+# yet". Tiers 1-4 map to the clinic's four configurable warning-day
+# thresholds (see `Clinic.medicine_expiry_warning_days_tier1..4`, tier1 =
+# the LONGEST lead time / least urgent, tier4 = the SHORTEST lead time /
+# most urgent); 5 is "batch has actually expired". `MedicineExpiryService`
+# only ever creates a new notification when a batch's freshly-computed tier
+# is GREATER than this stored value, and only ever writes the new value
+# forward (never backward) - see that module's docstring for the full
+# dedup/threshold-change behavior.
+EXPIRY_TIER_NONE = 0
+EXPIRY_TIER_1 = 1
+EXPIRY_TIER_2 = 2
+EXPIRY_TIER_3 = 3
+EXPIRY_TIER_4 = 4
+EXPIRY_TIER_EXPIRED = 5
+
+
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
@@ -104,6 +122,9 @@ class MedicineBatch(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tenant
         SAEnum(MedicineBatchStatus, name="medicine_batch_status", values_callable=_enum_values, native_enum=False),
         nullable=False, default=MedicineBatchStatus.ACTIVE, server_default=MedicineBatchStatus.ACTIVE.value,
     )
+    # Phase 3: expiry-alert dedup state, maintained exclusively by
+    # `MedicineExpiryService` - see the `EXPIRY_TIER_*` constants above.
+    last_alerted_expiry_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     medicine: Mapped["Medicine"] = relationship(back_populates="batches")
 

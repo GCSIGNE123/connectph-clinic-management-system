@@ -1,13 +1,20 @@
 "use client";
 
 import type { ComponentType } from "react";
-import { CalendarDays, FlaskConical, Receipt, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, CalendarDays, Clock, FlaskConical, Receipt, Users } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { apiClient } from "@/lib/api-client";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { usePatients } from "@/features/patients/hooks/use-patients";
+import type { MedicineStats } from "@/features/clinic-config/types";
+import { Role } from "@/types";
+
+const INVENTORY_VIEW_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist, Role.Doctor, Role.Nurse]);
 
 /** Stat card. Pass `value` for a real, query-derived number; omit it (or pass
  * `undefined`) for modules that have no backend data source yet, which
@@ -17,14 +24,19 @@ function StatCard({
   icon: Icon,
   value,
   isLoading,
+  onClick,
 }: {
   label: string;
   icon: ComponentType<{ className?: string }>;
   value?: number;
   isLoading?: boolean;
+  /** Phase 3: the Expiring Soon/Expired inventory cards navigate to the
+   * Medicine Inventory page filtered to the matching status - every other
+   * card here stays a static, non-interactive placeholder. */
+  onClick?: () => void;
 }) {
-  return (
-    <Card>
+  const content = (
+    <Card className={onClick ? "transition-colors hover:border-primary" : undefined}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
         <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
@@ -43,6 +55,15 @@ function StatCard({
       </CardContent>
     </Card>
   );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="text-left">
+        {content}
+      </button>
+    );
+  }
+  return content;
 }
 
 /**
@@ -69,6 +90,14 @@ export default function DashboardPage() {
   const { data: user, isLoading } = useCurrentUser();
   const { data: patientsPage, isLoading: patientsLoading } = usePatients({ page: 1, pageSize: 1 });
   const patientsTotal = patientsPage?.meta.total;
+  const router = useRouter();
+
+  const canViewInventory = Boolean(user && INVENTORY_VIEW_ROLES.has(user.role));
+  const { data: medicineStats, isLoading: medicineStatsLoading } = useQuery({
+    queryKey: ["medicines", "stats"],
+    queryFn: () => apiClient.get<MedicineStats>("/medicines/stats"),
+    enabled: canViewInventory,
+  });
 
   if (isLoading) {
     return (
@@ -106,6 +135,25 @@ export default function DashboardPage() {
         <StatCard label="Pending invoices" icon={Receipt} />
         <StatCard label="Lab requests" icon={FlaskConical} />
       </div>
+
+      {canViewInventory ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <StatCard
+            label="Expiring Soon"
+            icon={Clock}
+            value={medicineStats?.expiring_soon}
+            isLoading={medicineStatsLoading}
+            onClick={() => router.push("/medicines?filter=near_expiry")}
+          />
+          <StatCard
+            label="Expired"
+            icon={AlertTriangle}
+            value={medicineStats?.expired}
+            isLoading={medicineStatsLoading}
+            onClick={() => router.push("/medicines?filter=expired")}
+          />
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>

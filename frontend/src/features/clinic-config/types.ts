@@ -186,6 +186,13 @@ export interface ClinicSettings {
   primary_color?: string | null;
   secondary_color?: string | null;
   theme: string;
+  // Medicine Inventory Phase 3: clinic-configurable expiry warning
+  // thresholds (days remaining). tier1 = longest lead time, tier4 =
+  // shortest / most urgent.
+  medicine_expiry_warning_days_tier1: number;
+  medicine_expiry_warning_days_tier2: number;
+  medicine_expiry_warning_days_tier3: number;
+  medicine_expiry_warning_days_tier4: number;
 }
 
 export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -193,6 +200,10 @@ export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 /** Medicine Inventory Phase 1 - catalog + batch/lot tracking. See
  * `features/medicines/` for the list/detail pages that consume these. */
 export interface Medicine {
+  // Index signature required so this type can be passed directly to the
+  // generic `MasterDataFormDialog<T extends Record<string, unknown>>` -
+  // same reasoning as `MedicineBatch` below.
+  [key: string]: unknown;
   id: string;
   clinic_id: string;
   generic_name: string;
@@ -204,6 +215,19 @@ export interface Medicine {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Phase 3: medicine-level stock/expiry summary aggregated across this
+  // medicine's batches - see `medicine_service._summarize_stock_status`.
+  // Only present on list responses (not the single-GET response).
+  stock_status?: MedicineStockStatus | null;
+}
+
+export type MedicineStockStatus = "in_stock" | "low_stock" | "near_expiry" | "expired" | "out_of_stock";
+
+export interface MedicineStats {
+  expiring_soon: number;
+  expired: number;
+  low_stock: number;
+  out_of_stock: number;
 }
 
 export type MedicineBatchStatus = "Active" | "Expired" | "Depleted" | "Recalled";

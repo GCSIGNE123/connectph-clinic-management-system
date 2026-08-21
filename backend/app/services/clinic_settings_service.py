@@ -29,6 +29,19 @@ class ClinicSettingsService:
     async def update(self, clinic_id: UUID, payload: ClinicSettingsUpdate, *, actor: User) -> Clinic:
         clinic = await self.get(clinic_id)
         updates = payload.model_dump(exclude_unset=True)
+
+        tier_fields = (
+            "medicine_expiry_warning_days_tier1", "medicine_expiry_warning_days_tier2",
+            "medicine_expiry_warning_days_tier3", "medicine_expiry_warning_days_tier4",
+        )
+        if any(f in updates for f in tier_fields):
+            merged = [updates.get(f, getattr(clinic, f)) for f in tier_fields]
+            if not (merged[0] > merged[1] > merged[2] > merged[3]):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Expiry warning tiers must be strictly descending: tier1 > tier2 > tier3 > tier4",
+                )
+
         clinic = await self.clinic_repo.update(clinic, **updates)
 
         await self.audit_service.log_event(

@@ -41,11 +41,20 @@ class MedicineRead(MedicineBase):
     clinic_id: UUID
     created_at: datetime
     updated_at: datetime
+    # Phase 3: medicine-level stock/expiry summary, computed by aggregating
+    # this medicine's batches (see `medicine_service._summarize_stock_status`)
+    # - NOT a stored column. One medicine can have both an expired batch and
+    # a perfectly good one; this reflects the most urgent applicable state
+    # rather than naively calling the whole medicine "Expired". Optional/
+    # unset only when the caller didn't ask for it to be computed.
+    stock_status: str | None = None
 
 
 class MedicineSearchParams(BaseModel):
     q: str | None = None
     is_active: bool | None = None
+    # "in_stock" | "low_stock" | "near_expiry" | "expired" | "out_of_stock"
+    stock_status: str | None = None
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -55,6 +64,17 @@ class MedicineListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class MedicineStatsResponse(BaseModel):
+    """Medicine-level counts (not batch-level) for the dashboard stat cards
+    and the Medicine Inventory page's filter chips - see
+    `medicine_service.get_stats`."""
+
+    expiring_soon: int
+    expired: int
+    low_stock: int
+    out_of_stock: int
 
 
 class MedicineBatchBase(BaseModel):

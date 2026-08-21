@@ -25,6 +25,7 @@ from app.api.v1 import (
     medical_certificates,
     medicines,
     migration,
+    notifications,
     operating_hours,
     patients,
     queue_settings,
@@ -59,6 +60,9 @@ api_router.include_router(queue_settings.router)
 api_router.include_router(operating_hours.router)
 api_router.include_router(holidays.router)
 api_router.include_router(medicines.router)
+
+# Medicine Inventory Phase 3: Expiry Alerts & Notifications
+api_router.include_router(notifications.router)
 
 # Phase 20: Internal staff messaging (item 14)
 api_router.include_router(internal_messages.router)

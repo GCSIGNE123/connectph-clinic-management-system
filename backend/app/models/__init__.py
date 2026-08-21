@@ -65,6 +65,7 @@ from app.models.migration_batch import (
     MigrationTransformType,
     MigrationValidationIssue,
 )
+from app.models.notification import Notification, NotificationRecipient, NotificationType
 from app.models.operating_hours import OperatingHours
 from app.models.api_key import ApiKey, OAuthClient, WebhookSecret
 from app.models.backup import Backup, BackupStatus
@@ -215,6 +216,9 @@ __all__ = [
     "MedicineBatchStatus",
     "MedicineStockMovement",
     "MedicineStockMovementType",
+    "Notification",
+    "NotificationRecipient",
+    "NotificationType",
     "QueueSetting",
     "QueueStatus",
     "QueueStatusHistory",

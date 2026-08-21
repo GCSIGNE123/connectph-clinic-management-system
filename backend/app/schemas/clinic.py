@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class ClinicBase(BaseModel):
@@ -74,6 +74,12 @@ class ClinicSettingsRead(BaseModel):
     # required vitals field for this clinic (always optional elsewhere -
     # see `services/queue_service.py::REQUIRED_VITALS_FIELDS`).
     require_head_circumference: bool = False
+    # Medicine Inventory Phase 3 (Expiry Alerts): clinic-configurable
+    # warning-day thresholds (see `models/clinic.py`'s docstring note).
+    medicine_expiry_warning_days_tier1: int = 90
+    medicine_expiry_warning_days_tier2: int = 60
+    medicine_expiry_warning_days_tier3: int = 30
+    medicine_expiry_warning_days_tier4: int = 7
     created_at: datetime
     updated_at: datetime
 
@@ -101,6 +107,28 @@ class ClinicSettingsUpdate(BaseModel):
     time_format: str | None = Field(default=None, max_length=10)
     status: str | None = Field(default=None, max_length=20)
     require_head_circumference: bool | None = None
+    # Positive-int constraint only; the tier1 > tier2 > tier3 > tier4
+    # descending-order rule needs the OTHER (possibly-unset-here) tiers'
+    # current values to check, so it's enforced in `ClinicSettingsService.
+    # update` against the merged result, not here.
+    medicine_expiry_warning_days_tier1: int | None = Field(default=None, gt=0)
+    medicine_expiry_warning_days_tier2: int | None = Field(default=None, gt=0)
+    medicine_expiry_warning_days_tier3: int | None = Field(default=None, gt=0)
+    medicine_expiry_warning_days_tier4: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _tiers_descending_if_all_present(self) -> "ClinicSettingsUpdate":
+        # Cheap early check when a client sends all four in one request
+        # (the common case, e.g. this Phase 3 settings form) - the
+        # merged-with-existing-values check in the service layer is what
+        # actually guarantees correctness for partial updates.
+        tiers = (
+            self.medicine_expiry_warning_days_tier1, self.medicine_expiry_warning_days_tier2,
+            self.medicine_expiry_warning_days_tier3, self.medicine_expiry_warning_days_tier4,
+        )
+        if all(t is not None for t in tiers) and not (tiers[0] > tiers[1] > tiers[2] > tiers[3]):
+            raise ValueError("Expiry warning tiers must be strictly descending: tier1 > tier2 > tier3 > tier4")
+        return self
 
 
 class ClinicBrandingUpdate(BaseModel):

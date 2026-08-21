@@ -23,6 +23,7 @@ from app.schemas.medicine import (
     MedicineListResponse,
     MedicineRead,
     MedicineSearchParams,
+    MedicineStatsResponse,
     MedicineStockMovementCreate,
     MedicineStockMovementListResponse,
     MedicineStockMovementRead,
@@ -37,18 +38,33 @@ router = APIRouter(prefix="/medicines", tags=["medicines"])
 async def list_medicines(
     q: str | None = Query(default=None),
     is_active: bool | None = Query(default=None),
+    stock_status: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_inventory_view_role),
 ) -> MedicineListResponse:
-    params = MedicineSearchParams(q=q, is_active=is_active, limit=limit, offset=offset)
+    params = MedicineSearchParams(q=q, is_active=is_active, stock_status=stock_status, limit=limit, offset=offset)
     service = MedicineService(db)
-    items, total = await service.search(clinic_id, params)
-    return MedicineListResponse(
-        items=[MedicineRead.model_validate(i) for i in items], total=total, limit=limit, offset=offset
-    )
+    results, total = await service.search(clinic_id, params)
+    items = []
+    for medicine, label in results:
+        item = MedicineRead.model_validate(medicine)
+        item.stock_status = label
+        items.append(item)
+    return MedicineListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/stats", response_model=MedicineStatsResponse)
+async def get_medicine_stats(
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_inventory_view_role),
+) -> MedicineStatsResponse:
+    service = MedicineService(db)
+    counts = await service.get_stats(clinic_id)
+    return MedicineStatsResponse(**counts)
 
 
 @router.get("/{medicine_id}", response_model=MedicineRead)

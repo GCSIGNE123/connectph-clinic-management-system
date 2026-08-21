@@ -615,3 +615,12 @@ INVENTORY_MANAGE_ROLES = {"Owner", "Administrator", "Receptionist"}
 
 require_inventory_view_role = require_roles(*INVENTORY_VIEW_ROLES)
 require_inventory_manage_role = require_roles(*INVENTORY_MANAGE_ROLES)
+
+# Medicine Inventory Phase 3 (Expiry Alerts & Notifications). Identical
+# membership to INVENTORY_VIEW_ROLES today, but kept as its own named
+# constant (per the spec's own "INVENTORY_NOTIFICATION_ROLES" naming) since
+# notification visibility and inventory-record visibility are conceptually
+# separate concerns that could diverge later even though they happen to
+# match right now.
+INVENTORY_NOTIFICATION_ROLES = {"Owner", "Administrator", "Receptionist", "Doctor"}
+require_inventory_notification_role = require_roles(*INVENTORY_NOTIFICATION_ROLES)

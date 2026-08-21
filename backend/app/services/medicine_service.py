@@ -28,9 +28,11 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.clinic import Clinic
 from app.models.medicine import (
     Medicine,
     MedicineBatch,
@@ -51,6 +53,7 @@ from app.schemas.medicine import (
     MedicineUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.medicine_expiry_logic import ExpiryThresholds, is_expired, is_near_expiry
 
 # Movement types whose sign is fixed (rather than caller-chosen, like
 # ADJUSTMENT) - validated in `_validate_movement_delta`.
@@ -81,6 +84,60 @@ def _compute_status(batch: MedicineBatch, *, today: date | None = None) -> Medic
     return MedicineBatchStatus.ACTIVE
 
 
+def _active_batches(medicine: Medicine) -> list[MedicineBatch]:
+    # Recalled batches are excluded from stock/expiry aggregation entirely -
+    # they're a resolved, handled state, not part of "how much do we have
+    # available" or "what's expiring soon" (matches
+    # `medicine_expiry_logic.compute_expiry_tier`'s own Recalled exclusion).
+    return [b for b in medicine.batches if not b.is_deleted and b.status != MedicineBatchStatus.RECALLED]
+
+
+def _medicine_stock_categories(medicine: Medicine, thresholds: ExpiryThresholds, *, today: date | None = None) -> set[str]:
+    """One medicine can be simultaneously "near expiry" (one batch) and
+    "in stock" (another valid batch), or have an expired batch alongside a
+    perfectly good one - this returns every applicable category rather than
+    forcing a single label, so filtering never has to guess. See
+    `_summarize_stock_status` for the single-label version used for display."""
+    batches = _active_batches(medicine)
+    if not batches:
+        return {"out_of_stock"}
+
+    total_remaining = sum(b.quantity_remaining for b in batches)
+    categories: set[str] = set()
+    if total_remaining <= 0:
+        categories.add("out_of_stock")
+    else:
+        categories.add("in_stock")
+        if medicine.reorder_level is not None and total_remaining <= medicine.reorder_level:
+            categories.add("low_stock")
+    if any(is_expired(b, today=today) for b in batches):
+        categories.add("expired")
+    if any(is_near_expiry(b, thresholds, today=today) for b in batches):
+        categories.add("near_expiry")
+    return categories
+
+
+# Priority order (most urgent first) for the single-label summary shown on
+# the medicine list row - filtering itself uses the full category set above,
+# never just this one label.
+_STATUS_PRIORITY = ["expired", "near_expiry", "out_of_stock", "low_stock", "in_stock"]
+
+
+def _summarize_stock_status(categories: set[str]) -> str:
+    for label in _STATUS_PRIORITY:
+        if label in categories:
+            return label
+    return "in_stock"  # pragma: no cover - categories is never empty in practice
+
+
+async def _get_thresholds(session: AsyncSession, clinic_id: UUID) -> ExpiryThresholds:
+    clinic = (await session.execute(select(Clinic).where(Clinic.id == clinic_id))).scalar_one()
+    return ExpiryThresholds(
+        tier1=clinic.medicine_expiry_warning_days_tier1, tier2=clinic.medicine_expiry_warning_days_tier2,
+        tier3=clinic.medicine_expiry_warning_days_tier3, tier4=clinic.medicine_expiry_warning_days_tier4,
+    )
+
+
 def _validate_movement_delta(movement_type: MedicineStockMovementType, quantity_delta: int, reason: str | None) -> None:
     if movement_type in _POSITIVE_ONLY_TYPES and quantity_delta <= 0:
         raise HTTPException(
@@ -109,8 +166,44 @@ class MedicineService:
 
     # --- Medicine catalog ---
 
-    async def search(self, clinic_id: UUID, params: MedicineSearchParams) -> tuple[list[Medicine], int]:
-        return await self.repo.search(clinic_id, params)
+    async def search(self, clinic_id: UUID, params: MedicineSearchParams) -> tuple[list[tuple[Medicine, str]], int]:
+        """Returns `(medicine, stock_status_label)` pairs (see
+        `_summarize_stock_status`) plus the total AFTER any `stock_status`
+        filter is applied. Pagination happens here, in Python, over the
+        full eager-loaded result - see `MedicineRepository.search_with_
+        batches`'s docstring for why."""
+        thresholds = await _get_thresholds(self.session, clinic_id)
+        medicines = await self.repo.search_with_batches(clinic_id, params)
+
+        today = date.today()
+        results = [(m, _medicine_stock_categories(m, thresholds, today=today)) for m in medicines]
+        if params.stock_status:
+            results = [(m, cats) for m, cats in results if params.stock_status in cats]
+
+        total = len(results)
+        page = results[params.offset : params.offset + params.limit]
+        return [(m, _summarize_stock_status(cats)) for m, cats in page], total
+
+    async def get_stats(self, clinic_id: UUID) -> dict[str, int]:
+        """Medicine-level counts for the dashboard stat cards / filter
+        chips - each medicine counted at most once per category, matching
+        `search`'s own per-medicine (not per-batch) categorization."""
+        thresholds = await _get_thresholds(self.session, clinic_id)
+        medicines = await self.repo.list_all_active_with_batches(clinic_id)
+        today = date.today()
+
+        counts = {"expiring_soon": 0, "expired": 0, "low_stock": 0, "out_of_stock": 0}
+        for medicine in medicines:
+            categories = _medicine_stock_categories(medicine, thresholds, today=today)
+            if "near_expiry" in categories:
+                counts["expiring_soon"] += 1
+            if "expired" in categories:
+                counts["expired"] += 1
+            if "low_stock" in categories:
+                counts["low_stock"] += 1
+            if "out_of_stock" in categories:
+                counts["out_of_stock"] += 1
+        return counts
 
     async def get(self, medicine_id: UUID, clinic_id: UUID) -> Medicine:
         medicine = await self.repo.get_by_id_and_clinic(medicine_id, clinic_id)

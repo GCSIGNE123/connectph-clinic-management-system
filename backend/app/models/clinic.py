@@ -9,7 +9,7 @@ clinic row IS the settings record (see docs/DATABASE.md).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -70,6 +70,20 @@ class Clinic(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, LegacyMixin, 
     require_head_circumference: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # Medicine Inventory Phase 3 (Expiry Alerts): clinic-configurable
+    # warning-day thresholds, following the exact same pattern as
+    # `require_head_circumference` above - the clinic row IS the settings
+    # record, so a new configurable value is just a new column here.
+    # tier1 = longest lead time / least urgent ... tier4 = shortest lead
+    # time / most urgent; validated descending (tier1 > tier2 > tier3 >
+    # tier4) in `schemas/clinic.py`. Defaults (90/60/30/7) match the spec's
+    # recommended values and apply to every existing clinic with no
+    # migration data-fill needed.
+    medicine_expiry_warning_days_tier1: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
+    medicine_expiry_warning_days_tier2: Mapped[int] = mapped_column(Integer, nullable=False, default=60, server_default="60")
+    medicine_expiry_warning_days_tier3: Mapped[int] = mapped_column(Integer, nullable=False, default=30, server_default="30")
+    medicine_expiry_warning_days_tier4: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
 
     branches: Mapped[list["Branch"]] = relationship(
         back_populates="clinic", cascade="all, delete-orphan"

@@ -17,7 +17,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.middleware.request_logging import RequestLoggingMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
-from app.services import connectivity_service, sync_worker_service
+from app.services import connectivity_service, medicine_expiry_service, sync_worker_service
 
 
 class JSONLogFormatter(logging.Formatter):
@@ -65,9 +65,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # `DEPLOYMENT_MODE=local` (CLOUD_API_URL unset), it runs but is always a
     # no-op - see sync_worker_service.py's module docstring.
     sync_worker_service.start_background_loop()
+    # Medicine Inventory Phase 3: hourly poll, internally guarded to run at
+    # most once per (UTC) day per clinic - see medicine_expiry_service.py's
+    # module docstring for the full concurrency/idempotency design.
+    medicine_expiry_service.start_background_loop()
     try:
         yield
     finally:
+        medicine_expiry_service.stop_background_loop()
         sync_worker_service.stop_background_loop()
         connectivity_service.stop_background_loop()
 
