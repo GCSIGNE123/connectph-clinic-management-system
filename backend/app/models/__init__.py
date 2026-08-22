@@ -86,6 +86,7 @@ from app.models.patient_account import (
     PatientNotificationType,
     PatientPasswordResetToken,
 )
+from app.models.pathologist import Pathologist
 from app.models.payment import Payment, PaymentMethod, PaymentStatus, Refund
 from app.models.permission import Permission
 from app.models.prescription import Prescription, PrescriptionItem, PrescriptionStatus
@@ -192,6 +193,7 @@ __all__ = [
     "OrderPriority",
     "OrderStatus",
     "ORDER_STATUS_TRANSITIONS",
+    "Pathologist",
     "Patient",
     "PatientStatus",
     "NotificationChannel",

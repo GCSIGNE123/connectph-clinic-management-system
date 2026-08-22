@@ -106,6 +106,13 @@ class MeResponse(BaseModel):
     is_active: bool
     created_at: str
     updated_at: str
+    # Round 6 (Laboratory Report Signatories): a Laboratory-role user's own
+    # professional license/registration number, plus whether they currently
+    # have an e-signature configured (never the raw stored filename - the
+    # signature image itself is fetched via the authenticated
+    # `/auth/me/signature/file` endpoint, same pattern as Doctor e-signatures).
+    license_number: str | None = None
+    has_signature: bool = False
 
 
 class UpdateOwnProfileRequest(BaseModel):
@@ -117,6 +124,10 @@ class UpdateOwnProfileRequest(BaseModel):
     middle_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     mobile_number: str | None = Field(default=None, max_length=20)
+    # Round 6: a Laboratory-role user's own professional license/
+    # registration number, printed under their signature on the Laboratory
+    # Report when they release results as Med Tech In Charge.
+    license_number: str | None = Field(default=None, max_length=50)
 
     @field_validator("mobile_number")
     @classmethod

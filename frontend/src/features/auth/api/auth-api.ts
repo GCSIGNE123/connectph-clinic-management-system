@@ -1,4 +1,4 @@
-import { apiClient, tokenStorage } from "@/lib/api-client";
+import { apiClient, apiFetchBlob, apiUploadFile, tokenStorage } from "@/lib/api-client";
 import type { AuthSession, AuthTokens, Branch, Clinic, User } from "@/types";
 import type {
   ForgotPasswordInput,
@@ -41,6 +41,8 @@ interface RawMe {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  license_number: string | null;
+  has_signature: boolean;
 }
 
 function toTokens(raw: RawTokenResponse): AuthTokens {
@@ -88,6 +90,8 @@ function toUser(raw: RawMe): User {
     isActive: raw.is_active,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+    licenseNumber: raw.license_number,
+    hasSignature: raw.has_signature,
   };
 }
 
@@ -131,12 +135,14 @@ export const authApi = {
     middleName?: string | null;
     lastName?: string;
     mobileNumber?: string | null;
+    licenseNumber?: string | null;
   }): Promise<User> {
     const raw = await apiClient.patch<RawMe>("/auth/me", {
       first_name: input.firstName,
       middle_name: input.middleName,
       last_name: input.lastName,
       mobile_number: input.mobileNumber,
+      license_number: input.licenseNumber,
     });
     return toUser(raw);
   },
@@ -146,6 +152,26 @@ export const authApi = {
       current_password: input.currentPassword,
       new_password: input.newPassword,
     });
+  },
+
+  // --- Med Tech In Charge e-signature (Round 6) - self-service only, same
+  // reasoning as `updateProfile` above (always acts on the caller's own
+  // account). ---
+
+  async uploadSignature(file: File): Promise<User> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const raw = await apiUploadFile<RawMe>("/auth/me/signature", formData);
+    return toUser(raw);
+  },
+
+  async removeSignature(): Promise<User> {
+    const raw = await apiClient.delete<RawMe>("/auth/me/signature");
+    return toUser(raw);
+  },
+
+  getSignatureBlob(): Promise<Blob> {
+    return apiFetchBlob("/auth/me/signature/file");
   },
 
   async forgotPassword(input: ForgotPasswordInput): Promise<void> {

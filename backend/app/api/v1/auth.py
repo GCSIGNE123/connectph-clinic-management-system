@@ -1,11 +1,16 @@
 """Authentication endpoints."""
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+import uuid
+
+from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.dependencies import get_current_user, get_db
+from app.core.dependencies import get_current_user, get_db, require_lab_manage_role
+from app.core.doctor_signature_storage import USER_SIGNATURES_UPLOAD_ROOT, resolve_user_signature_path
 from app.core.rate_limit import rate_limit_forgot_password, rate_limit_login
+from app.core.upload_validation import validate_upload_request
 from app.models.user import User
 from app.schemas.auth import (
     ChangeOwnPasswordRequest,
@@ -208,6 +213,8 @@ async def me(
         is_active=current_user.is_active,
         created_at=current_user.created_at.isoformat(),
         updated_at=current_user.updated_at.isoformat(),
+        license_number=current_user.license_number,
+        has_signature=current_user.signature_url is not None,
     )
 
 
@@ -236,3 +243,70 @@ async def change_own_password(
     service = UserService(db)
     await service.change_own_password(payload, actor=current_user)
     return {"detail": "Password changed. Please sign in again on other devices."}
+
+
+# --- Med Tech In Charge e-signature (Round 6: Laboratory Report
+# Signatories) ---
+#
+# Self-service only - every endpoint here acts on `current_user`, never a
+# client-supplied user id, so there is no separate ownership check to
+# enforce (unlike Doctor signatures, where Owner/Administrator may manage
+# ANY doctor's - a Laboratory user has no equivalent admin-override need,
+# since only the releasing user's OWN signature is ever meaningful as Med
+# Tech In Charge). Gated to `require_lab_manage_role` (Owner/Administrator/
+# Laboratory) - the same role set allowed to release Laboratory results in
+# the first place, so only accounts that can actually become "Med Tech In
+# Charge" can configure a signature at all.
+
+SIGNATURE_MAX_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB - same cap as Doctor/Pathologist e-signature uploads
+
+
+@router.post("/me/signature", response_model=MeResponse)
+async def upload_own_signature(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_lab_manage_role),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    file_name = file.filename or "signature.png"
+    content = await file.read()
+    validate_upload_request(
+        file_name=file_name, file_size_bytes=len(content),
+        allowed_extensions={".png"}, max_size_bytes=SIGNATURE_MAX_SIZE_BYTES,
+    )
+    if len(content) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+
+    replaced = current_user.signature_url is not None
+    stored_filename = f"{uuid.uuid4().hex}.png"
+    clinic_dir = USER_SIGNATURES_UPLOAD_ROOT / str(current_user.clinic_id) / str(current_user.id)
+    clinic_dir.mkdir(parents=True, exist_ok=True)
+    (clinic_dir / stored_filename).write_bytes(content)
+
+    # Old file (if replacing) intentionally left on disk - a Laboratory
+    # order may have already snapshotted the stored filename BEFORE this
+    # replace (see migration 0040) and must keep resolving it on reprint.
+    service = UserService(db)
+    await service.set_own_signature(actor=current_user, stored_filename=stored_filename, replaced=replaced)
+    return await me(current_user=current_user, db=db)
+
+
+@router.get("/me/signature/file")
+async def get_own_signature_file(
+    current_user: User = Depends(require_lab_manage_role),
+) -> FileResponse:
+    if not current_user.signature_url:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You have no signature configured.")
+    file_path = resolve_user_signature_path(current_user.clinic_id, current_user.id, current_user.signature_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
+
+
+@router.delete("/me/signature", response_model=MeResponse)
+async def remove_own_signature(
+    current_user: User = Depends(require_lab_manage_role),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    service = UserService(db)
+    await service.remove_own_signature(actor=current_user)
+    return await me(current_user=current_user, db=db)

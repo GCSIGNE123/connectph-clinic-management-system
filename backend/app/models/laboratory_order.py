@@ -75,7 +75,38 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # `released_by` is also this order's Med Tech In Charge identity source
+    # (Round 6: Laboratory Report Signatories) - the Laboratory-role user
+    # who performs the release IS the Med Tech in Charge; no separate
+    # "med tech" selector/concept was introduced. See
+    # `LaboratoryService.release_results` for where the signatory snapshot
+    # below is captured, and `med_tech_name_snapshot`/
+    # `med_tech_signature_snapshot_url` for why the snapshot exists at all
+    # alongside this live FK.
     released_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # --- Round 6: Laboratory Report Signatories ---
+    # Pathologist is selected as part of the release workflow (never at
+    # print time) and captured with a full identity+signature snapshot at
+    # that moment - the same "snapshot, never re-resolve" convention the
+    # existing Doctor E-Signature feature already uses for Prescription/
+    # Referral/Medical Certificate (see migration 0036 and
+    # `MedicalCertificateService.issue`). A later edit to the Pathologist's
+    # signature/name, or to the releasing user's own signature/name, or a
+    # later change of which Pathologist is currently selected for NEW
+    # releases, must never alter an already-released report - only the
+    # snapshot columns are ever read for printing; `pathologist_id` is kept
+    # solely for traceability/UI convenience (e.g. "who was selected"),
+    # never re-joined for report rendering.
+    pathologist_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pathologists.id", ondelete="SET NULL"), nullable=True
+    )
+    med_tech_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    med_tech_license_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    med_tech_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    pathologist_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pathologist_license_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pathologist_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     invoice_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoice_items.id", ondelete="SET NULL"), nullable=True
@@ -86,6 +117,7 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["Doctor"] = relationship()
     template: Mapped["LaboratoryTemplate"] = relationship()
+    pathologist: Mapped["Pathologist | None"] = relationship()
     results: Mapped[list["LaboratoryResult"]] = relationship(back_populates="laboratory_order", cascade="all, delete-orphan")
     attachments: Mapped[list["LaboratoryAttachment"]] = relationship(back_populates="laboratory_order", cascade="all, delete-orphan")
 

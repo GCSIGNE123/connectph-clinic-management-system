@@ -73,6 +73,16 @@ function toOrder(raw: any): LaboratoryOrder {
     results: (raw.results ?? []).map(toResult),
     attachments: (raw.attachments ?? []).map(toAttachment),
     clinicName: raw.clinic_name ?? null,
+    clinicAddress: raw.clinic_address ?? null,
+    clinicPhone: raw.clinic_phone ?? null,
+    clinicEmail: raw.clinic_email ?? null,
+    pathologistId: raw.pathologist_id ?? null,
+    medTechNameSnapshot: raw.med_tech_name_snapshot ?? null,
+    medTechLicenseSnapshot: raw.med_tech_license_snapshot ?? null,
+    medTechSignatureSnapshotUrl: raw.med_tech_signature_snapshot_url ?? null,
+    pathologistNameSnapshot: raw.pathologist_name_snapshot ?? null,
+    pathologistLicenseSnapshot: raw.pathologist_license_snapshot ?? null,
+    pathologistSignatureSnapshotUrl: raw.pathologist_signature_snapshot_url ?? null,
     updatedAt: raw.updated_at,
   };
 }
@@ -176,7 +186,14 @@ export const laboratoryApi = {
       })
       .then(toOrder),
 
-  releaseResults: (id: string) => apiClient.post<any>(`/laboratory/orders/${id}/release`).then(toOrder),
+  // Round 6: Pathologist selection happens HERE, at release time - never
+  // at print time. Omitting `pathologistId` preserves the pre-existing
+  // release behavior (no pathologist concept at all).
+  releaseResults: (id: string, pathologistId?: string | null) =>
+    apiClient.post<any>(`/laboratory/orders/${id}/release`, pathologistId ? { pathologist_id: pathologistId } : {}).then(toOrder),
+
+  getMedTechSignatureBlob: (id: string): Promise<Blob> => apiFetchBlob(`/laboratory/orders/${id}/med-tech-signature/file`),
+  getPathologistSignatureBlob: (id: string): Promise<Blob> => apiFetchBlob(`/laboratory/orders/${id}/pathologist-signature/file`),
 
   cancelOrder: (id: string) => apiClient.post<any>(`/laboratory/orders/${id}/cancel`).then(toOrder),
 

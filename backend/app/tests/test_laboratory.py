@@ -3065,6 +3065,80 @@ async def test_phase_4g_list_endpoints_do_not_populate_clinic_name(
     assert for_visit[0].get("clinic_name") is None
 
 
+# --- Round 5: Laboratory Report header contact info (clinic address/phone/
+# email) - same additive, GET-order-only convention as `clinic_name` above.
+# Sourced from the existing `Clinic.address`/`city`/`province` and
+# `telephone`/`mobile`/`email` columns (Phase 4 clinic-settings fields
+# already exposed by `GET /clinic-settings`), no new database columns. ---
+
+
+async def test_round5_get_order_includes_clinic_contact_fields_for_report_header(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """`GET /laboratory/orders/{id}` also returns `clinic_address`/
+    `clinic_phone`/`clinic_email`, joined/resolved from the existing Clinic
+    columns already editable via Clinic Settings - no new columns."""
+    from app.models.clinic import Clinic
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    clinic_row = (await db_session.execute(select(Clinic).where(Clinic.id == ctx["clinic"].id))).scalar_one()
+    clinic_row.address = "123 Main Street"
+    clinic_row.city = "Ormoc City"
+    clinic_row.province = "Leyte"
+    clinic_row.telephone = "0917-123-4567"
+    clinic_row.mobile = "0918-999-0000"
+    clinic_row.email = "clinic@canora.com"
+    await db_session.commit()
+
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])).json()
+    assert order["clinic_address"] == "123 Main Street, Ormoc City, Leyte"
+    # Telephone is preferred over mobile when both are configured.
+    assert order["clinic_phone"] == "0917-123-4567"
+    assert order["clinic_email"] == "clinic@canora.com"
+
+
+async def test_round5_clinic_phone_falls_back_to_mobile_when_telephone_unset(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Only `mobile` configured (no `telephone`) - the report still gets a
+    contact number rather than going blank when one of the two is unset."""
+    from app.models.clinic import Clinic
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    clinic_row = (await db_session.execute(select(Clinic).where(Clinic.id == ctx["clinic"].id))).scalar_one()
+    clinic_row.telephone = None
+    clinic_row.mobile = "0918-999-0000"
+    await db_session.commit()
+
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])).json()
+    assert order["clinic_phone"] == "0918-999-0000"
+
+
+async def test_round5_missing_clinic_contact_fields_stay_null_not_fabricated(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A freshly-created clinic (via `make_clinic_with_owner`, which sets
+    only name/slug) has no address/phone/email configured - the report
+    fields must come back null, never a fabricated placeholder string."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])).json()
+    assert order["clinic_address"] is None
+    assert order["clinic_phone"] is None
+    assert order["clinic_email"] is None
+
+
+async def test_round5_list_endpoints_do_not_populate_clinic_contact_fields(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """`clinic_address`/`clinic_phone`/`clinic_email` are additive and
+    scoped to the single-order GET only, exactly like `clinic_name`."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    listed = (await client.get(f"/api/v1/laboratory/orders?visit_id={ctx['visit_id']}", headers=ctx["owner_headers"])).json()
+    assert listed[0].get("clinic_address") is None
+    assert listed[0].get("clinic_phone") is None
+    assert listed[0].get("clinic_email") is None
+
+
 async def test_phase_4g_report_data_source_unaffected_for_cbc_blood_typing_urinalysis_and_phase_4c_4d(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:

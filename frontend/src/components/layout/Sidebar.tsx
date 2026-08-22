@@ -32,6 +32,7 @@ import {
   Wallet,
   Wifi,
   Pill,
+  PenTool,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/types";
@@ -94,6 +95,9 @@ const CONFIG_NAV_ITEMS: (NavItem & { icon: ComponentType<{ className?: string }>
   { label: "Operating Hours", href: "/operating-hours", icon: CalendarClock },
   { label: "Holidays", href: "/holidays", icon: CalendarDays },
   { label: "Laboratory Templates", href: "/laboratory-templates", icon: FlaskConical },
+  // Round 6 (Laboratory Report Signatories): Pathologist master data +
+  // e-signature configuration - same master-data nav placement as Doctors.
+  { label: "Pathologists", href: "/pathologists", icon: PenTool },
   // Client Acceptance Revisions - Round 2 (HIGH item 4): per-browser
   // preference (paper size + a "preferred printer" reminder label), stored
   // in localStorage - not role-gated, since it's a local device preference

@@ -27,6 +27,7 @@ from app.api.v1 import (
     migration,
     notifications,
     operating_hours,
+    pathologists,
     patients,
     queue_settings,
     queues,
@@ -60,6 +61,7 @@ api_router.include_router(queue_settings.router)
 api_router.include_router(operating_hours.router)
 api_router.include_router(holidays.router)
 api_router.include_router(medicines.router)
+api_router.include_router(pathologists.router)
 
 # Medicine Inventory Phase 3: Expiry Alerts & Notifications
 api_router.include_router(notifications.router)

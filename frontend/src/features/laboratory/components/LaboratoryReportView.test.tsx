@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaboratoryReportView } from "./LaboratoryReportView";
 import type { LaboratoryOrder, LaboratoryResult, LaboratoryTemplateParameter } from "@/features/laboratory/types";
+
+URL.createObjectURL = vi.fn(() => "blob:mock-url");
+URL.revokeObjectURL = vi.fn();
+
+const mockFetchBlob = vi.fn();
+vi.mock("@/lib/api-client", () => ({
+  apiFetchBlob: (...args: unknown[]) => mockFetchBlob(...args),
+}));
 
 function result(overrides: Partial<LaboratoryResult> = {}): LaboratoryResult {
   return {
@@ -325,9 +334,12 @@ describe("LaboratoryReportView", () => {
       expect(row).toHaveTextContent("-");
     });
 
-    it("renders the clinic-approved administrative note (system-generated, no signature required; ranges may vary)", () => {
+    it("renders the clinic-approved administrative note (system-generated; ranges may vary)", () => {
+      // Round 6: "does not require a signature" was removed from this note
+      // now that the report actually supports real Med Tech/Pathologist
+      // signatures - see the Round 6 implementation report.
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      expect(screen.getByText(/system-generated and does not require a signature/i)).toBeInTheDocument();
+      expect(screen.getByText(/this report is system-generated/i)).toBeInTheDocument();
       expect(screen.getByText(/reference ranges may vary/i)).toBeInTheDocument();
     });
 
@@ -590,6 +602,240 @@ describe("LaboratoryReportView", () => {
       expect(screen.queryByText("L")).not.toBeInTheDocument();
       expect(screen.queryByText("H")).not.toBeInTheDocument();
       expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Laboratory Report print redesign, round 5 (clinic contact info in header)", () => {
+    it("1: the clinic address appears in the header when configured", () => {
+      render(<LaboratoryReportView order={order({ clinicAddress: "123 Main Street, Ormoc City, Leyte" })} />);
+      expect(screen.getByText(/123 Main Street, Ormoc City, Leyte/)).toBeInTheDocument();
+    });
+
+    it("2: the clinic contact number appears when configured", () => {
+      render(<LaboratoryReportView order={order({ clinicPhone: "0917-123-4567" })} />);
+      expect(screen.getByText(/0917-123-4567/)).toBeInTheDocument();
+    });
+
+    it("3: the clinic email appears when configured", () => {
+      render(<LaboratoryReportView order={order({ clinicEmail: "clinic@canora.com" })} />);
+      expect(screen.getByText(/clinic@canora.com/)).toBeInTheDocument();
+    });
+
+    it("4: all three appear together, in order, between the clinic name and 'Laboratory Report'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicName: "Canora Medical Clinic & Laboratory",
+            clinicAddress: "123 Main Street, Ormoc City, Leyte",
+            clinicPhone: "0917-123-4567",
+            clinicEmail: "clinic@canora.com",
+          })}
+        />
+      );
+      const contactLine = screen.getByText("123 Main Street, Ormoc City, Leyte • 0917-123-4567 • clinic@canora.com");
+      expect(contactLine).toBeInTheDocument();
+      const clinicName = screen.getByText("Canora Medical Clinic & Laboratory");
+      const reportTitle = screen.getByText("Laboratory Report");
+      // DOM order within the same container proves the required visual
+      // order: clinic name, then contact line, then "Laboratory Report".
+      const position = (node: Element) =>
+        Array.from(node.parentElement!.children).indexOf(node);
+      expect(position(clinicName)).toBeLessThan(position(contactLine));
+      expect(position(contactLine)).toBeLessThan(position(reportTitle));
+    });
+
+    it("5: values are read from the order's existing clinic configuration fields, not hard-coded", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicAddress: "456 Different Avenue, Tacloban City",
+            clinicPhone: "032-888-9999",
+            clinicEmail: "other@differentclinic.ph",
+          })}
+        />
+      );
+      expect(screen.getByText(/456 Different Avenue, Tacloban City/)).toBeInTheDocument();
+      expect(screen.getByText(/032-888-9999/)).toBeInTheDocument();
+      expect(screen.getByText(/other@differentclinic\.ph/)).toBeInTheDocument();
+      // Proves nothing static/hard-coded is rendered instead - a
+      // differently-configured clinic's own values show up verbatim.
+      expect(screen.queryByText(/123 Main Street/)).not.toBeInTheDocument();
+    });
+
+    it("6: a missing clinic address does not render fake/placeholder address text", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ clinicAddress: null, clinicPhone: "0917-123-4567", clinicEmail: "clinic@canora.com" })}
+        />
+      );
+      expect(screen.getByText("0917-123-4567 • clinic@canora.com")).toBeInTheDocument();
+      expect(screen.queryByText(/N\/A|Not configured|Unknown address/i)).not.toBeInTheDocument();
+    });
+
+    it("7: a missing clinic phone does not render fake/placeholder contact text", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ clinicAddress: "123 Main Street, Ormoc City, Leyte", clinicPhone: null, clinicEmail: "clinic@canora.com" })}
+        />
+      );
+      expect(screen.getByText("123 Main Street, Ormoc City, Leyte • clinic@canora.com")).toBeInTheDocument();
+      expect(screen.queryByText(/N\/A|Not configured|Unknown/i)).not.toBeInTheDocument();
+    });
+
+    it("8: a missing clinic email does not render fake/placeholder email text", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ clinicAddress: "123 Main Street, Ormoc City, Leyte", clinicPhone: "0917-123-4567", clinicEmail: null })}
+        />
+      );
+      expect(screen.getByText("123 Main Street, Ormoc City, Leyte • 0917-123-4567")).toBeInTheDocument();
+      expect(screen.queryByText(/N\/A|Not configured|Unknown/i)).not.toBeInTheDocument();
+    });
+
+    it("9: separator formatting stays clean (no double/dangling bullets) with only one field configured, and no line at all with zero configured", () => {
+      const { rerender, container } = render(
+        <LaboratoryReportView order={order({ clinicAddress: "Only Address Here", clinicPhone: null, clinicEmail: null })} />
+      );
+      expect(screen.getByText("Only Address Here")).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/•\s*•/);
+      expect(container.textContent).not.toMatch(/^\s*•|•\s*$/);
+
+      rerender(<LaboratoryReportView order={order({ clinicAddress: null, clinicPhone: null, clinicEmail: null })} />);
+      expect(container.querySelector("#laboratory-report-body")?.textContent).not.toContain("•");
+    });
+
+    it("10: the existing clinic name still renders correctly alongside the new contact line", () => {
+      render(<LaboratoryReportView order={order({ clinicName: "Canora Medical Clinic & Laboratory", clinicAddress: "Some Address" })} />);
+      expect(screen.getByText("Canora Medical Clinic & Laboratory")).toBeInTheDocument();
+    });
+
+    it("11: 'Laboratory Report' remains present in the header", () => {
+      render(<LaboratoryReportView order={order({ clinicAddress: "Some Address", clinicPhone: "0917-000-0000" })} />);
+      expect(screen.getByText("Laboratory Report")).toBeInTheDocument();
+    });
+
+    it("12: the existing five-column result table is unaffected by the new header line", () => {
+      render(<LaboratoryReportView order={order({ clinicAddress: "Some Address", results: [result()] })} />);
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+    });
+
+    it("13: table width still sums to 100% and carries no horizontal-overflow classes with the contact line present", () => {
+      render(<LaboratoryReportView order={order({ clinicAddress: "Some Address", clinicPhone: "0917-000-0000", clinicEmail: "a@b.com", results: [result()] })} />);
+      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const widths = Array.from(table.querySelectorAll("colgroup col")).map(
+        (col) => Number((col as HTMLElement).style.width.replace("%", ""))
+      );
+      expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
+      expect(table.className).toContain("w-full");
+      expect(table.className).toContain("max-w-full");
+    });
+
+    it("14: historical results still print their own persisted values unchanged, regardless of the new contact line", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicAddress: "Some Address",
+            template: { id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0, turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z", parameters: [param()] },
+            results: [result({ normalRange: "12.0-16.0 (historical)", units: "g/dL", interpretation: "Low" })],
+          })}
+        />
+      );
+      expect(screen.getByText("12.0-16.0 (historical)")).toBeInTheDocument();
+      expect(screen.getByText("g/dL")).toBeInTheDocument();
+      expect(screen.getByText("L")).toBeInTheDocument();
+    });
+  });
+
+  describe("Laboratory Report print redesign, round 6 (Med Tech + Pathologist signatories)", () => {
+    function renderWithClient(ui: React.ReactElement) {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+    }
+
+    it("5: the signatory block renders in the report when a Med Tech was captured at release", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView order={order({ medTechNameSnapshot: "Maria Cruz", medTechLicenseSnapshot: "MT-001" })} />
+      );
+      expect(screen.getByTestId("med-tech-signatory")).toBeInTheDocument();
+      expect(screen.getByText("Maria Cruz")).toBeInTheDocument();
+      expect(screen.getByText("Medical Technologist")).toBeInTheDocument();
+      expect(screen.getByText("Lic. No. MT-001")).toBeInTheDocument();
+    });
+
+    it("6: the signature image is fetched and rendered ABOVE the printed name", async () => {
+      mockFetchBlob.mockReset().mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            medTechNameSnapshot: "Maria Cruz",
+            medTechSignatureSnapshotUrl: "sig-abc.png",
+          })}
+        />
+      );
+      await waitFor(() => expect(mockFetchBlob).toHaveBeenCalledWith("/laboratory/orders/lab-1/med-tech-signature/file"));
+      const img = await screen.findByAltText("Med Technician in Charge signature");
+      const name = screen.getByText("Maria Cruz");
+      const column = screen.getByTestId("med-tech-signatory");
+      const position = (node: Element) => Array.from(column.querySelectorAll("*")).indexOf(node);
+      expect(position(img)).toBeLessThan(position(name));
+    });
+
+    it("7/8: Med Tech renders in the LEFT column, Pathologist in the RIGHT column", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ medTechNameSnapshot: "Maria Cruz", pathologistNameSnapshot: "Dr. Santos" })}
+        />
+      );
+      const medTechColumn = screen.getByTestId("med-tech-signatory");
+      const pathologistColumn = screen.getByTestId("pathologist-signatory");
+      const grid = medTechColumn.parentElement as HTMLElement;
+      const children = Array.from(grid.children);
+      expect(children.indexOf(medTechColumn)).toBeLessThan(children.indexOf(pathologistColumn));
+      expect(medTechColumn).toHaveTextContent("Maria Cruz");
+      expect(pathologistColumn).toHaveTextContent("Dr. Santos");
+    });
+
+    it("9: a missing Med Tech signature image shows the name/role with a blank signature area, not a crash or fabricated image", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView order={order({ medTechNameSnapshot: "Maria Cruz", medTechSignatureSnapshotUrl: null })} />
+      );
+      expect(mockFetchBlob).not.toHaveBeenCalled();
+      expect(screen.queryByAltText("Med Technician in Charge signature")).not.toBeInTheDocument();
+      expect(screen.getByText("Maria Cruz")).toBeInTheDocument();
+    });
+
+    it("9b: a not-yet-released order (no signatories captured) renders no signatory block at all - never fabricated", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(<LaboratoryReportView order={order()} />);
+      expect(screen.queryByTestId("med-tech-signatory")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("pathologist-signatory")).not.toBeInTheDocument();
+    });
+
+    it("9c: a Pathologist selected with no signature configured shows the name but no fabricated image", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ pathologistNameSnapshot: "Dr. Santos", pathologistSignatureSnapshotUrl: null })}
+        />
+      );
+      expect(screen.queryByAltText("Pathologist signature")).not.toBeInTheDocument();
+      expect(screen.getByText("Dr. Santos")).toBeInTheDocument();
+    });
+
+    it("15: the existing five-column Flag format is unaffected by the new signatory block", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ medTechNameSnapshot: "Maria Cruz", results: [result({ interpretation: "Low" })] })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(screen.getByText("L")).toBeInTheDocument();
     });
   });
 });

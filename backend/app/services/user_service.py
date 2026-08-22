@@ -86,6 +86,34 @@ class UserService:
         await self.session.commit()
         return await self.user_repo.get_by_id_and_clinic(user.id, actor.clinic_id)
 
+    # --- Med Tech In Charge e-signature (Round 6: Laboratory Report
+    # Signatories) - self-service only, same "own account only" reasoning
+    # as `update_own_profile` above, mirroring `DoctorService.set_signature`
+    # /`remove_signature` for the upload/audit-log mechanics. There is no
+    # ownership check to enforce beyond "acts on `actor`, never a
+    # client-supplied user id" - a user can only ever reach these two
+    # methods for their OWN account. ---
+
+    async def set_own_signature(self, *, actor: User, stored_filename: str, replaced: bool) -> User:
+        user = await self.user_repo.update(actor, signature_url=stored_filename)
+        await self.audit_service.log_event(
+            clinic_id=actor.clinic_id, user_id=actor.id,
+            action="user_signature.replaced" if replaced else "user_signature.added",
+            entity_type="user", entity_id=str(actor.id), metadata={"stored_filename": stored_filename},
+        )
+        await self.session.commit()
+        return await self.user_repo.get_by_id_and_clinic(user.id, actor.clinic_id)
+
+    async def remove_own_signature(self, *, actor: User) -> User:
+        previous = actor.signature_url
+        user = await self.user_repo.update(actor, signature_url=None)
+        await self.audit_service.log_event(
+            clinic_id=actor.clinic_id, user_id=actor.id, action="user_signature.removed",
+            entity_type="user", entity_id=str(actor.id), metadata={"stored_filename": previous},
+        )
+        await self.session.commit()
+        return await self.user_repo.get_by_id_and_clinic(user.id, actor.clinic_id)
+
     async def change_own_password(self, payload: ChangeOwnPasswordRequest, *, actor: User) -> None:
         if not verify_password(payload.current_password, actor.hashed_password):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")

@@ -192,7 +192,16 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
  */
 export async function apiFetchBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
   const { skipAuth, skipRefresh, headers } = options;
-  const response = await performAuthedFetch(path, { method: "GET", headers }, { skipAuth, skipRefresh });
+  // Round 6 fix: these endpoints (signature/attachment files) are served
+  // from a STATIC url per entity (e.g. `/auth/me/signature/file`) that can
+  // point at different underlying bytes over time (a replaced signature),
+  // but the browser's HTTP cache has no way to know that - without
+  // `no-store` a same-session replace-then-reload can keep showing the
+  // PREVIOUS file's bytes even though the server-side pointer already
+  // moved on and react-query's own cache was correctly invalidated.
+  const response = await performAuthedFetch(
+    path, { method: "GET", headers, cache: "no-store" }, { skipAuth, skipRefresh }
+  );
   if (!response.ok) throw await toApiError(response);
   return response.blob();
 }

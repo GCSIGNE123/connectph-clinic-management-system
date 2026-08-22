@@ -110,6 +110,24 @@ export interface LaboratoryOrder {
   // (the single-order fetch the report view uses), null everywhere else
   // (listOrders/listForVisit/listForPatient/collect/etc.), unchanged.
   clinicName?: string | null;
+  // Round 5 (report header contact info): same additive/GET-order-only
+  // convention as `clinicName` above - existing `Clinic.address`/`city`/
+  // `province`/`telephone`/`mobile`/`email` columns, joined server-side.
+  clinicAddress?: string | null;
+  clinicPhone?: string | null;
+  clinicEmail?: string | null;
+  // Round 6 (Laboratory Report Signatories): captured ONCE at release,
+  // never re-resolved on reprint - see `LaboratoryOrder`'s backend model
+  // docstring. All `null` on an order that hasn't been released yet, or
+  // was released with no Pathologist selected / no signature configured
+  // at that moment (never fabricated).
+  pathologistId?: string | null;
+  medTechNameSnapshot?: string | null;
+  medTechLicenseSnapshot?: string | null;
+  medTechSignatureSnapshotUrl?: string | null;
+  pathologistNameSnapshot?: string | null;
+  pathologistLicenseSnapshot?: string | null;
+  pathologistSignatureSnapshotUrl?: string | null;
   // Phase 4I: optimistic-concurrency token - `ResultEntryDialog` echoes
   // this back as `expectedUpdatedAt` on save (see `enterResults` below),
   // so a save based on a stale snapshot (someone else saved first) is

@@ -11,6 +11,10 @@ import { useToast } from "@/components/ui/toast";
 import { useCurrentUser, authKeys } from "@/features/auth/hooks/use-current-user";
 import { authApi } from "@/features/auth/api/auth-api";
 import { ApiError } from "@/lib/api-client";
+import { Role } from "@/types";
+import { SignaturePanel } from "@/components/signature/SignaturePanel";
+
+const MED_TECH_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Laboratory]);
 
 const MOBILE_NUMBER_PATTERN = /^\+?[0-9]{7,15}$/;
 
@@ -36,6 +40,7 @@ export default function ProfilePage() {
     middleName: "",
     lastName: "",
     mobileNumber: "",
+    licenseNumber: "",
   });
 
   useEffect(() => {
@@ -45,8 +50,11 @@ export default function ProfilePage() {
       middleName: user.middleName ?? "",
       lastName: user.lastName,
       mobileNumber: user.mobileNumber ?? "",
+      licenseNumber: user.licenseNumber ?? "",
     });
   }, [user]);
+
+  const isMedTechEligible = Boolean(user && MED_TECH_ROLES.has(user.role));
 
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -69,6 +77,7 @@ export default function ProfilePage() {
         middleName: profileForm.middleName.trim() || null,
         lastName: profileForm.lastName.trim(),
         mobileNumber: profileForm.mobileNumber.trim() || null,
+        licenseNumber: profileForm.licenseNumber.trim() || null,
       });
     },
     onSuccess: (updated) => {
@@ -168,6 +177,17 @@ export default function ProfilePage() {
                 placeholder="e.g. +639171234567"
               />
             </div>
+            {isMedTechEligible ? (
+              <div className="space-y-2">
+                <Label htmlFor="license-number">License / registration number</Label>
+                <Input
+                  id="license-number"
+                  value={profileForm.licenseNumber}
+                  onChange={(e) => setProfileForm((f) => ({ ...f, licenseNumber: e.target.value }))}
+                  placeholder="e.g. MedTech License No."
+                />
+              </div>
+            ) : null}
           </div>
 
           <Button
@@ -225,6 +245,33 @@ export default function ProfilePage() {
           </Button>
         </CardContent>
       </Card>
+
+      {isMedTechEligible ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Med Tech In Charge E-Signature</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-4 text-sm text-muted-foreground">
+              When you release Laboratory results, this signature prints on the report as the Med
+              Tech In Charge. Only you can configure your own signature.
+            </p>
+            <SignaturePanel
+              hasSignature={Boolean(user?.hasSignature)}
+              previewQueryKey={["own-signature-preview", user?.id]}
+              getBlob={() => authApi.getSignatureBlob()}
+              upload={async (file) => {
+                const updated = await authApi.uploadSignature(file);
+                queryClient.setQueryData(authKeys.currentUser, updated);
+              }}
+              remove={async () => {
+                const updated = await authApi.removeSignature();
+                queryClient.setQueryData(authKeys.currentUser, updated);
+              }}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

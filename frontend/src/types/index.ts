@@ -56,6 +56,12 @@ export interface User {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  // Round 6 (Laboratory Report Signatories): a Laboratory-role user's own
+  // professional license/registration number + whether they have an
+  // e-signature configured (fetched via `/auth/me/signature/file`, never
+  // exposed as a raw filename here).
+  licenseNumber?: string | null;
+  hasSignature?: boolean;
 }
 
 export interface AuthTokens {

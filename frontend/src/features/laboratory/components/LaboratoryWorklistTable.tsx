@@ -8,8 +8,9 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
 import { ResultEntryDialog } from "@/features/laboratory/components/ResultEntryDialog";
 import { LaboratoryReportDialog } from "@/features/laboratory/components/LaboratoryReportDialog";
+import { ReleaseResultsDialog } from "@/features/laboratory/components/ReleaseResultsDialog";
 import { REPORT_ELIGIBLE_STATUSES } from "@/features/laboratory/components/LaboratoryOrderDetailDialog";
-import { useCollectSpecimen, useStartProcessing, useReleaseResults } from "@/features/laboratory/hooks/use-laboratory";
+import { useCollectSpecimen, useStartProcessing } from "@/features/laboratory/hooks/use-laboratory";
 import { nextActionFor } from "@/features/laboratory/types";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 import { formatDate } from "@/lib/utils";
@@ -32,9 +33,9 @@ interface LaboratoryWorklistTableProps {
 export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }: LaboratoryWorklistTableProps) {
   const [resultOrder, setResultOrder] = useState<LaboratoryOrder | null>(null);
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
+  const [releaseOrderId, setReleaseOrderId] = useState<string | null>(null);
   const collect = useCollectSpecimen();
   const startProcessing = useStartProcessing();
-  const release = useReleaseResults();
 
   if (isLoading) {
     return (
@@ -106,7 +107,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
                       </Button>
                     )}
                     {action?.action === "release" && (
-                      <Button size="sm" onClick={() => release.mutate(order.id)} disabled={release.isPending}>
+                      <Button size="sm" onClick={() => setReleaseOrderId(order.id)}>
                         {action.label}
                       </Button>
                     )}
@@ -127,6 +128,11 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
       </Table>
       <ResultEntryDialog order={resultOrder} open={resultOrder !== null} onOpenChange={(open) => !open && setResultOrder(null)} />
       <LaboratoryReportDialog orderId={printOrderId} open={printOrderId !== null} onOpenChange={(open) => !open && setPrintOrderId(null)} />
+      <ReleaseResultsDialog
+        laboratoryOrderId={releaseOrderId}
+        open={releaseOrderId !== null}
+        onOpenChange={(open) => !open && setReleaseOrderId(null)}
+      />
     </>
   );
 }

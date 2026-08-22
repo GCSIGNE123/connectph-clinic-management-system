@@ -39,6 +39,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, TenantMixin, Le
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     mobile_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     profile_photo: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Laboratory Report signatories (Round 6): a Laboratory-role user's own
+    # professional license/registration number and e-signature, meaningful
+    # only for that role (same "nullable, only meaningful for one role"
+    # convention as `doctor_id` above). Reused generically on `User` rather
+    # than a separate "Med Tech" entity - the Med Tech in Charge IS the
+    # authenticated Laboratory user, so their signature belongs on their own
+    # account, self-managed like the rest of this profile.
+    license_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    signature_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True

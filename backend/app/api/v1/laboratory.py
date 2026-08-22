@@ -25,6 +25,7 @@ from app.core.dependencies import (
     require_lab_template_manage_role,
     require_lab_view_role,
 )
+from app.core.doctor_signature_storage import resolve_pathologist_signature_path, resolve_user_signature_path
 from app.core.upload_validation import validate_document_upload, validate_image_upload
 from app.models.clinic import Clinic
 from app.models.laboratory_attachment import LaboratoryAttachmentType
@@ -35,6 +36,7 @@ from app.schemas.laboratory import (
     LaboratoryReferenceRangeCreate,
     LaboratoryReferenceRangeRead,
     LaboratoryReferenceRangeUpdate,
+    LaboratoryReleaseRequest,
     LaboratoryResultsSubmit,
     LaboratoryTemplateCreate,
     LaboratoryTemplateRead,
@@ -94,7 +96,50 @@ async def get_order(
     # source); list/action endpoints are unaffected.
     clinic = await db.get(Clinic, clinic_id)
     order.clinic_name = clinic.name if clinic else None
+    # Round 5: same join convention `MedicalCertificateService._to_detail`
+    # already uses for `clinic_address` - existing columns, no new ones.
+    order.clinic_address = ", ".join(filter(None, [clinic.address, clinic.city, clinic.province])) or None if clinic else None
+    order.clinic_phone = (clinic.telephone or clinic.mobile) if clinic else None
+    order.clinic_email = clinic.email if clinic else None
     return order
+
+
+@router.get("/orders/{laboratory_order_id}/med-tech-signature/file")
+async def get_med_tech_signature_file(
+    laboratory_order_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_lab_view_role),
+) -> FileResponse:
+    """Serves the SNAPSHOTTED Med Tech In Charge signature captured at
+    `release_results()` time, never the releasing user's current one - same
+    convention as the Doctor E-Signature snapshot endpoints (migration
+    0036)."""
+    order = await LaboratoryService(db).get(laboratory_order_id, clinic_id=clinic_id)
+    if not order.med_tech_signature_snapshot_url or not order.released_by:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This order has no Med Tech signature.")
+    file_path = resolve_user_signature_path(clinic_id, order.released_by, order.med_tech_signature_snapshot_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
+
+
+@router.get("/orders/{laboratory_order_id}/pathologist-signature/file")
+async def get_pathologist_signature_snapshot_file(
+    laboratory_order_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_lab_view_role),
+) -> FileResponse:
+    """Serves the SNAPSHOTTED Pathologist signature captured at
+    `release_results()` time, never the Pathologist's current one."""
+    order = await LaboratoryService(db).get(laboratory_order_id, clinic_id=clinic_id)
+    if not order.pathologist_signature_snapshot_url or not order.pathologist_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This order has no Pathologist signature.")
+    file_path = resolve_pathologist_signature_path(clinic_id, order.pathologist_id, order.pathologist_signature_snapshot_url)
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signature file not found")
+    return FileResponse(file_path, media_type="image/png", filename="signature.png")
 
 
 @router.post("/orders/{laboratory_order_id}/collect", response_model=LaboratoryOrderRead)
@@ -135,11 +180,15 @@ async def enter_results(
 @router.post("/orders/{laboratory_order_id}/release", response_model=LaboratoryOrderRead)
 async def release_results(
     laboratory_order_id: UUID,
+    payload: LaboratoryReleaseRequest | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_lab_manage_role),
 ) -> LaboratoryOrderRead:
-    return await LaboratoryService(db).release_results(laboratory_order_id, clinic_id=clinic_id, actor_id=current_user.id)
+    return await LaboratoryService(db).release_results(
+        laboratory_order_id, clinic_id=clinic_id, actor_id=current_user.id,
+        pathologist_id=payload.pathologist_id if payload else None,
+    )
 
 
 @router.post("/orders/{laboratory_order_id}/cancel", response_model=LaboratoryOrderRead)

@@ -208,6 +208,17 @@ class LaboratoryOrderRead(BaseModel):
     # already uses), left unset (None) everywhere else (list/collect/
     # process/results/release responses), unchanged from before.
     clinic_name: str | None = None
+    # Round 5 (report header contact info): same additive/optional,
+    # `GET /laboratory/orders/{id}`-only convention as `clinic_name` above -
+    # sourced from the existing `Clinic.address`/`city`/`province` and
+    # `telephone`/`mobile`/`email` columns (Phase 4 clinic-settings fields),
+    # no new database columns. `clinic_address` is pre-joined server-side
+    # (same convention `MedicalCertificateService._to_detail` already uses
+    # for `clinic_address`); `clinic_phone` prefers `telephone` and falls
+    # back to `mobile` when only one is configured.
+    clinic_address: str | None = None
+    clinic_phone: str | None = None
+    clinic_email: str | None = None
     # Phase 4I: exposes the existing `TimestampMixin.updated_at` column -
     # the optimistic-concurrency token `LaboratoryResultsSubmit.
     # expected_updated_at` is checked against. No new column.
@@ -222,10 +233,37 @@ class LaboratoryOrderRead(BaseModel):
     completed_at: datetime | None = None
     released_at: datetime | None = None
     released_by: UUID | None = None
+    # Round 6 (Laboratory Report Signatories): captured ONCE at
+    # `release_results()` - see `laboratory_order.py`'s model docstring for
+    # the full snapshot rationale. All six are `None` on an order that
+    # hasn't been released yet, or was released with no Pathologist
+    # selected / no signature configured at that moment (never fabricated).
+    # `pathologist_id` is exposed for UI convenience only - report
+    # rendering must only ever use the snapshot fields below it.
+    pathologist_id: UUID | None = None
+    med_tech_name_snapshot: str | None = None
+    med_tech_license_snapshot: str | None = None
+    med_tech_signature_snapshot_url: str | None = None
+    pathologist_name_snapshot: str | None = None
+    pathologist_license_snapshot: str | None = None
+    pathologist_signature_snapshot_url: str | None = None
     invoice_item_id: UUID | None = None
     created_at: datetime
     results: list[LaboratoryResultRead] = Field(default_factory=list)
     attachments: list[LaboratoryAttachmentRead] = Field(default_factory=list)
+
+
+class LaboratoryReleaseRequest(BaseModel):
+    """Body for `POST /laboratory/orders/{id}/release`. Pathologist
+    selection happens HERE (release time), never at print time - see
+    `LaboratoryService.release_results`. Deliberately optional: omitting it
+    preserves the pre-existing release behavior (a lab order could always
+    be released with no pathologist concept at all before this feature)
+    rather than introducing a new hard requirement that could block an
+    otherwise-legitimate release. See the Round 6 implementation report,
+    section F, for the explicit decision this reflects."""
+
+    pathologist_id: UUID | None = None
 
 
 class LaboratoryDashboardStats(BaseModel):

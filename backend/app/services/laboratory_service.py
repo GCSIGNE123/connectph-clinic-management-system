@@ -32,6 +32,7 @@ from app.models.laboratory_reference_range import LaboratoryReferenceRange
 from app.models.laboratory_result import LaboratoryResultType
 from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES, LaboratoryTemplateParameter
 from app.models.order import Order, OrderCategory, OrderStatus
+from app.models.pathologist import Pathologist
 from app.models.patient import Patient
 from app.models.queue import QUEUE_STATUS_TRANSITIONS, QueueStatus
 from app.models.user import User
@@ -122,6 +123,13 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         completed_at=lab_order.completed_at,
         released_at=lab_order.released_at,
         released_by=lab_order.released_by,
+        pathologist_id=lab_order.pathologist_id,
+        med_tech_name_snapshot=lab_order.med_tech_name_snapshot,
+        med_tech_license_snapshot=lab_order.med_tech_license_snapshot,
+        med_tech_signature_snapshot_url=lab_order.med_tech_signature_snapshot_url,
+        pathologist_name_snapshot=lab_order.pathologist_name_snapshot,
+        pathologist_license_snapshot=lab_order.pathologist_license_snapshot,
+        pathologist_signature_snapshot_url=lab_order.pathologist_signature_snapshot_url,
         invoice_item_id=lab_order.invoice_item_id,
         created_at=lab_order.created_at,
         updated_at=lab_order.updated_at,
@@ -462,11 +470,47 @@ class LaboratoryService:
             note="Laboratory results released",
         )
 
-    async def release_results(self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> LaboratoryOrderRead:
+    async def release_results(
+        self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID, pathologist_id: UUID | None = None
+    ) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
         self._transition(lab_order, LaboratoryOrderStatus.RELEASED)
         now = datetime.now(UTC)
-        await self.repo.update_laboratory_order(lab_order, status=LaboratoryOrderStatus.RELEASED, released_at=now, released_by=actor_id)
+
+        # Round 6 (Laboratory Report Signatories): capture the Med Tech In
+        # Charge + Pathologist identity/signature snapshot HERE, at the one
+        # moment this order transitions to Released - never re-resolved on
+        # reprint (see the model docstring on `laboratory_order.py`). The
+        # releasing user (already gated to LAB_MANAGE_ROLES = Owner/
+        # Administrator/Laboratory at the API layer) IS the Med Tech In
+        # Charge; no separate selector exists or is needed.
+        med_tech = await self.session.get(User, actor_id)
+        pathologist_fields: dict = {
+            "pathologist_id": None, "pathologist_name_snapshot": None,
+            "pathologist_license_snapshot": None, "pathologist_signature_snapshot_url": None,
+        }
+        if pathologist_id is not None:
+            pathologist = await self.session.execute(
+                select(Pathologist).where(Pathologist.id == pathologist_id, Pathologist.clinic_id == clinic_id, Pathologist.is_deleted.is_(False))
+            )
+            pathologist = pathologist.scalar_one_or_none()
+            if pathologist is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pathologist not found")
+            if not pathologist.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected Pathologist is not active")
+            pathologist_fields = {
+                "pathologist_id": pathologist.id, "pathologist_name_snapshot": pathologist.name,
+                "pathologist_license_snapshot": pathologist.license_number,
+                "pathologist_signature_snapshot_url": pathologist.signature_url,
+            }
+
+        await self.repo.update_laboratory_order(
+            lab_order, status=LaboratoryOrderStatus.RELEASED, released_at=now, released_by=actor_id,
+            med_tech_name_snapshot=med_tech.full_name if med_tech else None,
+            med_tech_license_snapshot=med_tech.license_number if med_tech else None,
+            med_tech_signature_snapshot_url=med_tech.signature_url if med_tech else None,
+            **pathologist_fields,
+        )
         await self._sync_order_status(lab_order, clinic_id=clinic_id)
         await self.visit_repo.add_timeline_event(
             clinic_id=clinic_id, visit_id=lab_order.visit_id, event_type=VisitTimelineEventType.LAB_RESULTS_RELEASED,

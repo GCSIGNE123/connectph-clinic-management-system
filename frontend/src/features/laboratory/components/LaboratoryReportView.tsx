@@ -1,5 +1,6 @@
 import { FlaskConical } from "lucide-react";
 import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
+import { LaboratorySignatoryFooter } from "@/features/laboratory/components/LaboratorySignatoryFooter";
 import { buildReportRows, groupReportRowsBySection, reportResultValue } from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
@@ -37,6 +38,11 @@ const COLUMN_WIDTHS = { test: "30%", result: "14%", unit: "13%", normalValues: "
  * the Letter page the way the clinic's own Word-based report already did. */
 export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   const groups = groupReportRowsBySection(buildReportRows(order));
+  // Round 5: clinic contact line - bullet-joins only the fields that are
+  // actually configured (never a fake placeholder, never a dangling "•"
+  // for a missing field), sourced entirely from the existing clinic
+  // config carried on `order` alongside `clinicName`.
+  const contactLine = [order.clinicAddress, order.clinicPhone, order.clinicEmail].filter(Boolean).join(" • ");
 
   return (
     <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
@@ -44,6 +50,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
         <FlaskConical className="h-6 w-6 shrink-0 text-slate-700" aria-hidden />
         <div>
           {order.clinicName ? <p className="text-base font-bold uppercase tracking-wide text-slate-900 sm:text-lg">{order.clinicName}</p> : null}
+          {contactLine ? <p className="text-[9px] text-muted-foreground sm:text-[10px]">{contactLine}</p> : null}
           <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground sm:text-xs">Laboratory Report</p>
         </div>
       </div>
@@ -129,10 +136,18 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
       <div className="report-notes mt-3 rounded-sm border border-border px-2 py-1.5 text-[9px] text-muted-foreground sm:text-[10px]">
         <p className="mb-0.5 font-semibold uppercase tracking-wide text-slate-700">Note:</p>
         <ul className="list-disc space-y-0.5 pl-4">
-          <li>This report is system-generated and does not require a signature.</li>
+          <li>This report is system-generated.</li>
           <li>Reference ranges may vary based on age, sex, and clinical condition.</li>
         </ul>
       </div>
+
+      {/* Round 6 (Laboratory Report Signatories): Med Tech In Charge (left)
+          + Pathologist (right), captured once at release - see
+          `LaboratorySignatoryFooter`'s own docstring. Placed at the very
+          end of the report, after the result table and notes, per the
+          clinical-document convention the feature spec called for -
+          never repeated per page/section. */}
+      <LaboratorySignatoryFooter order={order} />
     </div>
   );
 }

@@ -130,7 +130,8 @@ export function useReleaseResults() {
   const { toast } = useToast();
   const invalidateAll = useInvalidateAllLabViews();
   return useMutation({
-    mutationFn: (id: string) => laboratoryApi.releaseResults(id),
+    mutationFn: ({ id, pathologistId }: { id: string; pathologistId?: string | null }) =>
+      laboratoryApi.releaseResults(id, pathologistId),
     onSuccess: (order) => {
       invalidateAll(order);
       toast({ title: "Results released", variant: "success" });
