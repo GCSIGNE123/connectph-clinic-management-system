@@ -39,19 +39,27 @@ export function PrintableDocumentDialog({
   onOpenChange,
   title,
   printableId,
+  defaultPaperSize,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   printableId: string;
+  /** Per-document initial paper size (e.g. the Laboratory Report always
+   * wants Letter, regardless of the clinic-wide stored preference which
+   * defaults to A4) - still fully overridable via the selector below, and
+   * still never writes back to the stored preference on its own. Omit to
+   * keep the existing behavior (starts at the stored default). */
+  defaultPaperSize?: PaperSize;
   children: React.ReactNode;
 }) {
   const { preferences, setPaperSize } = usePrintPreferences();
-  // Per-document override: starts at the stored default but doesn't write
-  // back to it unless the user visits Printer Settings - a one-off "print
-  // this one on Letter instead" shouldn't silently change the default.
-  const [paperSizeOverride, setPaperSizeOverride] = useState<PaperSize | null>(null);
+  // Per-document override: starts at the stored default (or `defaultPaperSize`
+  // when the caller specifies one) but doesn't write back to it unless the
+  // user visits Printer Settings - a one-off "print this one on Letter
+  // instead" shouldn't silently change the default.
+  const [paperSizeOverride, setPaperSizeOverride] = useState<PaperSize | null>(defaultPaperSize ?? null);
   const paperSize = paperSizeOverride ?? preferences.paperSize;
   const previewDims = PAPER_SIZE_PREVIEW_PX[paperSize];
 
@@ -135,9 +143,18 @@ export function PrintableDocumentDialog({
             position: fixed;
             top: 0;
             left: 0;
-            width: 100%;
+            /* !important: this element also carries an inline \`style\`
+               (the on-screen paper-preview width/min-height, e.g. 380px for
+               Letter) so it prints full-width as intended - an inline
+               style attribute otherwise always wins over any stylesheet
+               rule, \`#id\` selector or not, silently shrinking every
+               printed document (Prescription, Referral, Lab Request, Lab
+               Report) to that small preview box instead of the real page
+               width. */
+            width: 100% !important;
+            max-width: none !important;
             height: auto;
-            min-height: 0;
+            min-height: 0 !important;
             border: none;
             box-shadow: none;
           }

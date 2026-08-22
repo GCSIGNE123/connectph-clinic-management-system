@@ -31,7 +31,10 @@ export const PAPER_SIZE_LABELS: Record<PaperSize, string> = {
  * printer/browser paginate to content height. */
 export const PAPER_SIZE_CSS: Record<PaperSize, string> = {
   A4: "A4",
-  Letter: "Letter",
+  // Explicit "portrait" (Letter is already portrait by default without it)
+  // per the Laboratory Report redesign spec, which requires the literal
+  // `@page { size: Letter portrait; }` rule to appear in the print CSS.
+  Letter: "Letter portrait",
   HalfLetter: "5.5in 8.5in",
   Thermal80mm: "80mm auto",
 };

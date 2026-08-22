@@ -1,57 +1,121 @@
-import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
+import { FlaskConical } from "lucide-react";
+import { InterpretationText } from "@/features/laboratory/components/InterpretationBadge";
 import { buildReportRows, groupReportRowsBySection, reportResultValue } from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
+
+/** Med-tech-requested print redesign: five columns (TEST / RESULT / UNIT /
+ * NORMAL VALUES / ASSESSMENT), Result and Unit split into separate cells
+ * (previously one combined "14 g/dL" string), sized for the full width of
+ * a Letter/Short-Bond page via `table-layout: fixed` + explicit column
+ * percentages (`COLUMN_WIDTHS` below) rather than the narrow auto-sized
+ * table this replaces. Every cell still reads directly off the persisted
+ * `LaboratoryResult` (`units`/`normalRange`/`interpretation`) - never
+ * recalculated from the current template, so historical results keep
+ * printing exactly what was true when they were released, even if the
+ * template's reference ranges change later.
+ *
+ * Round 3 (clipping fix): ASSESSMENT widened slightly (18% -> 19%, taken
+ * from TEST 30% -> 28%) so the single word "ASSESSMENT" fits without
+ * relying solely on mid-word breaking - `break-words` on every `<th>`
+ * (added below) is the actual guarantee, this just makes it rare that a
+ * normal-width Assessment value ever needs to invoke it. */
+const COLUMN_WIDTHS = { test: "28%", result: "14%", unit: "12%", normalValues: "27%", assessment: "19%" };
 
 /** Phase 4G: generic, template-driven read-only laboratory report body -
  * every field comes from the already-fetched `LaboratoryOrder` (via
  * `getOrder`, the only call site that populates `clinicName`), grouped and
  * type-rendered purely from `order.template`/`order.results` metadata. No
  * `if testType === "..."` branch anywhere - a future 7th/8th laboratory
- * test renders through this exact same component with zero changes. */
+ * test renders through this exact same component with zero changes.
+ *
+ * Round 2 (clinic-approved reference layout): compact clinical-document
+ * spacing throughout (tight header, two-column info block, dense table
+ * rows, navy header band) instead of the airier first-pass redesign -
+ * still the exact same five columns/data sources, just laid out to use
+ * the Letter page the way the clinic's own Word-based report already did. */
 export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   const groups = groupReportRowsBySection(buildReportRows(order));
 
   return (
-    <div className="space-y-4">
-      <div className="text-center">
-        {order.clinicName ? <p className="text-base font-semibold">{order.clinicName}</p> : null}
-        <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Laboratory Report</p>
+    <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
+      <div className="flex items-center justify-center gap-2 pb-1 pt-0.5 text-center">
+        <FlaskConical className="h-6 w-6 shrink-0 text-slate-700" aria-hidden />
+        <div>
+          {order.clinicName ? <p className="text-base font-bold uppercase tracking-wide text-slate-900 sm:text-lg">{order.clinicName}</p> : null}
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground sm:text-xs">Laboratory Report</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-y border-border py-2 text-xs">
-        <Field label="Patient" value={order.patientName} />
-        <Field label="Test" value={order.testType} />
-        <Field label="Visit #" value={order.visitNumber} />
-        <Field label="Order #" value={order.orderNumber} />
-        <Field label="Doctor" value={order.doctorName} />
-        <Field label="Status" value={order.status} />
-        <Field label="Collected" value={order.collectedAt ? formatDateTime(order.collectedAt) : null} />
-        <Field label="Completed" value={order.completedAt ? formatDateTime(order.completedAt) : null} />
-        <Field label="Released" value={order.releasedAt ? formatDateTime(order.releasedAt) : null} />
+      <div className="grid min-w-0 grid-cols-2 gap-x-4 border-y-2 border-slate-800 py-1.5">
+        <div>
+          <InfoRow label="Patient Name" value={order.patientName} />
+          <InfoRow label="Test" value={order.testType} />
+          <InfoRow label="Visit #" value={order.visitNumber} />
+          <InfoRow label="Requesting Doctor" value={order.doctorName} />
+        </div>
+        <div>
+          <InfoRow label="Order No." value={order.orderNumber} />
+          <InfoRow label="Status" value={order.status} />
+          <InfoRow label="Collected" value={order.collectedAt ? formatDateTime(order.collectedAt) : null} />
+          <InfoRow label="Completed" value={order.completedAt ? formatDateTime(order.completedAt) : null} />
+          <InfoRow label="Released" value={order.releasedAt ? formatDateTime(order.releasedAt) : null} />
+        </div>
       </div>
 
-      <div className="space-y-3">
+      <div className="mt-2 space-y-2.5">
         {groups.map((group, groupIndex) => (
-          <div key={groupIndex} className="space-y-1">
+          <div key={groupIndex}>
             {group.section ? (
-              <h3 className="border-b border-border pb-0.5 text-xs font-semibold uppercase tracking-wide">{group.section}</h3>
+              <h3 className="section-heading mb-0.5 mt-1.5 border-b border-slate-400 pb-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-800 first:mt-0 sm:text-[11px]">
+                {group.section}
+              </h3>
             ) : null}
-            <table className="w-full text-sm">
+            <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: COLUMN_WIDTHS.test }} />
+                <col style={{ width: COLUMN_WIDTHS.result }} />
+                <col style={{ width: COLUMN_WIDTHS.unit }} />
+                <col style={{ width: COLUMN_WIDTHS.normalValues }} />
+                <col style={{ width: COLUMN_WIDTHS.assessment }} />
+              </colgroup>
+              <thead>
+                {/* `whitespace-normal break-words` on every header cell:
+                    without it, a single unbreakable word like "ASSESSMENT"
+                    or "NORMAL VALUES" simply overflows its `table-layout:
+                    fixed` column (browsers don't shrink the table to
+                    contain it, they let the text spill past the cell) -
+                    that overflow was the actual clipping bug, not the
+                    column width alone. Wrapping is the real fix; the wider
+                    ASSESSMENT column above just makes it rarely needed. */}
+                <tr className="report-table-head bg-slate-800 text-white">
+                  <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
+                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
+                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Normal Values</th>
+                  <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Assessment</th>
+                </tr>
+              </thead>
               <tbody>
                 {group.rows.map((row) =>
                   row.results.map((result, resultIndex) => (
-                    <tr key={`${row.parameterName}-${resultIndex}`} className="border-b border-border/50 last:border-0">
-                      <td className="py-1 pr-2 align-top">
+                    <tr key={`${row.parameterName}-${resultIndex}`} className="report-row border-b border-border/60 last:border-0">
+                      <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">
                         {row.parameterName}
                         {result.site ? <span className="text-muted-foreground"> ({result.site})</span> : null}
                       </td>
-                      <td className="py-1 pr-2 align-top">
+                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
                         {reportResultValue(result) ?? <span className="text-muted-foreground">-</span>}
-                        {result.units ? ` ${result.units}` : ""}
                       </td>
-                      <td className="py-1 pr-2 align-top text-muted-foreground">{result.normalRange ?? ""}</td>
-                      <td className="py-1 align-top">{result.interpretation ? <InterpretationBadge value={result.interpretation} /> : null}</td>
+                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
+                        {result.units ?? ""}
+                      </td>
+                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
+                        {result.normalRange ?? ""}
+                      </td>
+                      <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
+                        <InterpretationText value={result.interpretation} />
+                      </td>
                     </tr>
                   ))
                 )}
@@ -59,18 +123,40 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
             </table>
           </div>
         ))}
-        {groups.length === 0 ? <p className="text-sm text-muted-foreground">No results entered yet.</p> : null}
+        {groups.length === 0 ? <p className="py-2 text-muted-foreground">No results entered yet.</p> : null}
+      </div>
+
+      <div className="report-notes mt-3 rounded-sm border border-border px-2 py-1.5 text-[9px] text-muted-foreground sm:text-[10px]">
+        <p className="mb-0.5 font-semibold uppercase tracking-wide text-slate-700">Note:</p>
+        <ul className="list-disc space-y-0.5 pl-4">
+          <li>This report is system-generated and does not require a signature.</li>
+          <li>Reference ranges may vary based on age, sex, and clinical condition.</li>
+        </ul>
       </div>
     </div>
   );
 }
 
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
-  if (!value) return null;
+/** Always renders label + value (falling back to "-" rather than hiding
+ * the row) so the printed info block keeps its fixed, aligned shape even
+ * when a field genuinely has nothing persisted for it (e.g. no requesting
+ * doctor on a walk-in order) - matching the clinic-approved reference,
+ * which shows "-" rather than a gap.
+ *
+ * Round 3 (clipping fix): the value `<span>` is a flex item, and flex
+ * items default to `min-width: auto` - that floor means a long
+ * unbreakable-looking string like "08/22/2026 10:19 AM" refuses to
+ * shrink/wrap below its own natural width no matter how narrow the row
+ * gets, so it silently overflows the row (and everything containing it)
+ * instead of wrapping. `min-w-0` removes that floor so the value can wrap
+ * onto a second line exactly like the spec allows, rather than overflow
+ * and get visually cut off by the preview's scroll boundary. */
+function InfoRow({ label, value }: { label: string; value: string | null | undefined }) {
   return (
-    <p>
-      <span className="text-muted-foreground">{label}: </span>
-      <span className="font-medium">{value}</span>
-    </p>
+    <div className="flex gap-1 py-0.5">
+      <span className="w-[88px] shrink-0 text-muted-foreground sm:w-28">{label}</span>
+      <span className="shrink-0 text-muted-foreground">:</span>
+      <span className="min-w-0 flex-1 whitespace-normal break-words font-medium text-foreground">{value ?? "-"}</span>
+    </div>
   );
 }
