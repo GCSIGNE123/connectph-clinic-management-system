@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
 import { ResultEntryDialog } from "@/features/laboratory/components/ResultEntryDialog";
+import { LaboratoryReportDialog } from "@/features/laboratory/components/LaboratoryReportDialog";
+import { REPORT_ELIGIBLE_STATUSES } from "@/features/laboratory/components/LaboratoryOrderDetailDialog";
 import { useCollectSpecimen, useStartProcessing, useReleaseResults } from "@/features/laboratory/hooks/use-laboratory";
 import { nextActionFor } from "@/features/laboratory/types";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
@@ -18,8 +20,18 @@ interface LaboratoryWorklistTableProps {
   canManage?: boolean;
 }
 
+/** Direct "Print Results" from the worklist (previously only reachable via
+ * Patient profile -> Laboratory History) - reuses the exact same
+ * `REPORT_ELIGIBLE_STATUSES` gate and `LaboratoryReportDialog` ->
+ * `LaboratoryReportView` -> `PrintableDocumentDialog` pipeline that
+ * `PatientLaboratoryHistory` already uses, so there is only ever one
+ * report renderer. `printOrderId` (not the full order) is all
+ * `LaboratoryReportDialog` needs - it re-fetches `GET
+ * /laboratory/orders/{id}` itself, which is the only call site that
+ * populates `clinicName` for the report header. */
 export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }: LaboratoryWorklistTableProps) {
   const [resultOrder, setResultOrder] = useState<LaboratoryOrder | null>(null);
+  const [printOrderId, setPrintOrderId] = useState<string | null>(null);
   const collect = useCollectSpecimen();
   const startProcessing = useStartProcessing();
   const release = useReleaseResults();
@@ -77,7 +89,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
                   <LaboratoryStatusBadge status={order.status} />
                 </TableCell>
                 {canManage && (
-                  <TableCell className="text-right">
+                  <TableCell className="space-x-1 text-right">
                     {action?.action === "collect" && (
                       <Button size="sm" onClick={() => collect.mutate(order.id)} disabled={collect.isPending}>
                         {action.label}
@@ -98,7 +110,14 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
                         {action.label}
                       </Button>
                     )}
-                    {!action && <span className="text-xs text-muted-foreground">-</span>}
+                    {REPORT_ELIGIBLE_STATUSES.has(order.status) && (
+                      <Button variant="ghost" size="sm" onClick={() => setPrintOrderId(order.id)}>
+                        Print Results
+                      </Button>
+                    )}
+                    {!action && !REPORT_ELIGIBLE_STATUSES.has(order.status) && (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                 )}
               </TableRow>
@@ -107,6 +126,7 @@ export function LaboratoryWorklistTable({ orders, isLoading, canManage = true }:
         </TableBody>
       </Table>
       <ResultEntryDialog order={resultOrder} open={resultOrder !== null} onOpenChange={(open) => !open && setResultOrder(null)} />
+      <LaboratoryReportDialog orderId={printOrderId} open={printOrderId !== null} onOpenChange={(open) => !open && setPrintOrderId(null)} />
     </>
   );
 }
