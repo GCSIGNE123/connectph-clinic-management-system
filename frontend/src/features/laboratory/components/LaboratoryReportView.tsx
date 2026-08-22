@@ -1,11 +1,11 @@
 import { FlaskConical } from "lucide-react";
-import { InterpretationText } from "@/features/laboratory/components/InterpretationBadge";
+import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
 import { buildReportRows, groupReportRowsBySection, reportResultValue } from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
 /** Med-tech-requested print redesign: five columns (TEST / RESULT / UNIT /
- * NORMAL VALUES / ASSESSMENT), Result and Unit split into separate cells
+ * NORMAL VALUES / FLAG), Result and Unit split into separate cells
  * (previously one combined "14 g/dL" string), sized for the full width of
  * a Letter/Short-Bond page via `table-layout: fixed` + explicit column
  * percentages (`COLUMN_WIDTHS` below) rather than the narrow auto-sized
@@ -15,12 +15,13 @@ import type { LaboratoryOrder } from "@/features/laboratory/types";
  * printing exactly what was true when they were released, even if the
  * template's reference ranges change later.
  *
- * Round 3 (clipping fix): ASSESSMENT widened slightly (18% -> 19%, taken
- * from TEST 30% -> 28%) so the single word "ASSESSMENT" fits without
- * relying solely on mid-word breaking - `break-words` on every `<th>`
- * (added below) is the actual guarantee, this just makes it rare that a
- * normal-width Assessment value ever needs to invoke it. */
-const COLUMN_WIDTHS = { test: "28%", result: "14%", unit: "12%", normalValues: "27%", assessment: "19%" };
+ * Round 4 (Assessment -> Flag, matching the clinic's existing paper
+ * report convention): the last column now prints a bare "L"/"H" (or
+ * blank) instead of the full word/icon - see `FlagText`. FLAG only ever
+ * holds a single character, so its column shrank from 19% to 8%; that
+ * freed width went mostly to NORMAL VALUES (27% -> 35%), which is the
+ * column most likely to hold a long persisted range string. */
+const COLUMN_WIDTHS = { test: "30%", result: "14%", unit: "13%", normalValues: "35%", flag: "8%" };
 
 /** Phase 4G: generic, template-driven read-only laboratory report body -
  * every field comes from the already-fetched `LaboratoryOrder` (via
@@ -77,23 +78,22 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
                 <col style={{ width: COLUMN_WIDTHS.result }} />
                 <col style={{ width: COLUMN_WIDTHS.unit }} />
                 <col style={{ width: COLUMN_WIDTHS.normalValues }} />
-                <col style={{ width: COLUMN_WIDTHS.assessment }} />
+                <col style={{ width: COLUMN_WIDTHS.flag }} />
               </colgroup>
               <thead>
                 {/* `whitespace-normal break-words` on every header cell:
-                    without it, a single unbreakable word like "ASSESSMENT"
-                    or "NORMAL VALUES" simply overflows its `table-layout:
-                    fixed` column (browsers don't shrink the table to
-                    contain it, they let the text spill past the cell) -
-                    that overflow was the actual clipping bug, not the
-                    column width alone. Wrapping is the real fix; the wider
-                    ASSESSMENT column above just makes it rarely needed. */}
+                    without it, a single unbreakable word like "NORMAL
+                    VALUES" simply overflows its `table-layout: fixed`
+                    column (browsers don't shrink the table to contain it,
+                    they let the text spill past the cell) - that overflow
+                    was the actual clipping bug, not the column width
+                    alone. Wrapping is the real fix. */}
                 <tr className="report-table-head bg-slate-800 text-white">
                   <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
                   <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
                   <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
                   <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Normal Values</th>
-                  <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Assessment</th>
+                  <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Flag</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,7 +114,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
                         {result.normalRange ?? ""}
                       </td>
                       <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
-                        <InterpretationText value={result.interpretation} />
+                        <FlagText value={result.interpretation} />
                       </td>
                     </tr>
                   ))

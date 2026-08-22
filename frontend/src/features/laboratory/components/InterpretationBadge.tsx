@@ -15,16 +15,6 @@ export const LABEL_BY_INTERPRETATION: Record<LaboratoryInterpretation, string> =
   Normal: "✓ Normal",
 };
 
-/** Same interpretation → color mapping as `VARIANT_BY_INTERPRETATION`,
- * expressed as plain text color classes for `InterpretationText` below -
- * one shared semantic source, two renderings (pill vs. compact text). */
-const TEXT_CLASS_BY_INTERPRETATION: Record<LaboratoryInterpretation, string> = {
-  Low: "text-destructive",
-  High: "text-destructive",
-  Abnormal: "text-destructive",
-  Normal: "text-green-700 dark:text-green-500",
-};
-
 /** Icon + text, never color alone, per spec - keeps the signal legible for
  * colorblind users and in print/grayscale contexts. Renders nothing when
  * there's no interpretation to show (missing/invalid range or value). */
@@ -35,14 +25,26 @@ export function InterpretationBadge({ value }: { value: LaboratoryInterpretation
   return <Badge variant={VARIANT_BY_INTERPRETATION[value]}>{LABEL_BY_INTERPRETATION[value]}</Badge>;
 }
 
-/** Compact plain-text rendering of the exact same interpretation semantics
- * as `InterpretationBadge` (same labels, same icon-not-color-alone rule) -
- * for the printed Laboratory Report, where a full dashboard-style pill per
- * row wastes paper. Renders nothing (blank cell) when there's no
- * interpretation, matching the printed report's "leave it blank rather
- * than fabricate" requirement - unlike `InterpretationBadge`, which shows
- * an explicit "Not configured" label for on-screen use. */
-export function InterpretationText({ value }: { value: LaboratoryInterpretation | null | undefined }) {
-  if (!value) return null;
-  return <span className={TEXT_CLASS_BY_INTERPRETATION[value]}>{LABEL_BY_INTERPRETATION[value]}</span>;
+/** Printed-report FLAG column (clinic's existing paper-report convention):
+ * a bare, red "L"/"H" for a numeric result outside its persisted range, or
+ * nothing at all - never the full word, an icon, or a checkmark. Reuses
+ * the exact same persisted `interpretation` this file's other components
+ * read (never recalculated) - this is purely a different rendering of the
+ * same stored semantics, not a new range/clinical calculation.
+ *
+ * `Normal` and the non-directional `Abnormal` (from a qualitative Text
+ * result that doesn't match its configured expected-normal value) both
+ * render blank: the FLAG column's only allowed characters are H, L, or
+ * blank, and `Abnormal` has no "above/below" direction to map to either
+ * one - printing blank rather than guessing a direction was confirmed as
+ * the intended behavior over silently mislabeling it. */
+const FLAG_BY_INTERPRETATION: Partial<Record<LaboratoryInterpretation, "L" | "H">> = {
+  Low: "L",
+  High: "H",
+};
+
+export function FlagText({ value }: { value: LaboratoryInterpretation | null | undefined }) {
+  const flag = value ? FLAG_BY_INTERPRETATION[value] : undefined;
+  if (!flag) return null;
+  return <span className="font-semibold text-destructive">{flag}</span>;
 }

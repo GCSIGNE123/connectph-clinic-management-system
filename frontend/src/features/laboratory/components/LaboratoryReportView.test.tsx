@@ -127,14 +127,19 @@ describe("LaboratoryReportView", () => {
     expect(screen.getByText("Negative")).toBeInTheDocument();
   });
 
-  it("#9: interpretation (Assessment) is shown only when present", () => {
+  it("#9: the Flag column shows 'L' only for a Low interpretation, blank for Normal/missing", () => {
     const { rerender } = render(
-      <LaboratoryReportView order={order({ results: [result({ interpretation: "Normal" })] })} />
+      <LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />
     );
-    expect(screen.getByText("✓ Normal")).toBeInTheDocument();
+    expect(screen.getByText("L")).toBeInTheDocument();
+
+    rerender(<LaboratoryReportView order={order({ results: [result({ interpretation: "Normal" })] })} />);
+    expect(screen.queryByText("L")).not.toBeInTheDocument();
+    expect(screen.queryByText("H")).not.toBeInTheDocument();
 
     rerender(<LaboratoryReportView order={order({ results: [result({ interpretation: null })] })} />);
-    expect(screen.queryByText("✓ Normal")).not.toBeInTheDocument();
+    expect(screen.queryByText("L")).not.toBeInTheDocument();
+    expect(screen.queryByText("H")).not.toBeInTheDocument();
   });
 
   it("#8: reference range is shown only when configured", () => {
@@ -177,7 +182,7 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByRole("columnheader", { name: "Result" })).toBeInTheDocument();
       expect(screen.getByRole("columnheader", { name: "Unit" })).toBeInTheDocument();
       expect(screen.getByRole("columnheader", { name: "Normal Values" })).toBeInTheDocument();
-      expect(screen.getByRole("columnheader", { name: "Assessment" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
     });
 
     it("2: Result and Unit are separate cells, not one combined string", () => {
@@ -196,9 +201,11 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("70-105 mg/dL")).toBeInTheDocument();
     });
 
-    it("4: the existing interpretation/status appears in Assessment, reusing the existing label text", () => {
+    it("4: the existing interpretation/status is normalized to a bare Flag character - High prints as 'H', not the full word/arrow", () => {
       render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
-      expect(screen.getByText("↑ High")).toBeInTheDocument();
+      expect(screen.getByText("H")).toBeInTheDocument();
+      expect(screen.queryByText("↑ High")).not.toBeInTheDocument();
+      expect(screen.queryByText("High")).not.toBeInTheDocument();
     });
 
     it("5: a result with no unit leaves the Unit cell blank rather than fabricating one", () => {
@@ -209,10 +216,10 @@ describe("LaboratoryReportView", () => {
       expect(dataRow.children[2]).toHaveTextContent("");
     });
 
-    it("6: a result with no assessment/interpretation leaves the Assessment cell blank", () => {
+    it("6: a result with no interpretation leaves the Flag cell blank", () => {
       render(<LaboratoryReportView order={order({ results: [result({ interpretation: null })] })} />);
-      const assessmentHeader = screen.getByRole("columnheader", { name: "Assessment" });
-      const table = assessmentHeader.closest("table") as HTMLTableElement;
+      const flagHeader = screen.getByRole("columnheader", { name: "Flag" });
+      const table = flagHeader.closest("table") as HTMLTableElement;
       const dataRow = table.querySelectorAll("tbody tr")[0];
       expect(dataRow.children[4]).toHaveTextContent("");
     });
@@ -241,7 +248,7 @@ describe("LaboratoryReportView", () => {
       expect(headers).toEqual(["Physical Examination", "Chemical Examination"]);
       // Each section still uses the same five-column structure, not a
       // different table shape per section.
-      expect(screen.getAllByRole("columnheader", { name: "Assessment" })).toHaveLength(2);
+      expect(screen.getAllByRole("columnheader", { name: "Flag" })).toHaveLength(2);
     });
 
     it("8: prints the historical result's own persisted normal range, not one recalculated from the current template", () => {
@@ -292,10 +299,10 @@ describe("LaboratoryReportView", () => {
   });
 
   describe("Laboratory Report print redesign, round 2 (clinic-approved compact reference layout)", () => {
-    it("3: columns render in the required left-to-right order Test/Result/Unit/Normal Values/Assessment", () => {
+    it("3: columns render in the required left-to-right order Test/Result/Unit/Normal Values/Flag", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Assessment"]);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
     });
 
     it("8: uses compact table styling - a dense navy header band and tight row padding, not the airier first-pass spacing", () => {
@@ -344,11 +351,10 @@ describe("LaboratoryReportView", () => {
   });
 
   describe("Laboratory Report print redesign, round 3 (column/date clipping fix)", () => {
-    it("1: the ASSESSMENT header renders the full word, not a truncated fragment", () => {
+    it("1: the FLAG header renders the full word, not a truncated fragment", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const header = screen.getByRole("columnheader", { name: "Assessment" });
-      expect(header).toHaveTextContent("Assessment");
-      expect(screen.queryByText(/^Assessm$/)).not.toBeInTheDocument();
+      const header = screen.getByRole("columnheader", { name: "Flag" });
+      expect(header).toHaveTextContent("Flag");
       expect(screen.queryByText(/…/)).not.toBeInTheDocument(); // no ellipsis character anywhere
     });
 
@@ -360,9 +366,9 @@ describe("LaboratoryReportView", () => {
       );
       expect(widths).toHaveLength(5);
       expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
-      // ASSESSMENT is wide enough on its own that the single word "Assessment"
-      // is not relying purely on mid-word breaking in the common case.
-      expect(widths[4]).toBeGreaterThanOrEqual(18);
+      // FLAG only ever holds a single character, so it's deliberately the
+      // narrowest column now (round 4: Assessment -> Flag).
+      expect(widths[4]).toBeLessThanOrEqual(10);
     });
 
     it("3: every header cell can wrap (whitespace-normal + break-words), the actual fix for a header word overflowing its fixed column", () => {
@@ -415,11 +421,11 @@ describe("LaboratoryReportView", () => {
         <LaboratoryReportView
           order={order({
             template: null,
-            results: [result({ parameterName: "A Very Long Laboratory Parameter Name For The Assessment Column Fix Regression Test" })],
+            results: [result({ parameterName: "A Very Long Laboratory Parameter Name For The Flag Column Fix Regression Test" })],
           })}
         />
       );
-      const cell = screen.getByText("A Very Long Laboratory Parameter Name For The Assessment Column Fix Regression Test");
+      const cell = screen.getByText("A Very Long Laboratory Parameter Name For The Flag Column Fix Regression Test");
       expect(cell.className).toContain("whitespace-normal");
       expect(cell.className).toContain("break-words");
     });
@@ -448,13 +454,142 @@ describe("LaboratoryReportView", () => {
         <LaboratoryReportView
           order={order({
             template: { id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0, turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z", parameters: [param()] },
-            results: [result({ normalRange: "12.0-16.0 (historical)", units: "g/dL", interpretation: "Normal" })],
+            results: [result({ normalRange: "12.0-16.0 (historical)", units: "g/dL", interpretation: "Low" })],
           })}
         />
       );
       expect(screen.getByText("12.0-16.0 (historical)")).toBeInTheDocument();
       expect(screen.getByText("g/dL")).toBeInTheDocument();
-      expect(screen.getByText("✓ Normal")).toBeInTheDocument();
+      expect(screen.getByText("L")).toBeInTheDocument();
+    });
+  });
+
+  describe("Laboratory Report print redesign, round 4 (Assessment -> Flag)", () => {
+    it("1: the printed header is exactly 'Flag', not 'Assessment'", () => {
+      render(<LaboratoryReportView order={order({ results: [result()] })} />);
+      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Assessment" })).not.toBeInTheDocument();
+    });
+
+    it("2: a below-normal-range result renders 'L'", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
+      expect(screen.getByText("L")).toBeInTheDocument();
+    });
+
+    it("3: an above-normal-range result renders 'H'", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
+      expect(screen.getByText("H")).toBeInTheDocument();
+    });
+
+    it("4: a within-range (Normal) result renders blank - no letter, no word", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Normal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+      expect(screen.queryByText("Normal")).not.toBeInTheDocument();
+      expect(screen.queryByText("✓ Normal")).not.toBeInTheDocument();
+    });
+
+    it("5: the 'H' character carries the red/destructive color class", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
+      expect(screen.getByText("H").className).toContain("text-destructive");
+    });
+
+    it("6: the 'L' character carries the red/destructive color class", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
+      expect(screen.getByText("L").className).toContain("text-destructive");
+    });
+
+    it("7: a Normal row's Flag cell contains no flag text at all", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ parameterName: "Hemoglobin", interpretation: "Normal" })] })} />);
+      const flagHeader = screen.getByRole("columnheader", { name: "Flag" });
+      const table = flagHeader.closest("table") as HTMLTableElement;
+      const dataRow = screen.getByText("Hemoglobin").closest("tr") as HTMLTableRowElement;
+      expect(table.contains(dataRow)).toBe(true);
+      expect(dataRow.children[4]).toHaveTextContent("");
+    });
+
+    it("8: only the Flag character is red - the Result value itself carries no destructive color class", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ template: null, results: [result({ parameterName: "Platelet Count", numericValue: 149, interpretation: "Low" })] })}
+        />
+      );
+      const resultCell = screen.getByText("149");
+      expect(resultCell.className).not.toContain("text-destructive");
+    });
+
+    it("9: only the Flag character is red - the Normal Values (reference range) cell carries no destructive color class", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ template: null, results: [result({ parameterName: "Platelet Count", normalRange: "150-400", interpretation: "Low" })] })}
+        />
+      );
+      const rangeCell = screen.getByText("150-400");
+      expect(rangeCell.className).not.toContain("text-destructive");
+    });
+
+    it("10: only the Flag character is red - the entire row is not colored red", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ template: null, results: [result({ parameterName: "Platelet Count", numericValue: 149, interpretation: "Low" })] })}
+        />
+      );
+      const row = screen.getByText("Platelet Count").closest("tr") as HTMLTableRowElement;
+      expect(row.className).not.toContain("text-destructive");
+      expect(row.className).not.toContain("bg-red");
+      expect(row.className).not.toContain("bg-destructive");
+    });
+
+    it("11: the five columns remain exactly Test/Result/Unit/Normal Values/Flag", () => {
+      render(<LaboratoryReportView order={order({ results: [result()] })} />);
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+    });
+
+    it("12: an ad-hoc (non-template) result with no range/interpretation still prints, with a blank Flag rather than a fabricated one", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: null,
+            results: [result({ parameterName: "Ad-hoc Parameter", normalRange: null, interpretation: null })],
+          })}
+        />
+      );
+      const row = screen.getByText("Ad-hoc Parameter").closest("tr") as HTMLTableRowElement;
+      expect(row).toBeInTheDocument();
+      expect(row.children[4]).toHaveTextContent("");
+    });
+
+    it("13: historical persisted normal range/units continue to print unchanged under the Flag column", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: { id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0, turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z", parameters: [param()] },
+            results: [result({ normalRange: "12.0-16.0 (historical)", units: "g/dL", interpretation: "High" })],
+          })}
+        />
+      );
+      expect(screen.getByText("12.0-16.0 (historical)")).toBeInTheDocument();
+      expect(screen.getByText("g/dL")).toBeInTheDocument();
+      expect(screen.getByText("H")).toBeInTheDocument();
+    });
+
+    it("14: the table still fits the report width with zero forced overflow after rebalancing for the narrower Flag column", () => {
+      render(<LaboratoryReportView order={order({ results: [result()] })} />);
+      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const widths = Array.from(table.querySelectorAll("colgroup col")).map(
+        (col) => Number((col as HTMLElement).style.width.replace("%", ""))
+      );
+      expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
+      expect(table.className).toContain("w-full");
+      expect(table.className).toContain("max-w-full");
+    });
+
+    it("a persisted 'Abnormal' (non-directional, qualitative) interpretation prints blank rather than guessing H or L", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Abnormal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+      expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
     });
   });
 });
