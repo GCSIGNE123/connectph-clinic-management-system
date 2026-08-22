@@ -219,6 +219,11 @@ class LaboratoryOrderRead(BaseModel):
     clinic_address: str | None = None
     clinic_phone: str | None = None
     clinic_email: str | None = None
+    # Round 7: the shared clinic branding logo (`Clinic.logo_url`) - same
+    # additive/optional, `GET /laboratory/orders/{id}`-only convention as
+    # `clinic_name` above. Live configuration, not a release-time snapshot -
+    # see the Round 7 implementation report.
+    clinic_logo_url: str | None = None
     # Phase 4I: exposes the existing `TimestampMixin.updated_at` column -
     # the optimistic-concurrency token `LaboratoryResultsSubmit.
     # expected_updated_at` is checked against. No new column.

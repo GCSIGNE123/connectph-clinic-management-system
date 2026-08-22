@@ -9,6 +9,7 @@ import { groupWaiting } from "@/features/tv-display/lib/grouping";
 import { getNowServingLayout } from "@/features/tv-display/lib/now-serving-layout";
 import { splitPrimaryNowServing } from "@/features/tv-display/lib/now-serving-primary";
 import { enqueueAnnouncement } from "@/lib/queue-announcer";
+import { resolveMediaUrl } from "@/lib/api-url";
 import type { TvDisplayWaitingEntry } from "@/features/tv-display/types";
 
 /**
@@ -324,8 +325,19 @@ export function TvDisplayScreen({ slug }: { slug: string }) {
         <header className="flex items-center justify-between border-b border-white/10 pb-[1.5vw]">
           <div className="flex items-center gap-4">
             {data?.logoUrl ? (
+              // Round 7: `data.logoUrl` is now the shared Clinic Settings
+              // branding logo (backend-relative path), resolved to an
+              // absolute URL the same way `resolveTvMediaUrl` already
+              // does for TV Info Panel images - see `lib/api-url.ts`.
+              // `object-contain` + a fixed box (never cropped/stretched)
+              // and `rounded-lg` matches the existing TV-safe sizing this
+              // header already had.
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={data.logoUrl} alt="" className="h-[5vw] w-[5vw] max-h-24 max-w-24 rounded-lg object-contain" />
+              <img
+                src={resolveMediaUrl(data.logoUrl) ?? undefined}
+                alt=""
+                className="h-[5vw] w-[5vw] max-h-24 max-w-24 rounded-lg object-contain"
+              />
             ) : null}
             <div>
               <h1 className="text-[clamp(1.5rem,2.5vw,3rem)] font-bold">{data?.clinicName ?? "Clinic"}</h1>

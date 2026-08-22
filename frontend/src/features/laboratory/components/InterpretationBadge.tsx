@@ -43,8 +43,21 @@ const FLAG_BY_INTERPRETATION: Partial<Record<LaboratoryInterpretation, "L" | "H"
   High: "H",
 };
 
+/** Round 7 (flag colors): L (below range) reads as an urgent/low-value
+ * signal - red/`text-destructive`, the same token already used everywhere
+ * else in this app for "needs attention". H (above range) is deliberately
+ * NOT red - a single "everything abnormal is red" color would make L and H
+ * visually indistinguishable at a glance, so H uses the existing blue
+ * `text-primary` token (info/high-value semantic) instead. Only the flag
+ * character itself carries color - see `LaboratoryReportView.tsx`'s Flag
+ * `<td>`, which wraps nothing else in this span. */
+const FLAG_COLOR_CLASS: Record<"L" | "H", string> = {
+  L: "text-destructive",
+  H: "text-primary",
+};
+
 export function FlagText({ value }: { value: LaboratoryInterpretation | null | undefined }) {
   const flag = value ? FLAG_BY_INTERPRETATION[value] : undefined;
   if (!flag) return null;
-  return <span className="font-semibold text-destructive">{flag}</span>;
+  return <span className={`font-semibold ${FLAG_COLOR_CLASS[flag]}`}>{flag}</span>;
 }

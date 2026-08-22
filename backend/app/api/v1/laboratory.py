@@ -101,6 +101,11 @@ async def get_order(
     order.clinic_address = ", ".join(filter(None, [clinic.address, clinic.city, clinic.province])) or None if clinic else None
     order.clinic_phone = (clinic.telephone or clinic.mobile) if clinic else None
     order.clinic_email = clinic.email if clinic else None
+    # Round 7: same shared `Clinic.logo_url` branding value the TV Display
+    # header now reads (see `TvDisplayService._build_display_data`) - live
+    # configuration, not snapshotted (see the Round 7 implementation
+    # report's snapshot-decision section for why).
+    order.clinic_logo_url = clinic.logo_url if clinic else None
     return order
 
 

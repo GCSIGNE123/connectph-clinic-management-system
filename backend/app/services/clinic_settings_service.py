@@ -63,6 +63,20 @@ class ClinicSettingsService:
         await self.session.commit()
         return await self.get(clinic_id)
 
+    async def set_logo(self, clinic_id: UUID, logo_url: str | None, *, actor: User) -> Clinic:
+        """Round 7: real logo set/remove, sharing the same audit-log
+        convention as `update_branding` above. `logo_url` is either the
+        newly-stored file's relative media path or `None` (remove)."""
+        clinic = await self.get(clinic_id)
+        clinic = await self.clinic_repo.update(clinic, logo_url=logo_url)
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor.id,
+            action="clinic_branding.logo_removed" if logo_url is None else "clinic_branding.logo_updated",
+            entity_type="clinic", entity_id=str(clinic_id),
+        )
+        await self.session.commit()
+        return await self.get(clinic_id)
+
     async def request_upload_url(self, clinic_id: UUID, asset: str) -> dict:
         """Presigned-URL stub for logo/favicon/login-background uploads.
 

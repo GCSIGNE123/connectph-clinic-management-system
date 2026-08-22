@@ -409,7 +409,15 @@ class TvDisplayService:
             animation_speed=config.animation_speed,
             queue_size=config.queue_size,
             refresh_interval_seconds=config.refresh_interval_seconds,
-            logo_url=config.logo_url,
+            # Round 7: sourced from `Clinic.logo_url` (Clinic Settings ->
+            # Branding), NOT `TvDisplayConfig.logo_url` - the shared clinic
+            # branding value is the one source of truth for both the TV
+            # Display and Laboratory Report headers. `TvDisplayConfig.logo_url`
+            # is a pre-existing column (predates this feature) that this
+            # response shape no longer reads from; left in place unchanged
+            # (still settable via the config API) rather than removed, since
+            # dropping a column/field is out of scope for this task.
+            logo_url=clinic.logo_url if clinic else None,
             primary_color=config.primary_color,
             secondary_color=config.secondary_color,
             now_serving=now_serving,

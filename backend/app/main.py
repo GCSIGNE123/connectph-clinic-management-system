@@ -163,6 +163,20 @@ def create_app() -> FastAPI:
         name="tv-info-content-media",
     )
 
+    # Round 7 (clinic logo branding): same reasoning/convention as the
+    # tv-info-content mount just above - the clinic logo is written by
+    # `POST /clinic-settings/logo` (see `app/api/v1/clinic_settings.py`)
+    # and must be servable with zero auth, since it also renders on the
+    # fully public TV Display kiosk (`GET /public/tv-display/{slug}`), not
+    # just the authenticated Clinic Settings/Laboratory Report pages.
+    clinic_logo_media_root = Path(__file__).resolve().parent.parent / "var" / "clinic_logo_images"
+    clinic_logo_media_root.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/media/clinic-logo",
+        StaticFiles(directory=clinic_logo_media_root),
+        name="clinic-logo-media",
+    )
+
     return app
 
 

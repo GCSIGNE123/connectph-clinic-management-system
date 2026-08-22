@@ -3,6 +3,7 @@ import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
 import { LaboratorySignatoryFooter } from "@/features/laboratory/components/LaboratorySignatoryFooter";
 import { buildReportRows, groupReportRowsBySection, reportResultValue } from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
+import { resolveMediaUrl } from "@/lib/api-url";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
 /** Med-tech-requested print redesign: five columns (TEST / RESULT / UNIT /
@@ -43,11 +44,22 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   // for a missing field), sourced entirely from the existing clinic
   // config carried on `order` alongside `clinicName`.
   const contactLine = [order.clinicAddress, order.clinicPhone, order.clinicEmail].filter(Boolean).join(" • ");
+  // Round 7: the shared clinic branding logo, appearing BEFORE the clinic
+  // name - same shared `Clinic.logo_url` value the TV Display header now
+  // reads (see `TvDisplayScreen.tsx`). Falls back to the existing
+  // `FlaskConical` icon when no logo is configured, exactly preserving the
+  // prior text-only header rather than leaving a blank gap.
+  const logoUrl = resolveMediaUrl(order.clinicLogoUrl);
 
   return (
     <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
       <div className="flex items-center justify-center gap-2 pb-1 pt-0.5 text-center">
-        <FlaskConical className="h-6 w-6 shrink-0 text-slate-700" aria-hidden />
+        {logoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- external/backend-relative logo, not a static/optimizable asset
+          <img src={logoUrl} alt="" className="h-8 w-8 shrink-0 object-contain" />
+        ) : (
+          <FlaskConical className="h-6 w-6 shrink-0 text-slate-700" aria-hidden />
+        )}
         <div>
           {order.clinicName ? <p className="text-base font-bold uppercase tracking-wide text-slate-900 sm:text-lg">{order.clinicName}</p> : null}
           {contactLine ? <p className="text-[9px] text-muted-foreground sm:text-[10px]">{contactLine}</p> : null}

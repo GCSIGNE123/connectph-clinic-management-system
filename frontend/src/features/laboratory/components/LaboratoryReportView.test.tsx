@@ -12,6 +12,10 @@ vi.mock("@/lib/api-client", () => ({
   apiFetchBlob: (...args: unknown[]) => mockFetchBlob(...args),
 }));
 
+vi.mock("@/lib/api-url", () => ({
+  resolveMediaUrl: (path: string | null | undefined) => (path ? `http://api.test${path}` : null),
+}));
+
 function result(overrides: Partial<LaboratoryResult> = {}): LaboratoryResult {
   return {
     id: "res-1", parameterName: "Hemoglobin", resultType: "Numeric", numericValue: 14, textValue: null,
@@ -501,9 +505,9 @@ describe("LaboratoryReportView", () => {
       expect(screen.queryByText("✓ Normal")).not.toBeInTheDocument();
     });
 
-    it("5: the 'H' character carries the red/destructive color class", () => {
+    it("5: the 'H' character carries a color class (Round 7 changes this to blue - see the round 7 describe block below)", () => {
       render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
-      expect(screen.getByText("H").className).toContain("text-destructive");
+      expect(screen.getByText("H").className).toMatch(/text-(destructive|primary)/);
     });
 
     it("6: the 'L' character carries the red/destructive color class", () => {
@@ -833,6 +837,136 @@ describe("LaboratoryReportView", () => {
           order={order({ medTechNameSnapshot: "Maria Cruz", results: [result({ interpretation: "Low" })] })}
         />
       );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(screen.getByText("L")).toBeInTheDocument();
+    });
+  });
+
+  describe("Laboratory Report print redesign, round 7 (flag colors: L red, H blue)", () => {
+    it("1: L renders red (text-destructive)", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
+      expect(screen.getByText("L").className).toContain("text-destructive");
+      expect(screen.getByText("L").className).not.toContain("text-primary");
+    });
+
+    it("2: H renders blue (text-primary), not red", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
+      expect(screen.getByText("H").className).toContain("text-primary");
+      expect(screen.getByText("H").className).not.toContain("text-destructive");
+    });
+
+    it("3: a normal flag remains blank - no color, no text", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Normal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+    });
+
+    it("4: the Result cell is never colored red or blue due to the flag", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ template: null, results: [result({ parameterName: "MCH", numericValue: 33, interpretation: "High" })] })}
+        />
+      );
+      const resultCell = screen.getByText("33");
+      expect(resultCell.className).not.toContain("text-destructive");
+      expect(resultCell.className).not.toContain("text-primary");
+    });
+
+    it("5: the Normal Values cell is never colored red or blue due to the flag", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ template: null, results: [result({ parameterName: "MCH", normalRange: "26.0-32.0", interpretation: "High" })] })}
+        />
+      );
+      const rangeCell = screen.getByText("26.0-32.0");
+      expect(rangeCell.className).not.toContain("text-destructive");
+      expect(rangeCell.className).not.toContain("text-primary");
+    });
+
+    it("6: the Flag column header is still exactly 'FLAG'", () => {
+      render(<LaboratoryReportView order={order({ results: [result()] })} />);
+      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
+    });
+
+    it("7: existing H/L/blank logic is unchanged - only the color mapping changed", () => {
+      const { rerender } = render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
+      expect(screen.getByText("L")).toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
+      expect(screen.getByText("H")).toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result({ interpretation: "Normal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result({ interpretation: "Abnormal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Laboratory Report print redesign, round 7 (clinic logo header)", () => {
+    it("8: shows the clinic logo BEFORE the clinic name when configured", () => {
+      const { container } = render(
+        <LaboratoryReportView
+          order={order({ clinicName: "Canora Medical Clinic & Laboratory", clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })}
+        />
+      );
+      const img = container.querySelector("img") as HTMLImageElement;
+      expect(img).not.toBeNull();
+      expect(img).toHaveAttribute("src", "http://api.test/media/clinic-logo/clinic-1/logo-abc.png");
+      const clinicName = screen.getByText("Canora Medical Clinic & Laboratory");
+      const header = img.closest("div")!.parentElement as HTMLElement;
+      const children = Array.from(header.querySelectorAll("*"));
+      expect(children.indexOf(img)).toBeLessThan(children.indexOf(clinicName));
+    });
+
+    it("preserves the existing text-only header (no fabricated logo) when no logo is configured", () => {
+      const { container } = render(<LaboratoryReportView order={order({ clinicName: "Canora Medical Clinic & Laboratory", clinicLogoUrl: null })} />);
+      expect(container.querySelector("img")).toBeNull();
+      expect(screen.getByText("Canora Medical Clinic & Laboratory")).toBeInTheDocument();
+    });
+
+    it("logo uses object-contain so it cannot be distorted/stretched", () => {
+      const { container } = render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })} />);
+      expect((container.querySelector("img") as HTMLImageElement).className).toContain("object-contain");
+    });
+
+    it("9: adding the logo does not cause horizontal overflow - table widths still sum to 100%", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png",
+            clinicAddress: "Some Address", clinicPhone: "0917-000-0000", clinicEmail: "a@b.com",
+            results: [result()],
+          })}
+        />
+      );
+      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const widths = Array.from(table.querySelectorAll("colgroup col")).map(
+        (col) => Number((col as HTMLElement).style.width.replace("%", ""))
+      );
+      expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
+      expect(table.className).toContain("w-full");
+      expect(table.className).toContain("max-w-full");
+    });
+
+    it("preserves the contact/address line and report title alongside the logo", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png",
+            clinicAddress: "123 Main Street", clinicPhone: "0917-000-0000", clinicEmail: "clinic@canora.com",
+          })}
+        />
+      );
+      expect(screen.getByText("123 Main Street • 0917-000-0000 • clinic@canora.com")).toBeInTheDocument();
+      expect(screen.getByText("Laboratory Report")).toBeInTheDocument();
+    });
+
+    it("preserves the existing five-column Flag table structure with a logo present", () => {
+      render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png", results: [result({ interpretation: "Low" })] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
       expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
       expect(screen.getByText("L")).toBeInTheDocument();

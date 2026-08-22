@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, apiUploadFile, ApiError } from "@/lib/api-client";
+import { resolveMediaUrl } from "@/lib/api-url";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -88,6 +89,42 @@ export default function ClinicSettingsPage() {
     },
     onError: (err) => toast({ title: "Save failed", description: (err as Error).message, variant: "error" }),
   });
+
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const uploadLogo = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiUploadFile<ClinicSettings>("/clinic-settings/logo", formData);
+    },
+    onSuccess: () => {
+      setLogoError(null);
+      queryClient.invalidateQueries({ queryKey: ["clinic-settings"] });
+      toast({ title: "Logo saved", variant: "success" });
+    },
+    onError: (err) => setLogoError(err instanceof ApiError ? err.message : "Could not upload logo."),
+  });
+
+  const removeLogo = useMutation({
+    mutationFn: () => apiClient.delete<ClinicSettings>("/clinic-settings/logo"),
+    onSuccess: () => {
+      setLogoError(null);
+      queryClient.invalidateQueries({ queryKey: ["clinic-settings"] });
+      toast({ title: "Logo removed", variant: "success" });
+    },
+    onError: (err) => setLogoError(err instanceof ApiError ? err.message : "Could not remove logo."),
+  });
+
+  function handleLogoFile(file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setLogoError("Only image files are accepted.");
+      return;
+    }
+    uploadLogo.mutate(file);
+  }
 
   const saveInventory = useMutation({
     mutationFn: () =>
@@ -195,9 +232,71 @@ export default function ClinicSettingsPage() {
       {tab === "branding" ? (
         <Card>
           <CardHeader>
-            <CardTitle>Branding</CardTitle>
+            <CardTitle>Clinic Branding</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Clinic logo</Label>
+              <p className="text-sm text-muted-foreground">
+                Shown before the clinic name on the TV Display and on printed Laboratory Reports.
+                Optional - both keep their current text-only header when no logo is configured.
+              </p>
+              <div className="flex items-center gap-4">
+                <div
+                  className="flex h-20 w-20 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-white"
+                  data-testid="clinic-logo-preview"
+                >
+                  {settings?.logo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- external/backend-relative logo, not a static/optimizable asset
+                    <img
+                      src={resolveMediaUrl(settings.logo_url) ?? undefined}
+                      alt="Clinic logo"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <span className="text-xs text-muted-foreground" data-testid="clinic-logo-not-configured">
+                      No logo
+                    </span>
+                  )}
+                </div>
+                {canManage ? (
+                  <div className="space-y-2">
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleLogoFile(e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        isLoading={uploadLogo.isPending}
+                        onClick={() => logoInputRef.current?.click()}
+                      >
+                        {settings?.logo_url ? "Replace logo" : "Upload logo"}
+                      </Button>
+                      {settings?.logo_url ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="text-destructive"
+                          isLoading={removeLogo.isPending}
+                          onClick={() => removeLogo.mutate()}
+                        >
+                          Remove logo
+                        </Button>
+                      ) : null}
+                    </div>
+                    {logoError ? <p className="text-sm text-destructive">{logoError}</p> : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label>Primary color</Label>
               <Input
@@ -229,8 +328,9 @@ export default function ClinicSettingsPage() {
               </Select>
             </div>
             <p className="text-sm text-muted-foreground sm:col-span-2">
-              Logo/favicon/login-background uploads use a presigned-URL stub (`POST
-              /clinic-settings/branding/{"{asset}"}/upload`) - see backend TODO for real Supabase Storage wiring.
+              Favicon/login-background uploads still use a presigned-URL stub (`POST
+              /clinic-settings/branding/{"{asset}"}/upload`) - out of scope for this change; see backend TODO for
+              real Supabase Storage wiring.
             </p>
             {canManage ? (
               <div className="sm:col-span-2">

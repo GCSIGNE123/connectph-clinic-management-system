@@ -116,6 +116,11 @@ export interface LaboratoryOrder {
   clinicAddress?: string | null;
   clinicPhone?: string | null;
   clinicEmail?: string | null;
+  // Round 7: the shared clinic branding logo (Clinic Settings -> Branding),
+  // same additive/GET-order-only convention as `clinicName` above. Live
+  // configuration, not a release-time snapshot - see the Round 7
+  // implementation report.
+  clinicLogoUrl?: string | null;
   // Round 6 (Laboratory Report Signatories): captured ONCE at release,
   // never re-resolved on reprint - see `LaboratoryOrder`'s backend model
   // docstring. All `null` on an order that hasn't been released yet, or

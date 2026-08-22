@@ -1,5 +1,5 @@
 import { apiClient, tokenStorage } from "@/lib/api-client";
-import { getApiBaseUrl } from "@/lib/api-url";
+import { getApiBaseUrl, resolveMediaUrl } from "@/lib/api-url";
 import type {
   CreateAnnouncementInput,
   CreateTvDisplayInput,
@@ -20,10 +20,7 @@ const API_URL = getApiBaseUrl();
  * Resolve it against the API origin (stripping the `/api/v1` suffix) so
  * `<img src>` works regardless of which host/port the API is served from. */
 export function resolveTvMediaUrl(imageUrl: string | null): string | null {
-  if (!imageUrl) return null;
-  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
-  const origin = API_URL.replace(/\/api\/v1\/?$/, "");
-  return `${origin}${imageUrl}`;
+  return resolveMediaUrl(imageUrl);
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

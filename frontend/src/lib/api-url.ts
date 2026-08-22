@@ -58,3 +58,22 @@ export function getApiBaseUrl(): string {
   const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   return `${window.location.protocol}//${window.location.hostname}:${port}${parsed.pathname}`;
 }
+
+/** Resolves a backend-relative media path (e.g.
+ * `/media/clinic-logo/{clinic_id}/{file}` or `/media/tv-info-content/...`)
+ * into an absolute URL usable directly in `<img src>` - the backend has no
+ * public base-URL setting (see `app/main.py`'s static mounts), so this
+ * resolves against the same runtime-detected API origin `getApiBaseUrl()`
+ * uses, stripping the `/api/v1` suffix since these are unauthenticated
+ * static-file mounts, not versioned API routes. Already-absolute
+ * `http(s)://` values (e.g. a clinic's Supabase-hosted logo from before
+ * this feature, or in a deployment where that stub upload flow is used)
+ * pass through unchanged. Shared by the TV Display header, Clinic Settings
+ * branding preview, and Laboratory Report header - the one place this
+ * resolution logic lives, rather than duplicated per feature. */
+export function resolveMediaUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  const origin = getApiBaseUrl().replace(/\/api\/v1\/?$/, "");
+  return `${origin}${path}`;
+}

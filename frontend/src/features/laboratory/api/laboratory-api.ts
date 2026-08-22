@@ -76,6 +76,7 @@ function toOrder(raw: any): LaboratoryOrder {
     clinicAddress: raw.clinic_address ?? null,
     clinicPhone: raw.clinic_phone ?? null,
     clinicEmail: raw.clinic_email ?? null,
+    clinicLogoUrl: raw.clinic_logo_url ?? null,
     pathologistId: raw.pathologist_id ?? null,
     medTechNameSnapshot: raw.med_tech_name_snapshot ?? null,
     medTechLicenseSnapshot: raw.med_tech_license_snapshot ?? null,
