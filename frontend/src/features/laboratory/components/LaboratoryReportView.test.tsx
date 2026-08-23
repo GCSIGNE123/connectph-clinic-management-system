@@ -972,4 +972,53 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("L")).toBeInTheDocument();
     });
   });
+
+  describe("Laboratory Report clinic logo size increase (Round 7 follow-up)", () => {
+    it("1: renders the clinic logo", () => {
+      const { container } = render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })} />);
+      expect(container.querySelector("img")).not.toBeNull();
+    });
+
+    it("2: the logo uses the larger target dimensions (h-12, up from the old h-8) rather than icon-sized classes", () => {
+      const { container } = render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })} />);
+      const img = container.querySelector("img") as HTMLImageElement;
+      expect(img.className).toContain("h-12");
+      expect(img.className).toContain("w-12");
+      expect(img.className).not.toContain("h-8");
+      expect(img.className).not.toContain("w-8");
+    });
+
+    it("3: the logo still uses object-contain (no distortion) at the larger size", () => {
+      const { container } = render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })} />);
+      expect((container.querySelector("img") as HTMLImageElement).className).toContain("object-contain");
+    });
+
+    it("4: the clinic name remains present and prominent alongside the larger logo", () => {
+      render(<LaboratoryReportView order={order({ clinicName: "Canora Medical Clinic & Laboratory", clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png" })} />);
+      expect(screen.getByText("Canora Medical Clinic & Laboratory")).toBeInTheDocument();
+    });
+
+    it("5: the header contact line remains present alongside the larger logo", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png",
+            clinicAddress: "123 Main Street", clinicPhone: "0917-000-0000", clinicEmail: "clinic@canora.com",
+          })}
+        />
+      );
+      expect(screen.getByText("123 Main Street • 0917-000-0000 • clinic@canora.com")).toBeInTheDocument();
+    });
+
+    it("6: the table still fits the report width with zero forced overflow at the larger logo size", () => {
+      render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png", results: [result()] })} />);
+      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const widths = Array.from(table.querySelectorAll("colgroup col")).map(
+        (col) => Number((col as HTMLElement).style.width.replace("%", ""))
+      );
+      expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
+      expect(table.className).toContain("w-full");
+      expect(table.className).toContain("max-w-full");
+    });
+  });
 });

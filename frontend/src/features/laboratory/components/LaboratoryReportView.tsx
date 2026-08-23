@@ -55,8 +55,14 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
     <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
       <div className="flex items-center justify-center gap-2 pb-1 pt-0.5 text-center">
         {logoUrl ? (
+          // Round 7 follow-up: enlarged from h-8 (32px) to h-12/h-14
+          // (48px/56px) - the original icon-sized rendering read as
+          // visually insignificant next to the clinic name. Still
+          // `object-contain` (never stretched/cropped) and still
+          // vertically centered against the clinic name block via the
+          // parent's `items-center` - only the size changed.
           // eslint-disable-next-line @next/next/no-img-element -- external/backend-relative logo, not a static/optimizable asset
-          <img src={logoUrl} alt="" className="h-8 w-8 shrink-0 object-contain" />
+          <img src={logoUrl} alt="" className="h-12 w-12 shrink-0 object-contain sm:h-14 sm:w-14" />
         ) : (
           <FlaskConical className="h-6 w-6 shrink-0 text-slate-700" aria-hidden />
         )}
