@@ -18,7 +18,7 @@ vi.mock("@/components/layout/ThemeSettings", () => ({
   ThemeSettings: () => <div>theme settings</div>,
 }));
 
-let mockSettings: Record<string, unknown> = {
+const mockSettings: Record<string, unknown> = {
   id: "clinic-1", name: "Canora Medical Clinic & Laboratory", timezone: "Asia/Manila",
   language: "en", currency: "PHP", date_format: "MM/DD/YYYY", time_format: "12h", status: "Active",
   theme: "system", logo_url: null,

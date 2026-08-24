@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -74,8 +74,21 @@ function StatCard({
  * that component has no hook for extra list query params beyond
  * search/limit - a custom page keeps this feature's filtering isolated
  * rather than growing a shared component's surface for one consumer.
+ *
+ * Post-RC1 Phase 2.5 build fix: `useSearchParams()` requires a Suspense
+ * boundary during static generation, or `next build` fails with a
+ * prerender error on this page (same issue already fixed on
+ * `/messages` - see that page's comment). Isolated into `MedicinesPageInner`.
  */
 export default function MedicinesPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+      <MedicinesPageInner />
+    </Suspense>
+  );
+}
+
+function MedicinesPageInner() {
   const { data: currentUser } = useCurrentUser();
   const canManage = Boolean(currentUser && MANAGE_ROLES.has(currentUser.role));
   const { toast } = useToast();
