@@ -21,6 +21,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +31,11 @@ from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.laboratory_order import LABORATORY_ORDER_STATUS_TRANSITIONS, LaboratoryOrder, LaboratoryOrderStatus
 from app.models.laboratory_reference_range import LaboratoryReferenceRange
 from app.models.laboratory_result import LaboratoryResultType
-from app.models.laboratory_template import DEFAULT_LABORATORY_TEMPLATES, LaboratoryTemplateParameter
+from app.models.laboratory_template import (
+    DEFAULT_LABORATORY_TEMPLATES,
+    LaboratoryTemplate,
+    LaboratoryTemplateParameter,
+)
 from app.models.order import Order, OrderCategory, OrderStatus
 from app.models.pathologist import Pathologist
 from app.models.patient import Patient
@@ -40,12 +45,63 @@ from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
 from app.repositories.laboratory_repository import LaboratoryRepository
 from app.repositories.visit_repository import VisitRepository
-from app.schemas.laboratory import LaboratoryAttachmentRead, LaboratoryOrderRead, LaboratoryResultRead, LaboratoryTemplateRead
+from app.schemas.laboratory import (
+    LaboratoryAttachmentRead,
+    LaboratoryOrderRead,
+    LaboratoryResultRead,
+    LaboratoryTemplateCreate,
+    LaboratoryTemplateParameterCreate,
+    LaboratoryTemplateRead,
+)
+from app.schemas.laboratory_template_import import (
+    ImportCommitRead,
+    ImportIssueRead,
+    ImportPreviewRead,
+    TemplateDiffRead,
+    TemplateParameterDiffRead,
+)
 from app.services.audit_service import AuditService
 from app.services.invoice_service import InvoiceService
 from app.services.laboratory_interpretation import interpret_result
+from app.services.laboratory_template_import_export import (
+    PARAMETERS_SHEET,
+    TEMPLATES_SHEET,
+    ParsedParameterRow,
+    ParsedTemplateRow,
+    ParsedWorkbook,
+    build_export_workbook,
+    parse_workbook,
+)
 from app.services.queue_service import QueueService
 from app.services import sync_queue_service
+
+
+def _decimal_differs(a: Decimal | None, b: Decimal | None) -> bool:
+    if a is None and b is None:
+        return False
+    if a is None or b is None:
+        return True
+    return Decimal(a) != Decimal(b)
+
+
+def _parameter_row_differs(p: "ParsedParameterRow", existing: LaboratoryTemplateParameter) -> bool:
+    """Field-by-field comparison used only to build the Import Preview's
+    `~ changed` vs `unchanged` breakdown - never used for the actual write
+    (the write always applies the full imported row, same as a manual
+    template edit through the existing UI does)."""
+    return (
+        p.parameter_name != existing.parameter_name
+        or (p.unit or None) != (existing.unit or None)
+        or (p.normal_range or None) != (existing.normal_range or None)
+        or p.result_type != existing.result_type.value
+        or (p.display_order if p.display_order is not None else 0) != existing.display_order
+        or _decimal_differs(p.range_low, existing.range_low)
+        or _decimal_differs(p.range_high, existing.range_high)
+        or (p.expected_normal_text or None) != (existing.expected_normal_text or None)
+        or (p.options or []) != (existing.options or [])
+        or p.requires_site != existing.requires_site
+        or (p.section or None) != (existing.section or None)
+    )
 
 # Maps LaboratoryOrderStatus -> the underlying Phase 9 Order's OrderStatus.
 # This is the same class of "reflect a child entity's status onto the
@@ -692,6 +748,431 @@ class LaboratoryService:
             await self.session.commit()
         return [LaboratoryTemplateRead.model_validate(t, from_attributes=True) for t in created]
 
+    # --- Import / Export (bulk Excel maintenance) ---
+    # See `laboratory_template_import_export.py`'s module docstring for the
+    # workbook format. Preview and Commit both independently re-parse and
+    # re-validate the SAME uploaded bytes (never trusting client-cached
+    # preview state) - Preview only ever reads (list_templates/
+    # get_template_any_clinic), Commit is the only path that writes, and it
+    # writes every touched template inside ONE transaction (a single
+    # `session.commit()` after the whole loop, `session.rollback()` on any
+    # failure) so a failure partway through never leaves some templates
+    # imported and others not.
+
+    async def export_templates_workbook(self, *, clinic_id: UUID) -> bytes:
+        templates = await self.list_templates(clinic_id=clinic_id, active_only=False)
+        # mode="json" so enum members / UUIDs / Decimals become plain
+        # strings/numbers - openpyxl cell values must be Excel-safe
+        # primitives, not Python objects.
+        return build_export_workbook([t.model_dump(mode="json") for t in templates])
+
+    def _resolve_parameter_targets(
+        self, parsed: ParsedWorkbook
+    ) -> tuple[dict[int, ParsedTemplateRow], list[ImportIssueRead]]:
+        """Joins each Parameters-sheet row to the ONE Templates-sheet row it
+        belongs to, within this file - by Template ID when given (required
+        for referencing an existing template being updated), else by an
+        unambiguous Template Test Name match (the only way a brand-new
+        template's parameters can be linked, since a new template has no ID
+        yet). A Parameters row can only reference a template that is ALSO
+        present in this same workbook's Templates sheet."""
+        issues: list[ImportIssueRead] = []
+        by_id = {t.id: t for t in parsed.templates if t.id is not None}
+        by_name: dict[str, list[ParsedTemplateRow]] = {}
+        for t in parsed.templates:
+            by_name.setdefault(t.test_name.strip().lower(), []).append(t)
+
+        targets: dict[int, ParsedTemplateRow] = {}
+        for idx, p in enumerate(parsed.parameters):
+            if p.template_id is not None:
+                target = by_id.get(p.template_id)
+                if target is None:
+                    issues.append(
+                        ImportIssueRead(
+                            severity="error",
+                            sheet=PARAMETERS_SHEET,
+                            row=p.row,
+                            template=p.template_test_name,
+                            parameter=p.parameter_name,
+                            reason=(
+                                f"Template ID {p.template_id} is not present "
+                                "in the Templates sheet of this file."
+                            ),
+                        )
+                    )
+                else:
+                    targets[idx] = target
+                continue
+            candidates = by_name.get(p.template_test_name.strip().lower(), [])
+            if len(candidates) == 1:
+                targets[idx] = candidates[0]
+            elif len(candidates) == 0:
+                issues.append(
+                    ImportIssueRead(
+                        severity="error",
+                        sheet=PARAMETERS_SHEET,
+                        row=p.row,
+                        template=p.template_test_name,
+                        parameter=p.parameter_name,
+                        reason=(
+                            f'No Templates sheet row found for Test Name "{p.template_test_name}".'
+                        ),
+                    )
+                )
+            else:
+                issues.append(
+                    ImportIssueRead(
+                        severity="error",
+                        sheet=PARAMETERS_SHEET,
+                        row=p.row,
+                        template=p.template_test_name,
+                        parameter=p.parameter_name,
+                        reason=(
+                        f'Test Name "{p.template_test_name}" is ambiguous '
+                        f"({len(candidates)} matching Templates rows) - provide Template ID."
+                    ),
+                    )
+                )
+        return targets, issues
+
+    async def _build_import_preview(
+        self, parsed: ParsedWorkbook, *, clinic_id: UUID
+    ) -> ImportPreviewRead:
+        issues: list[ImportIssueRead] = [
+            ImportIssueRead(
+                severity=i.severity,
+                sheet=i.sheet,
+                row=i.row,
+                template=i.template,
+                parameter=i.parameter,
+                reason=i.reason,
+            )
+            for i in parsed.issues
+        ]
+
+        # Duplicate template IDs / duplicate blank-ID test names within THIS file.
+        seen_ids: dict[UUID, int] = {}
+        blank_id_names: dict[str, int] = {}
+        for t in parsed.templates:
+            if t.id is not None:
+                if t.id in seen_ids:
+                    issues.append(
+                        ImportIssueRead(
+                            severity="error",
+                            sheet=TEMPLATES_SHEET,
+                            row=t.row,
+                            template=t.test_name,
+                            parameter=None,
+                            reason=f"Duplicate template ID also used on row {seen_ids[t.id]}.",
+                        )
+                    )
+                else:
+                    seen_ids[t.id] = t.row
+            else:
+                key = t.test_name.strip().lower()
+                if key in blank_id_names:
+                    issues.append(
+                        ImportIssueRead(
+                            severity="error",
+                            sheet=TEMPLATES_SHEET,
+                            row=t.row,
+                            template=t.test_name,
+                            parameter=None,
+                            reason=(
+                                f'Duplicate Test Name "{t.test_name}" with no ID also used on '
+                                f"row {blank_id_names[key]} - add a stable ID to disambiguate, "
+                                "or make the names unique."
+                            ),
+                        )
+                    )
+                else:
+                    blank_id_names[key] = t.row
+
+        # Tenant ownership check for every referenced existing template.
+        resolved_existing: dict[UUID, LaboratoryTemplate] = {}
+        for t in parsed.templates:
+            if t.id is None:
+                continue
+            any_clinic = await self.repo.get_template_any_clinic(t.id)
+            if any_clinic is None:
+                issues.append(
+                    ImportIssueRead(
+                        severity="error",
+                        sheet=TEMPLATES_SHEET,
+                        row=t.row,
+                        template=t.test_name,
+                        parameter=None,
+                        reason=(
+                            f"Template ID {t.id} does not exist. "
+                            "Leave ID blank to create a new template."
+                        ),
+                    )
+                )
+            elif any_clinic.clinic_id != clinic_id:
+                issues.append(
+                    ImportIssueRead(
+                        severity="error",
+                        sheet=TEMPLATES_SHEET,
+                        row=t.row,
+                        template=t.test_name,
+                        parameter=None,
+                        reason=(
+                            "This template ID belongs to a different clinic "
+                            "and cannot be imported here."
+                        ),
+                    )
+                )
+            else:
+                # `get_template` (not `get_template_any_clinic`) eager-loads
+                # `.parameters` (`selectinload`) - needed below to build the
+                # +/~/- diff without a lazy-load access outside an awaited
+                # context.
+                resolved_existing[t.id] = await self.repo.get_template(t.id, clinic_id)
+
+        # Reuse the existing Create schema for field-level validation
+        # (length limits, types) instead of duplicating those rules here.
+        for t in parsed.templates:
+            try:
+                LaboratoryTemplateCreate(
+                    test_name=t.test_name,
+                    test_category=t.test_category,
+                    specimen_type=t.specimen_type,
+                    default_price=t.default_price,
+                    turnaround_time_hours=t.turnaround_time_hours,
+                    is_active=t.is_active,
+                )
+            except PydanticValidationError as exc:
+                for e in exc.errors():
+                    issues.append(
+                        ImportIssueRead(
+                            severity="error",
+                            sheet=TEMPLATES_SHEET,
+                            row=t.row,
+                            template=t.test_name,
+                            parameter=None,
+                            reason=f"{e['loc'][0] if e['loc'] else 'field'}: {e['msg']}",
+                        )
+                    )
+
+        param_target, target_issues = self._resolve_parameter_targets(parsed)
+        issues.extend(target_issues)
+
+        seen_param_names: dict[tuple[int, str], int] = {}
+        for idx, p in enumerate(parsed.parameters):
+            target = param_target.get(idx)
+            if target is None:
+                continue
+            key = (id(target), p.parameter_name.strip().lower())
+            if key in seen_param_names:
+                issues.append(
+                    ImportIssueRead(
+                        severity="error",
+                        sheet=PARAMETERS_SHEET,
+                        row=p.row,
+                        template=p.template_test_name,
+                        parameter=p.parameter_name,
+                        reason=(
+                            "Duplicate parameter name within this template "
+                            f"(also row {seen_param_names[key]})."
+                        ),
+                    )
+                )
+            else:
+                seen_param_names[key] = p.row
+            try:
+                LaboratoryTemplateParameterCreate(
+                    parameter_name=p.parameter_name,
+                    unit=p.unit,
+                    normal_range=p.normal_range,
+                    result_type=p.result_type,
+                    display_order=p.display_order if p.display_order is not None else 0,
+                    range_low=p.range_low,
+                    range_high=p.range_high,
+                    expected_normal_text=p.expected_normal_text,
+                    options=p.options,
+                    requires_site=p.requires_site,
+                    section=p.section,
+                )
+            except PydanticValidationError as exc:
+                for e in exc.errors():
+                    issues.append(
+                        ImportIssueRead(
+                            severity="error",
+                            sheet=PARAMETERS_SHEET,
+                            row=p.row,
+                            template=p.template_test_name,
+                            parameter=p.parameter_name,
+                            reason=f"{e['loc'][0] if e['loc'] else 'field'}: {e['msg']}",
+                        )
+                    )
+
+        diffs: list[TemplateDiffRead] = []
+        for t in parsed.templates:
+            own_params = [
+                p
+                for idx, p in enumerate(parsed.parameters)
+                if param_target.get(idx) is t
+            ]
+            added: list[str] = []
+            changed: list[str] = []
+            unchanged: list[str] = []
+            removed: list[str] = []
+            if t.id is not None and t.id in resolved_existing:
+                existing = resolved_existing[t.id]
+                by_pid = {ep.id: ep for ep in existing.parameters}
+                by_pname = {
+                    ep.parameter_name.strip().lower(): ep for ep in existing.parameters
+                }
+                matched_existing_ids: set = set()
+                for p in own_params:
+                    ep = (
+                        by_pid.get(p.parameter_id)
+                        if p.parameter_id is not None
+                        else None
+                    )
+                    if ep is None:
+                        ep = by_pname.get(p.parameter_name.strip().lower())
+                    if ep is None:
+                        added.append(p.parameter_name)
+                    else:
+                        matched_existing_ids.add(ep.id)
+                        (
+                            changed if _parameter_row_differs(p, ep) else unchanged
+                        ).append(p.parameter_name)
+                for ep in existing.parameters:
+                    if ep.id not in matched_existing_ids:
+                        removed.append(ep.parameter_name)
+                action = "update"
+            else:
+                added = [p.parameter_name for p in own_params]
+                action = "create"
+            diffs.append(
+                TemplateDiffRead(
+                    template_id=str(t.id) if t.id else None,
+                    test_name=t.test_name,
+                    action=action,
+                    parameters=TemplateParameterDiffRead(
+                        added=added,
+                        changed=changed,
+                        removed=removed,
+                        unchanged=unchanged,
+                    ),
+                )
+            )
+
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+        return ImportPreviewRead(
+            template_count=len(parsed.templates),
+            parameter_count=len(parsed.parameters),
+            new_template_count=sum(1 for t in parsed.templates if t.id is None),
+            updated_template_count=sum(1 for t in parsed.templates if t.id is not None),
+            errors=errors,
+            warnings=warnings,
+            diffs=diffs,
+            can_commit=len(errors) == 0,
+        )
+
+    async def preview_import(
+        self, content: bytes, *, clinic_id: UUID
+    ) -> ImportPreviewRead:
+        """Read-only: parses the workbook and validates every row against
+        this clinic's existing templates, but never writes to the
+        database - the spec's "Do NOT modify the database during parsing/
+        preview" requirement."""
+        parsed = parse_workbook(content)
+        return await self._build_import_preview(parsed, clinic_id=clinic_id)
+
+    async def commit_import(
+        self, content: bytes, *, clinic_id: UUID, actor_id: UUID
+    ) -> ImportCommitRead:
+        """Re-parses and re-validates the SAME file independently (never
+        trusts a client-held preview) before writing anything. All writes
+        happen via the existing repository methods within ONE transaction -
+        `session.commit()` only after every template has been created/
+        updated successfully; any failure rolls back the whole batch."""
+        parsed = parse_workbook(content)
+        preview = await self._build_import_preview(parsed, clinic_id=clinic_id)
+        if not preview.can_commit:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Import has validation errors and cannot be committed.",
+            )
+
+        param_target, _ = self._resolve_parameter_targets(parsed)
+        created = 0
+        updated = 0
+        parameter_count = 0
+        names: list[str] = []
+        try:
+            for t in parsed.templates:
+                own_params = [
+                    p
+                    for idx, p in enumerate(parsed.parameters)
+                    if param_target.get(idx) is t
+                ]
+                param_dicts = [
+                    LaboratoryTemplateParameterCreate(
+                        parameter_name=p.parameter_name,
+                        unit=p.unit,
+                        normal_range=p.normal_range,
+                        result_type=p.result_type,
+                        display_order=(
+                            p.display_order if p.display_order is not None else i
+                        ),
+                        range_low=p.range_low,
+                        range_high=p.range_high,
+                        expected_normal_text=p.expected_normal_text,
+                        options=p.options,
+                        requires_site=p.requires_site,
+                        section=p.section,
+                    ).model_dump()
+                    for i, p in enumerate(own_params)
+                ]
+                fields = dict(
+                    test_name=t.test_name,
+                    test_category=t.test_category,
+                    specimen_type=t.specimen_type,
+                    default_price=t.default_price,
+                    turnaround_time_hours=t.turnaround_time_hours,
+                    is_active=t.is_active,
+                )
+                if t.id is not None:
+                    existing = await self.repo.get_template(t.id, clinic_id)
+                    await self.repo.update_template(
+                        existing, parameters=param_dicts, **fields
+                    )
+                    updated += 1
+                else:
+                    await self.repo.create_template(
+                        clinic_id=clinic_id, parameters=param_dicts, **fields
+                    )
+                    created += 1
+                names.append(t.test_name)
+                parameter_count += len(param_dicts)
+
+            await self.audit_service.log_event(
+                clinic_id=clinic_id,
+                user_id=actor_id,
+                action="laboratory.templates_imported",
+                entity_type="laboratory_template",
+                metadata={
+                    "created": created,
+                    "updated": updated,
+                    "parameters": parameter_count,
+                    "test_names": names,
+                },
+            )
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+        return ImportCommitRead(
+            created_template_count=created,
+            updated_template_count=updated,
+            parameter_count=parameter_count,
+            template_names=names,
+        )
     # --- Reference Ranges (Phase 2A - Structured Result Backend Foundation) ---
     # Additive companion to each LaboratoryTemplateParameter's own default
     # range_low/range_high/expected_normal_text (unchanged). Not yet wired

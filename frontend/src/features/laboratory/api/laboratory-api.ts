@@ -7,7 +7,12 @@ import type {
   LaboratoryResult,
   LaboratoryResultInput,
   LaboratoryTemplate,
+  LaboratoryTemplateDiff,
+  LaboratoryTemplateImportIssue,
+  LaboratoryTemplateImportPreview,
+  LaboratoryTemplateImportResult,
   LaboratoryTemplateParameter,
+  LaboratoryTemplateParameterDiff,
 } from "@/features/laboratory/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- raw snake_case wire shapes */
@@ -128,6 +133,60 @@ function toDashboard(raw: any): LaboratoryDashboardStats {
     statOrders: raw.stat_orders ?? 0,
     cancelled: raw.cancelled ?? 0,
   };
+}
+
+function toImportIssue(raw: any): LaboratoryTemplateImportIssue {
+  return {
+    severity: raw.severity, sheet: raw.sheet, row: raw.row,
+    template: raw.template ?? null, parameter: raw.parameter ?? null, reason: raw.reason,
+  };
+}
+
+function toParameterDiff(raw: any): LaboratoryTemplateParameterDiff {
+  return { added: raw.added ?? [], changed: raw.changed ?? [], removed: raw.removed ?? [], unchanged: raw.unchanged ?? [] };
+}
+
+function toTemplateDiff(raw: any): LaboratoryTemplateDiff {
+  return { templateId: raw.template_id ?? null, testName: raw.test_name, action: raw.action, parameters: toParameterDiff(raw.parameters) };
+}
+
+function toImportPreview(raw: any): LaboratoryTemplateImportPreview {
+  return {
+    templateCount: raw.template_count,
+    parameterCount: raw.parameter_count,
+    newTemplateCount: raw.new_template_count,
+    updatedTemplateCount: raw.updated_template_count,
+    errors: (raw.errors ?? []).map(toImportIssue),
+    warnings: (raw.warnings ?? []).map(toImportIssue),
+    diffs: (raw.diffs ?? []).map(toTemplateDiff),
+    canCommit: raw.can_commit,
+  };
+}
+
+function toImportResult(raw: any): LaboratoryTemplateImportResult {
+  return {
+    createdTemplateCount: raw.created_template_count,
+    updatedTemplateCount: raw.updated_template_count,
+    parameterCount: raw.parameter_count,
+    templateNames: raw.template_names ?? [],
+  };
+}
+
+/** Triggers a browser download of a `Blob` under the given filename - the
+ * same `createObjectURL` + hidden-anchor-click pattern `downloadCsv`
+ * already uses in `lib/csv.ts`, just for an arbitrary Blob (the workbook
+ * bytes here, rather than CSV text) since the file itself is fetched as
+ * an authenticated Blob (`apiFetchBlob`), not a public URL. */
+function downloadBlob(filename: string, blob: Blob): void {
+  if (typeof window === "undefined") return;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function fromTemplateParameterInput(p: LaboratoryTemplateParameter) {
@@ -252,4 +311,38 @@ export const laboratoryApi = {
         ...(payload.parameters !== undefined && { parameters: payload.parameters.map(fromTemplateParameterInput) }),
       })
       .then(toTemplate),
+
+  /** Downloads the current clinic's templates as an `.xlsx` workbook and
+   * saves it via the browser - the backend (`GET /laboratory/templates/
+   * export`) is clinic-scoped server-side, so this can never return
+   * another clinic's data. */
+  exportTemplates: async (): Promise<void> => {
+    const blob = await apiFetchBlob("/laboratory/templates/export");
+    downloadBlob(`laboratory-templates-${new Date().toISOString().slice(0, 10)}.xlsx`, blob);
+  },
+
+  downloadBlankImportTemplate: async (): Promise<void> => {
+    const blob = await apiFetchBlob("/laboratory/templates/import/blank");
+    downloadBlob("laboratory-templates-import-template.xlsx", blob);
+  },
+
+  /** Read-only: uploads the chosen workbook for validation and returns a
+   * preview (counts, per-template +/~/- parameter diffs, errors,
+   * warnings) - never writes to the database. */
+  previewTemplateImport: async (file: File): Promise<LaboratoryTemplateImportPreview> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const raw = await apiUploadFile<any>("/laboratory/templates/import/preview", formData);
+    return toImportPreview(raw);
+  },
+
+  /** Re-uploads the SAME file to actually commit the import, only called
+   * after the user has confirmed the preview - the backend independently
+   * re-parses/re-validates rather than trusting the earlier preview. */
+  commitTemplateImport: async (file: File): Promise<LaboratoryTemplateImportResult> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const raw = await apiUploadFile<any>("/laboratory/templates/import/commit", formData);
+    return toImportResult(raw);
+  },
 };

@@ -189,6 +189,49 @@ export function useUpdateLaboratoryTemplate() {
   });
 }
 
+// --- Template Import/Export ---
+
+export function useExportLaboratoryTemplates() {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: () => laboratoryApi.exportTemplates(),
+    onError: (error) => toast({ title: "Could not export templates", description: errorMessage(error), variant: "error" }),
+  });
+}
+
+export function useDownloadBlankImportTemplate() {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: () => laboratoryApi.downloadBlankImportTemplate(),
+    onError: (error) => toast({ title: "Could not download template", description: errorMessage(error), variant: "error" }),
+  });
+}
+
+export function usePreviewTemplateImport() {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (file: File) => laboratoryApi.previewTemplateImport(file),
+    onError: (error) => toast({ title: "Could not read file", description: errorMessage(error), variant: "error" }),
+  });
+}
+
+export function useCommitTemplateImport() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => laboratoryApi.commitTemplateImport(file),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["laboratory", "templates"] });
+      toast({
+        title: "Templates imported",
+        description: `${result.createdTemplateCount} created, ${result.updatedTemplateCount} updated, ${result.parameterCount} parameters.`,
+        variant: "success",
+      });
+    },
+    onError: (error) => toast({ title: "Import failed", description: errorMessage(error), variant: "error" }),
+  });
+}
+
 // --- Feature 4: Attachments ---
 // Dedicated query, independent of whatever (possibly stale, 30s-refetch)
 // `LaboratoryOrder` object the caller was handed as a prop - the Result

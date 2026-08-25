@@ -255,6 +255,18 @@ class LaboratoryRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_template_any_clinic(self, template_id: UUID) -> LaboratoryTemplate | None:
+        """Deliberately NOT clinic-scoped - used only by Import preview/
+        commit to tell "this ID doesn't exist anywhere" apart from "this ID
+        belongs to a different clinic", so cross-tenant import attempts get
+        a clear rejection reason instead of a generic 404. Never used to
+        read or return another clinic's data to the caller - only whether
+        a row with this id exists and, if so, its `clinic_id`."""
+        stmt = select(LaboratoryTemplate).where(
+            LaboratoryTemplate.id == template_id, LaboratoryTemplate.is_deleted.is_(False)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_templates(self, clinic_id: UUID, *, active_only: bool = False) -> list[LaboratoryTemplate]:
         filters = [LaboratoryTemplate.clinic_id == clinic_id, LaboratoryTemplate.is_deleted.is_(False)]
         if active_only:

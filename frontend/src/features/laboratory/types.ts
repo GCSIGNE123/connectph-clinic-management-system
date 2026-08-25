@@ -190,6 +190,49 @@ export interface LaboratoryTemplate {
   createdAt: string;
 }
 
+// --- Template Import/Export (bulk Excel maintenance) ---
+
+export interface LaboratoryTemplateImportIssue {
+  severity: "error" | "warning";
+  sheet: string;
+  row: number;
+  template: string | null;
+  parameter: string | null;
+  reason: string;
+}
+
+export interface LaboratoryTemplateParameterDiff {
+  added: string[];
+  changed: string[];
+  removed: string[];
+  unchanged: string[];
+}
+
+export interface LaboratoryTemplateDiff {
+  templateId: string | null;
+  testName: string;
+  action: "create" | "update";
+  parameters: LaboratoryTemplateParameterDiff;
+}
+
+export interface LaboratoryTemplateImportPreview {
+  templateCount: number;
+  parameterCount: number;
+  newTemplateCount: number;
+  updatedTemplateCount: number;
+  errors: LaboratoryTemplateImportIssue[];
+  warnings: LaboratoryTemplateImportIssue[];
+  diffs: LaboratoryTemplateDiff[];
+  canCommit: boolean;
+}
+
+export interface LaboratoryTemplateImportResult {
+  createdTemplateCount: number;
+  updatedTemplateCount: number;
+  parameterCount: number;
+  templateNames: string[];
+}
+
 export const LAB_ORDER_STATUS_LABELS: Record<LaboratoryOrderStatus, string> = {
   Requested: "Requested",
   Collected: "Collected",

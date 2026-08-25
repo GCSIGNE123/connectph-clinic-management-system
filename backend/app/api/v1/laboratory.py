@@ -10,11 +10,12 @@ but don't act on the lab workflow itself).
 
 import mimetypes
 import uuid
+from datetime import date
 from pathlib import Path as FsPath
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import (
@@ -42,7 +43,14 @@ from app.schemas.laboratory import (
     LaboratoryTemplateRead,
     LaboratoryTemplateUpdate,
 )
+from app.schemas.laboratory_template_import import ImportCommitRead, ImportPreviewRead
 from app.services.laboratory_service import LaboratoryService, attachment_to_read
+from app.services.laboratory_template_import_export import (
+    WorkbookStructureError,
+    build_blank_import_workbook,
+)
+
+MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB - generous for a template catalog spreadsheet
 
 router = APIRouter(prefix="/laboratory", tags=["laboratory"])
 
@@ -327,6 +335,91 @@ async def seed_default_templates(
     reference ranges) - same opt-in pattern as `POST /services/seed-
     defaults`/`POST /departments/seed-defaults`, not auto-run."""
     return await LaboratoryService(db).seed_default_templates(clinic_id=clinic_id, actor_id=current_user.id)
+
+
+# --- Import / Export (bulk Excel maintenance) ---
+# Export/download-blank are read-only (same LAB_VIEW_ROLES gate as
+# `list_templates` - "View users may export only if current permissions
+# permit viewing configuration"). Preview/Commit both mutate-adjacent
+# (Preview reads the DB to validate but writes nothing; Commit writes) so
+# both use the same Administrator-only gate as create/update.
+
+@router.get("/templates/export")
+async def export_templates(
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_view_role),
+) -> Response:
+    content = await LaboratoryService(db).export_templates_workbook(clinic_id=clinic_id)
+    filename = f"laboratory-templates-{date.today().isoformat()}.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/templates/import/blank")
+async def download_blank_import_template(
+    clinic_id: UUID = Depends(require_clinic_context),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> Response:
+    return Response(
+        content=build_blank_import_workbook(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="laboratory-templates-import-template.xlsx"'
+            )
+        },
+    )
+
+
+@router.post("/templates/import/preview", response_model=ImportPreviewRead)
+async def preview_template_import(
+    file: UploadFile = File(...),
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> ImportPreviewRead:
+    """Read-only: parses + validates the uploaded workbook against this
+    clinic's existing templates and returns a preview (counts, per-template
+    +/~/- parameter diffs, errors, warnings). Never writes to the
+    database."""
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+    if len(content) > MAX_IMPORT_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is too large.")
+    try:
+        return await LaboratoryService(db).preview_import(content, clinic_id=clinic_id)
+    except WorkbookStructureError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/templates/import/commit", response_model=ImportCommitRead)
+async def commit_template_import(
+    file: UploadFile = File(...),
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> ImportCommitRead:
+    """Re-parses and re-validates the SAME file independently (never trusts
+    a client-held preview) before writing anything. Rejects with 400 if any
+    validation error exists - the same "no partial import" guarantee as the
+    Preview step, now enforced server-side regardless of what the client's
+    UI already showed the user."""
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+    if len(content) > MAX_IMPORT_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is too large.")
+    try:
+        return await LaboratoryService(db).commit_import(
+            content, clinic_id=clinic_id, actor_id=current_user.id
+        )
+    except WorkbookStructureError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # --- Reference Ranges (Phase 2A - Structured Result Backend Foundation) ---

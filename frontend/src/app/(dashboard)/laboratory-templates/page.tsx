@@ -6,33 +6,49 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { useLaboratoryTemplates } from "@/features/laboratory/hooks/use-laboratory";
+import { useExportLaboratoryTemplates, useLaboratoryTemplates } from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryTemplateFormDialog } from "@/features/laboratory/components/LaboratoryTemplateFormDialog";
+import { LaboratoryTemplateImportDialog } from "@/features/laboratory/components/LaboratoryTemplateImportDialog";
 import type { LaboratoryTemplate } from "@/features/laboratory/types";
 
 /** Administrator-only test-catalog configuration screen (Phase 10) - lives
  * under Clinic Configuration conceptually but is its own top-level route
- * since it isn't part of the shared `MasterDataPage` config array. */
+ * since it isn't part of the shared `MasterDataPage` config array.
+ *
+ * Bulk Import/Export: reuses the same Administrator-only mutation gate as
+ * "New Template"/Edit (`LAB_TEMPLATE_MANAGE_ROLES` on the backend) for
+ * Import; Export reuses the broader view-role gate `list_templates`
+ * already uses, since any role that can see the catalog may download it. */
 export default function LaboratoryTemplatesPage() {
   const { data: templates, isLoading } = useLaboratoryTemplates();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [editing, setEditing] = useState<LaboratoryTemplate | null>(null);
+  const exportTemplates = useExportLaboratoryTemplates();
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Laboratory Test Templates</h1>
           <p className="text-sm text-muted-foreground">Configure tests, parameters, pricing, and turnaround times.</p>
         </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setDialogOpen(true);
-          }}
-        >
-          + New Template
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => setImportDialogOpen(true)}>
+            Import Templates
+          </Button>
+          <Button type="button" variant="outline" isLoading={exportTemplates.isPending} onClick={() => exportTemplates.mutate()}>
+            Export Templates
+          </Button>
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setDialogOpen(true);
+            }}
+          >
+            + New Template
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -95,6 +111,7 @@ export default function LaboratoryTemplatesPage() {
       </Card>
 
       <LaboratoryTemplateFormDialog open={dialogOpen} onOpenChange={setDialogOpen} template={editing} />
+      <LaboratoryTemplateImportDialog open={importDialogOpen} onOpenChange={setImportDialogOpen} />
     </div>
   );
 }
