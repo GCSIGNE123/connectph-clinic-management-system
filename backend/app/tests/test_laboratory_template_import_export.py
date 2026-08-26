@@ -13,8 +13,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.models.role import Role
+from app.services.laboratory_template_import_export import (
+    VALID_RESULT_TYPES,
+    _normalize_result_type,
+)
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_normalize_result_type_is_case_insensitive_but_only_for_real_values() -> None:
+    """Pure-function unit test for the normalization helper itself, isolated
+    from the DB/HTTP integration tests below."""
+    for canonical in VALID_RESULT_TYPES:
+        assert _normalize_result_type(canonical) == canonical
+        assert _normalize_result_type(canonical.lower()) == canonical
+        assert _normalize_result_type(canonical.upper()) == canonical
+    assert _normalize_result_type("  Numeric  ") == "Numeric"
+    assert _normalize_result_type("numerik") is None
+    assert _normalize_result_type("") is None
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -387,6 +403,65 @@ async def test_import_rejects_invalid_parameter_type(
         template_rows=[["", "Test A", "", "", 0, "", "TRUE"]],
         parameter_rows=[
             ["", "Test A", "", "Param", "", "", "NotARealType", 0, "", "", "", "", "FALSE", ""]
+        ],
+    )
+    preview = await _upload(client, "/api/v1/laboratory/templates/import/preview", headers, content)
+    body = preview.json()
+    assert body["can_commit"] is False
+    assert any("Invalid Result Type" in e["reason"] for e in body["errors"])
+
+
+# --- Result Type normalization: case-insensitive input, canonical storage ---
+# A hand-edited/human-typed workbook cell like "numeric" is semantically the
+# same as the canonical "Numeric" the schema/model require - only genuinely
+# unrecognized values (misspellings, other words) should be rejected. See
+# `laboratory_template_import_export.py::_normalize_result_type`.
+
+
+@pytest.mark.parametrize(
+    "raw_result_type", ["numeric", "NUMERIC", "Numeric", "NuMeRiC", " numeric "]
+)
+async def test_import_normalizes_result_type_case_and_commits_as_canonical(
+    client: AsyncClient, make_clinic_with_owner, raw_result_type: str
+) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    content = _workbook_bytes(
+        template_rows=[["", "β-HCG (Serum)", "Immunology", "Serum", 300, 24, "TRUE"]],
+        parameter_rows=[
+            [
+                "", "β-HCG (Serum)", "", "Result", "mIU/mL", "<5 mIU/mL", raw_result_type,
+                0, "", "", "", "", "FALSE", "",
+            ]
+        ],
+    )
+    preview = await _upload(client, "/api/v1/laboratory/templates/import/preview", headers, content)
+    body = preview.json()
+    assert body["errors"] == [], body["errors"]
+    assert body["can_commit"] is True
+
+    commit = await _upload(client, "/api/v1/laboratory/templates/import/commit", headers, content)
+    assert commit.status_code == 200, commit.text
+
+    listed = (await client.get("/api/v1/laboratory/templates", headers=headers)).json()
+    template = next(t for t in listed if t["test_name"] == "β-HCG (Serum)")
+    param = template["parameters"][0]
+    # Canonical enum value stored, regardless of the casing typed in the sheet.
+    assert param["result_type"] == "Numeric"
+    # The clinical reference value itself is untouched free text - normalization
+    # only rewrites the Result Type cell, never the Normal Range content.
+    assert param["normal_range"] == "<5 mIU/mL"
+
+
+async def test_import_still_rejects_a_genuinely_unknown_result_type_after_normalization(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Normalization only widens accepted CASING of the five real result
+    types - it must not silently accept an unrelated/misspelled value."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    content = _workbook_bytes(
+        template_rows=[["", "Test A", "", "", 0, "", "TRUE"]],
+        parameter_rows=[
+            ["", "Test A", "", "Param", "", "", "numerik", 0, "", "", "", "", "FALSE", ""]
         ],
     )
     preview = await _upload(client, "/api/v1/laboratory/templates/import/preview", headers, content)

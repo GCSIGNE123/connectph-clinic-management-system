@@ -61,8 +61,23 @@ PARAMETER_HEADERS = [
 ]
 
 VALID_RESULT_TYPES = {"Numeric", "Text", "Categorical", "Microscopy", "Titer"}
+# Case-insensitive lookup so a hand-edited cell ("numeric", "NUMERIC", "text")
+# still resolves to the exact canonical `LaboratoryResultType` value the
+# backend schema/model expect - the canonical values themselves (the set
+# above) are never changed or widened, only the accepted spelling of the
+# input is. Export always writes the canonical casing already (see
+# `build_export_workbook`, which serializes the real enum's `.value`), so
+# this only matters for a workbook a person typed or edited by hand.
+_RESULT_TYPE_ALIASES = {rt.lower(): rt for rt in VALID_RESULT_TYPES}
 _TRUE_VALUES = {"true", "1", "yes", "y", "active"}
 _FALSE_VALUES = {"false", "0", "no", "n", "inactive"}
+
+
+def _normalize_result_type(raw: str) -> str | None:
+    """Returns the canonical `VALID_RESULT_TYPES` spelling for a
+    case-insensitive match, or `None` if `raw` isn't any known result type
+    at all (a genuinely invalid value, which the caller still rejects)."""
+    return _RESULT_TYPE_ALIASES.get(raw.strip().lower())
 
 
 # --- Row-level parse results (structural parsing only - no DB access) ---
@@ -349,8 +364,9 @@ def parse_workbook(content: bytes) -> ParsedWorkbook:
             )
             continue
 
-        result_type = _s(row.get("Result Type")) or "Numeric"
-        if result_type not in VALID_RESULT_TYPES:
+        raw_result_type = _s(row.get("Result Type")) or "Numeric"
+        result_type = _normalize_result_type(raw_result_type)
+        if result_type is None:
             result.issues.append(
                 ParseIssue(
                     "error",
@@ -359,11 +375,12 @@ def parse_workbook(content: bytes) -> ParsedWorkbook:
                     template_test_name,
                     parameter_name,
                     (
-                        f'Invalid Result Type "{result_type}" - must be one of '
+                        f'Invalid Result Type "{raw_result_type}" - must be one of '
                         f'{", ".join(sorted(VALID_RESULT_TYPES))}.'
                     ),
                 )
             )
+            result_type = "Numeric"
 
         display_order, order_ok = _parse_int(row.get("Display Order"))
         if not order_ok:
@@ -451,7 +468,7 @@ def parse_workbook(content: bytes) -> ParsedWorkbook:
                 parameter_name=parameter_name,
                 unit=_s(row.get("Unit")),
                 normal_range=_s(row.get("Normal Range")),
-                result_type=result_type if result_type in VALID_RESULT_TYPES else "Numeric",
+                result_type=result_type,
                 display_order=display_order if order_ok else None,
                 range_low=range_low if low_ok else None,
                 range_high=range_high if high_ok else None,
