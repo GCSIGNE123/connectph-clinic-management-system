@@ -723,6 +723,26 @@ class LaboratoryService:
         await self.session.commit()
         return LaboratoryTemplateRead.model_validate(template, from_attributes=True)
 
+    async def delete_template(self, template_id: UUID, *, clinic_id: UUID, actor_id: UUID) -> None:
+        """Soft delete (see `LaboratoryRepository.delete_template`'s
+        docstring for exactly what stays intact) - clinic-scoped via the
+        same `get_template` lookup `update_template` uses, so a template
+        belonging to another clinic 404s here exactly like it does there,
+        and is never touched."""
+        template = await self.repo.get_template(template_id, clinic_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Laboratory template not found"
+            )
+        test_name = template.test_name
+        await self.repo.delete_template(template)
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="laboratory.template_deleted",
+            entity_type="laboratory_template", entity_id=str(template_id),
+            metadata={"template_id": str(template_id), "test_name": test_name},
+        )
+        await self.session.commit()
+
     async def seed_default_templates(self, *, clinic_id: UUID, actor_id: UUID) -> list[LaboratoryTemplateRead]:
         """Feature 3 starter templates (CBC, Urinalysis) - same opt-in,
         explicitly-invoked-per-clinic pattern as `DEFAULT_SERVICES`/

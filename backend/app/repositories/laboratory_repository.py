@@ -288,6 +288,19 @@ class LaboratoryRepository:
         await self.session.refresh(template, attribute_names=["parameters"])
         return template
 
+    async def delete_template(self, template: LaboratoryTemplate) -> LaboratoryTemplate:
+        """Soft delete only - never removes the row or its parameters.
+        `is_deleted=True` drops it out of `get_template`/`list_templates`
+        (both already filter `is_deleted.is_(False)`), and `is_active=False`
+        so it can't be picked for a NEW order; existing `LaboratoryOrder`
+        rows keep their `template_id` FK and `.template` relationship
+        (neither filters `is_deleted`), so historical orders/results/reports
+        keep reading the exact same template + parameters unaffected."""
+        template.is_deleted = True
+        template.is_active = False
+        await self.session.flush()
+        return template
+
     # --- Reference Ranges (Phase 2A) ---
 
     async def create_reference_range(self, **fields) -> LaboratoryReferenceRange:

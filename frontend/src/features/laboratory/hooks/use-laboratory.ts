@@ -189,6 +189,19 @@ export function useUpdateLaboratoryTemplate() {
   });
 }
 
+export function useDeleteLaboratoryTemplate() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => laboratoryApi.deleteTemplate(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["laboratory", "templates"] });
+      toast({ title: "Test template deleted", variant: "success" });
+    },
+    onError: (error) => toast({ title: "Could not delete template", description: errorMessage(error), variant: "error" }),
+  });
+}
+
 // --- Template Import/Export ---
 
 export function useExportLaboratoryTemplates() {

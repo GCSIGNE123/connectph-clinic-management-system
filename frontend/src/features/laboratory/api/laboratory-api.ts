@@ -312,6 +312,11 @@ export const laboratoryApi = {
       })
       .then(toTemplate),
 
+  /** Soft delete (backend never physically removes the row/parameters -
+   * see `LaboratoryRepository.delete_template`) - the template just stops
+   * appearing in `listTemplates` afterward. */
+  deleteTemplate: (id: string) => apiClient.delete<void>(`/laboratory/templates/${id}`),
+
   /** Downloads the current clinic's templates as an `.xlsx` workbook and
    * saves it via the browser - the backend (`GET /laboratory/templates/
    * export`) is clinic-scoped server-side, so this can never return

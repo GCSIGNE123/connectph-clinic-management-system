@@ -325,6 +325,22 @@ async def update_template(
     return await LaboratoryService(db).update_template(template_id, payload.model_dump(exclude_unset=True), clinic_id=clinic_id)
 
 
+@router.delete("/templates/{template_id}", status_code=204)
+async def delete_template(
+    template_id: UUID,
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_template_manage_role),
+) -> None:
+    """Soft delete only - see `LaboratoryService.delete_template`'s
+    docstring. The template row and its parameters are never physically
+    removed, so every existing laboratory order/result/report that
+    references this template keeps working unchanged."""
+    await LaboratoryService(db).delete_template(
+        template_id, clinic_id=clinic_id, actor_id=current_user.id
+    )
+
+
 @router.post("/templates/seed-defaults", response_model=list[LaboratoryTemplateRead])
 async def seed_default_templates(
     clinic_id: UUID = Depends(require_clinic_context),

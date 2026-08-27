@@ -417,6 +417,108 @@ async def test_template_crud_administrator_only(client: AsyncClient, make_clinic
     assert forbidden_update.status_code == 403
 
 
+# --- Template deletion (soft delete only) ---
+
+async def test_delete_template_soft_deletes_and_hides_from_listing(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """1/2/3/4: a successful delete marks the template `is_deleted=True` +
+    `is_active=False` in the DB, and it no longer appears in the normal
+    `GET /templates` listing - while the row itself (and its parameters)
+    physically still exist, per the soft-delete requirement."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    create = await client.post(
+        "/api/v1/laboratory/templates", headers=owner_headers,
+        json={
+            "test_name": "To Be Deleted", "default_price": "50.00",
+            "parameters": [{"parameter_name": "Result", "result_type": "Text"}],
+        },
+    )
+    assert create.status_code == 201
+    template_id = create.json()["id"]
+
+    delete = await client.delete(f"/api/v1/laboratory/templates/{template_id}", headers=owner_headers)
+    assert delete.status_code == 204
+
+    listed = await client.get("/api/v1/laboratory/templates", headers=owner_headers)
+    assert all(t["id"] != template_id for t in listed.json())
+
+    from sqlalchemy import select as _select
+
+    from app.models.laboratory_template import LaboratoryTemplate, LaboratoryTemplateParameter
+
+    row = (
+        await db_session.execute(_select(LaboratoryTemplate).where(LaboratoryTemplate.id == template_id))
+    ).scalar_one()
+    assert row.is_deleted is True
+    assert row.is_active is False
+
+    param_rows = (
+        await db_session.execute(
+            _select(LaboratoryTemplateParameter).where(LaboratoryTemplateParameter.template_id == template_id)
+        )
+    ).scalars().all()
+    assert len(param_rows) == 1, "parameters must be preserved, not physically deleted"
+
+
+async def test_delete_template_preserves_existing_lab_order_readability(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """5: an existing laboratory order that already references this
+    template must remain fully readable (order detail, including its
+    nested template/parameters) after the template is deleted from the
+    catalog."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    template_id = ctx["template"]["id"]
+
+    delete = await client.delete(f"/api/v1/laboratory/templates/{template_id}", headers=ctx["owner_headers"])
+    assert delete.status_code == 204
+
+    order_detail = await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])
+    assert order_detail.status_code == 200
+    assert order_detail.json()["template_id"] == template_id
+    assert order_detail.json()["template"]["id"] == template_id
+
+
+async def test_delete_template_rejects_cross_clinic(client: AsyncClient, make_clinic_with_owner) -> None:
+    """6: a template belonging to a DIFFERENT clinic must 404, and must
+    never be modified."""
+    _clinic_a, _owner_a, headers_a = await _owner_headers(client, make_clinic_with_owner)
+    _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+    create = await client.post(
+        "/api/v1/laboratory/templates", headers=headers_b,
+        json={"test_name": "Clinic B Template", "default_price": "20.00", "parameters": []},
+    )
+    template_id = create.json()["id"]
+
+    delete = await client.delete(f"/api/v1/laboratory/templates/{template_id}", headers=headers_a)
+    assert delete.status_code == 404
+
+    unchanged = await client.get("/api/v1/laboratory/templates", headers=headers_b)
+    assert any(t["id"] == template_id and t["is_active"] for t in unchanged.json())
+
+
+async def test_delete_template_forbidden_for_non_administrator_roles(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """7: only Owner/Administrator (LAB_TEMPLATE_MANAGE_ROLES) may delete -
+    same gate `create_template`/`update_template` already enforce."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    create = await client.post(
+        "/api/v1/laboratory/templates", headers=owner_headers,
+        json={"test_name": "Protected Template", "default_price": "10.00", "parameters": []},
+    )
+    template_id = create.json()["id"]
+
+    for role_name in ("Doctor", "Laboratory", "Receptionist"):
+        email, _user = await _make_role_login(db_session, clinic_id=clinic.id, role_name=role_name)
+        token = await _login(client, email, "TestPass123!")
+        headers = {"Authorization": f"Bearer {token}"}
+        forbidden = await client.delete(f"/api/v1/laboratory/templates/{template_id}", headers=headers)
+        assert forbidden.status_code == 403, role_name
+
+    still_listed = await client.get("/api/v1/laboratory/templates", headers=owner_headers)
+    assert any(t["id"] == template_id for t in still_listed.json())
+
+
 # --- Role gating ---
 
 async def test_role_gating_lab_manages_doctor_creates_reception_view_only(client: AsyncClient, make_clinic_with_owner, db_session) -> None:

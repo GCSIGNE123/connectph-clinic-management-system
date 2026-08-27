@@ -4,9 +4,14 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { useExportLaboratoryTemplates, useLaboratoryTemplates } from "@/features/laboratory/hooks/use-laboratory";
+import {
+  useDeleteLaboratoryTemplate,
+  useExportLaboratoryTemplates,
+  useLaboratoryTemplates,
+} from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryTemplateFormDialog } from "@/features/laboratory/components/LaboratoryTemplateFormDialog";
 import { LaboratoryTemplateImportDialog } from "@/features/laboratory/components/LaboratoryTemplateImportDialog";
 import type { LaboratoryTemplate } from "@/features/laboratory/types";
@@ -24,7 +29,9 @@ export default function LaboratoryTemplatesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [editing, setEditing] = useState<LaboratoryTemplate | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<LaboratoryTemplate | null>(null);
   const exportTemplates = useExportLaboratoryTemplates();
+  const deleteTemplate = useDeleteLaboratoryTemplate();
 
   return (
     <div className="space-y-6">
@@ -88,16 +95,26 @@ export default function LaboratoryTemplatesPage() {
                         <Badge variant={t.isActive ? "success" : "outline"}>{t.isActive ? "Active" : "Inactive"}</Badge>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setEditing(t);
-                            setDialogOpen(true);
-                          }}
-                        >
-                          Edit
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditing(t);
+                              setDialogOpen(true);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-destructive"
+                            onClick={() => setDeleteTarget(t)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -112,6 +129,25 @@ export default function LaboratoryTemplatesPage() {
 
       <LaboratoryTemplateFormDialog open={dialogOpen} onOpenChange={setDialogOpen} template={editing} />
       <LaboratoryTemplateImportDialog open={importDialogOpen} onOpenChange={setImportDialogOpen} />
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete Laboratory Template"
+        description={`Are you sure you want to delete "${deleteTarget?.testName ?? ""}"? It will no longer appear in the active laboratory template list.`}
+        confirmLabel="Delete"
+        isConfirming={deleteTemplate.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteTemplate.mutateAsync(deleteTarget.id);
+            setDeleteTarget(null);
+          } catch {
+            // useDeleteLaboratoryTemplate already toasts the error - keep
+            // the dialog open so the user can retry or cancel.
+          }
+        }}
+      />
     </div>
   );
 }
