@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { createCrudApi } from "@/features/clinic-config/api/crud-factory";
 import type { Doctor } from "@/features/clinic-config/types";
 import { DoctorSignatureSettings } from "@/features/doctors/components/DoctorSignatureSettings";
+import { DoctorWorkspaceConfigSettings } from "@/features/doctors/components/DoctorWorkspaceConfigSettings";
 
 const doctorsApi = createCrudApi<Doctor>("/doctors");
 
@@ -62,6 +63,15 @@ export default function DoctorDetailPage() {
         </CardHeader>
         <CardContent>
           <DoctorSignatureSettings doctor={current} onDoctorUpdated={setDoctor} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Consultation Workspace</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DoctorWorkspaceConfigSettings doctor={current} onDoctorUpdated={setDoctor} />
         </CardContent>
       </Card>
     </div>

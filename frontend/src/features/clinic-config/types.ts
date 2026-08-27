@@ -45,6 +45,15 @@ export interface Department {
   updated_at: string;
 }
 
+export interface WorkspaceSectionConfig {
+  visible: boolean;
+  required: boolean;
+}
+
+export interface WorkspaceConfig {
+  sections: Record<string, WorkspaceSectionConfig>;
+}
+
 export interface Doctor {
   id: string;
   clinic_id: string;
@@ -64,6 +73,10 @@ export interface Doctor {
   email?: string | null;
   consultation_fee?: string | null;
   status: "Active" | "Inactive" | "On Leave";
+  // Always the fully resolved config (server-side default applied when no
+  // custom configuration exists) - see `resolve_workspace_config` on the
+  // backend and `CONSULTATION_SECTIONS` in `features/doctors/workspace-config.ts`.
+  workspace_config: WorkspaceConfig;
   created_at: string;
   updated_at: string;
 }

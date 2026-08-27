@@ -4,6 +4,7 @@
  */
 
 import type { LockInfo } from "@/features/doctor-workspace/types";
+import type { WorkspaceConfig } from "@/features/clinic-config/types";
 
 export type ConsultationStatus = "Draft" | "InProgress" | "Completed" | "Signed";
 export type DiagnosisType = "Primary" | "Secondary";
@@ -79,6 +80,9 @@ export interface Consultation {
   doctorName: string | null;
   doctorPrcLicense: string | null;
   doctorPtrNumber: string | null;
+  // Fully resolved (never null) - see `resolve_workspace_config` on the
+  // backend. Drives which consultation sections render for THIS doctor.
+  doctorWorkspaceConfig: WorkspaceConfig;
   patientName: string | null;
   patientNumber: string | null;
   visitNumber: string | null;

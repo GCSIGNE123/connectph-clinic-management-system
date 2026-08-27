@@ -31,15 +31,16 @@ import { PrescriptionTab } from "@/features/clinical-orders/components/Prescript
 import { MedicalCertificateTab } from "@/features/clinical-orders/components/MedicalCertificateTab";
 import { ApiError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/utils";
+import { isSectionVisible } from "@/features/doctors/workspace-config";
 
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "soap", label: "SOAP" },
-  { key: "diagnosis", label: "Diagnosis" },
+  { key: "diagnosis", label: "Diagnosis", sectionId: "diagnosis" },
   { key: "orders", label: "Orders" },
-  { key: "prescription", label: "Prescription" },
-  { key: "certificate", label: "Medical Certificate" },
-  { key: "attachments", label: "Attachments" },
+  { key: "prescription", label: "Prescription", sectionId: "prescription" },
+  { key: "certificate", label: "Medical Certificate", sectionId: "certificate" },
+  { key: "attachments", label: "Attachments", sectionId: "attachments" },
   { key: "timeline", label: "Timeline" },
   { key: "audit", label: "Audit Log" },
 ] as const;
@@ -64,6 +65,21 @@ export default function ConsultationPage() {
   const { data: patient } = usePatient(visit?.patientId);
 
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
+
+  // Doctor Workspace Configuration: which tabs render for THIS consultation's
+  // doctor - resolved server-side (never null), so a doctor with no custom
+  // configuration shows every tab, exactly as before this feature existed.
+  const workspaceConfig = consultation?.doctorWorkspaceConfig;
+  const visibleTabs = useMemo(
+    () => TABS.filter((tab) => !("sectionId" in tab) || isSectionVisible(workspaceConfig, tab.sectionId)),
+    [workspaceConfig]
+  );
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+      setActiveTab("overview");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTabs]);
 
   const canEdit = Boolean(consultation?.lock.isSelf) && consultation?.status !== "Signed";
   const autosave = useSoapAutosave(consultation?.id ?? null, canEdit);
@@ -197,7 +213,7 @@ export default function ConsultationPage() {
       </Card>
 
       <div className="flex flex-wrap gap-1 border-b border-border" role="tablist">
-        {TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.key}
             type="button"
@@ -274,28 +290,30 @@ export default function ConsultationPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Objective / Vitals</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <NumberField label="Blood pressure" value={autosave.values.bloodPressure ?? ""} onChange={(v) => set("bloodPressure", v)} disabled={!canEdit} isText />
-                <NumberField label="Pulse (bpm)" value={autosave.values.pulseRate} onChange={(v) => set("pulseRate", v)} disabled={!canEdit} />
-                <NumberField label="Resp. rate" value={autosave.values.respiratoryRate} onChange={(v) => set("respiratoryRate", v)} disabled={!canEdit} />
-                <NumberField label="Temp (°C)" value={autosave.values.temperature} onChange={(v) => set("temperature", v)} disabled={!canEdit} />
-                <NumberField label="Height (cm)" value={autosave.values.heightCm} onChange={(v) => set("heightCm", v)} disabled={!canEdit} />
-                <NumberField label="Weight (kg)" value={autosave.values.weightKg} onChange={(v) => set("weightKg", v)} disabled={!canEdit} />
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">BMI</label>
-                  <p className="mt-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm font-medium">{liveBmi ?? "—"}</p>
+          {isSectionVisible(workspaceConfig, "vitals") ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Objective / Vitals</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <NumberField label="Blood pressure" value={autosave.values.bloodPressure ?? ""} onChange={(v) => set("bloodPressure", v)} disabled={!canEdit} isText />
+                  <NumberField label="Pulse (bpm)" value={autosave.values.pulseRate} onChange={(v) => set("pulseRate", v)} disabled={!canEdit} />
+                  <NumberField label="Resp. rate" value={autosave.values.respiratoryRate} onChange={(v) => set("respiratoryRate", v)} disabled={!canEdit} />
+                  <NumberField label="Temp (°C)" value={autosave.values.temperature} onChange={(v) => set("temperature", v)} disabled={!canEdit} />
+                  <NumberField label="Height (cm)" value={autosave.values.heightCm} onChange={(v) => set("heightCm", v)} disabled={!canEdit} />
+                  <NumberField label="Weight (kg)" value={autosave.values.weightKg} onChange={(v) => set("weightKg", v)} disabled={!canEdit} />
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">BMI</label>
+                    <p className="mt-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm font-medium">{liveBmi ?? "—"}</p>
+                  </div>
+                  <NumberField label="O2 sat (%)" value={autosave.values.oxygenSaturation} onChange={(v) => set("oxygenSaturation", v)} disabled={!canEdit} />
                 </div>
-                <NumberField label="O2 sat (%)" value={autosave.values.oxygenSaturation} onChange={(v) => set("oxygenSaturation", v)} disabled={!canEdit} />
-              </div>
-              <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} />
-              <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} />
-            </CardContent>
-          </Card>
+                <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} />
+                <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} />
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader>
@@ -330,7 +348,7 @@ export default function ConsultationPage() {
         </div>
       ) : null}
 
-      {activeTab === "diagnosis" ? (
+      {activeTab === "diagnosis" && isSectionVisible(workspaceConfig, "diagnosis") ? (
         <Card>
           <CardHeader>
             <CardTitle>Diagnoses</CardTitle>
@@ -413,10 +431,11 @@ export default function ConsultationPage() {
           doctorPrcLicense={consultation.doctorPrcLicense}
           doctorPtrNumber={consultation.doctorPtrNumber}
           visitNumber={visit.visitNumber}
+          hideLaboratoryOption={!isSectionVisible(workspaceConfig, "lab_requests")}
         />
       ) : null}
 
-      {activeTab === "prescription" && consultation ? (
+      {activeTab === "prescription" && consultation && isSectionVisible(workspaceConfig, "prescription") ? (
         <PrescriptionTab
           consultationId={consultation.id}
           visitId={visitId}
@@ -431,7 +450,7 @@ export default function ConsultationPage() {
         />
       ) : null}
 
-      {activeTab === "certificate" && consultation ? (
+      {activeTab === "certificate" && consultation && isSectionVisible(workspaceConfig, "certificate") ? (
         <MedicalCertificateTab
           consultationId={consultation.id}
           visitId={visitId}
@@ -442,7 +461,7 @@ export default function ConsultationPage() {
         />
       ) : null}
 
-      {activeTab === "attachments" ? (
+      {activeTab === "attachments" && isSectionVisible(workspaceConfig, "attachments") ? (
         <Card>
           <CardHeader>
             <CardTitle>Attachments</CardTitle>

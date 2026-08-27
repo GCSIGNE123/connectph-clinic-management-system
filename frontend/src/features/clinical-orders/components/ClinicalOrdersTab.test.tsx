@@ -206,3 +206,24 @@ describe("ClinicalOrdersTab - doctor signature block on print", () => {
     expect(block).not.toHaveTextContent(/PTR No\./);
   });
 });
+
+describe("ClinicalOrdersTab - Doctor Workspace Configuration (Lab Requests toggle)", () => {
+  it("shows Laboratory as a selectable category by default", () => {
+    mockOrders = [];
+    mockProcedures = [];
+    mockReferrals = [];
+    renderTab({ canEdit: true });
+    expect(screen.getByRole("option", { name: "Laboratory" })).toBeInTheDocument();
+  });
+
+  it("hides Laboratory from the category dropdown when hideLaboratoryOption is set, without removing Radiology/Vaccination/Custom", () => {
+    mockOrders = [];
+    mockProcedures = [];
+    mockReferrals = [];
+    renderTab({ canEdit: true, hideLaboratoryOption: true });
+    expect(screen.queryByRole("option", { name: "Laboratory" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Radiology" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Vaccination" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
+  });
+});

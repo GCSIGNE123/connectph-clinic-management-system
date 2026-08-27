@@ -19,6 +19,12 @@ vi.mock("@/features/doctors/components/DoctorSignatureSettings", () => ({
   ),
 }));
 
+vi.mock("@/features/doctors/components/DoctorWorkspaceConfigSettings", () => ({
+  DoctorWorkspaceConfigSettings: ({ doctor }: { doctor: { first_name: string } }) => (
+    <div data-testid="workspace-config-settings">workspace config for {doctor.first_name}</div>
+  ),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -40,6 +46,8 @@ describe("DoctorDetailPage", () => {
     expect(await screen.findByText(/Dr\. Jose Rizal/)).toBeInTheDocument();
     expect(screen.getByText("E-Signature")).toBeInTheDocument();
     expect(await screen.findByTestId("signature-settings")).toHaveTextContent("settings for Jose");
+    expect(screen.getByText("Consultation Workspace")).toBeInTheDocument();
+    expect(await screen.findByTestId("workspace-config-settings")).toHaveTextContent("workspace config for Jose");
   });
 
   it("shows a loading skeleton before the doctor loads", () => {

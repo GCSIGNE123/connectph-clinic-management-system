@@ -48,6 +48,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.consultation import CONSULTATION_STATUS_TRANSITIONS, Consultation, ConsultationStatus
 from app.models.consultation_attachment import ConsultationAttachment
 from app.models.diagnosis import Diagnosis
+from app.models.doctor import resolve_workspace_config
+from app.models.order import OrderCategory
 from app.models.queue import QUEUE_STATUS_TRANSITIONS, QueueStatus
 from app.models.user import User
 from app.models.visit import VisitStatus, VisitTimelineEventType
@@ -178,6 +180,11 @@ class ConsultationService:
             doctor_name=consultation.doctor.full_name if consultation.doctor else None,
             doctor_prc_license=consultation.doctor.prc_license if consultation.doctor else None,
             doctor_ptr_number=consultation.doctor.ptr_number if consultation.doctor else None,
+            doctor_workspace_config=(
+                consultation.doctor.effective_workspace_config
+                if consultation.doctor
+                else resolve_workspace_config(None)
+            ),
             patient_name=consultation.patient.full_name if consultation.patient else None,
             patient_number=consultation.patient.patient_number if consultation.patient else None,
             visit_number=consultation.visit.visit_number if consultation.visit else None,
@@ -429,6 +436,80 @@ class ConsultationService:
                 detail=f"Cannot transition consultation from {consultation.status.value} to {new_status.value}.",
             )
 
+    async def _enforce_required_sections(
+        self, consultation: Consultation, *, clinic_id: UUID
+    ) -> None:
+        """Data-driven completion gate: reads THIS consultation's doctor's
+        resolved workspace config (never a hard-coded doctor id/name
+        anywhere) and, for every section marked required (which
+        `resolve_workspace_config` guarantees is also visible - see its
+        docstring), checks that section actually has data before allowing
+        the consultation to complete. Hidden or not-required sections are
+        never checked, matching "required flags are enforced only for
+        visible sections" exactly via the same resolution the frontend
+        renders from."""
+        config = (
+            consultation.doctor.effective_workspace_config
+            if consultation.doctor
+            else resolve_workspace_config(None)
+        )
+        sections = config["sections"]
+        missing: list[str] = []
+
+        if sections["vitals"]["required"]:
+            soap = consultation.soap_note
+            vital_fields = (
+                "blood_pressure", "pulse_rate", "respiratory_rate",
+                "temperature", "height_cm", "weight_kg", "oxygen_saturation",
+            )
+            has_vitals = bool(soap) and any(
+                getattr(soap, field) not in (None, "") for field in vital_fields
+            )
+            if not has_vitals:
+                missing.append("Vitals")
+
+        if sections["diagnosis"]["required"]:
+            diagnoses = await self.repo.list_diagnoses(consultation.id, clinic_id)
+            if not diagnoses:
+                missing.append("Diagnosis")
+
+        if sections["prescription"]["required"] or sections["lab_requests"]["required"]:
+            from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
+
+            orders_repo = ClinicalOrdersRepository(self.session)
+            if sections["prescription"]["required"]:
+                prescriptions = await orders_repo.list_prescriptions_for_consultation(
+                    consultation.id, clinic_id
+                )
+                if not prescriptions:
+                    missing.append("Prescription")
+            if sections["lab_requests"]["required"]:
+                orders = await orders_repo.list_orders_for_consultation(consultation.id, clinic_id)
+                if not any(o.order_category == OrderCategory.LABORATORY for o in orders):
+                    missing.append("Lab Requests")
+
+        if sections["certificate"]["required"]:
+            from app.repositories.medical_certificate_repository import MedicalCertificateRepository
+
+            cert_repo = MedicalCertificateRepository(self.session)
+            certs = await cert_repo.list_for_consultation(consultation.id, clinic_id)
+            if not certs:
+                missing.append("Medical Certificate")
+
+        if sections["attachments"]["required"]:
+            attachments = await self.repo.list_attachments(consultation.id, clinic_id)
+            if not attachments:
+                missing.append("Attachments")
+
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot complete consultation - required section(s) missing: "
+                    f"{', '.join(missing)}."
+                ),
+            )
+
     async def complete_consultation(
         self, consultation_id: UUID, *, clinic_id: UUID, actor_id: UUID, current_user_id: UUID, can_edit: bool,
         consultation_fee: Decimal | None = None,
@@ -448,6 +529,7 @@ class ConsultationService:
         consultation = await self._require_consultation(consultation_id, clinic_id)
         already_closed = consultation.status in (ConsultationStatus.COMPLETED, ConsultationStatus.SIGNED)
         if not already_closed:
+            await self._enforce_required_sections(consultation, clinic_id=clinic_id)
             self._transition(consultation, ConsultationStatus.COMPLETED)
         now = datetime.now(UTC)
         if not already_closed:

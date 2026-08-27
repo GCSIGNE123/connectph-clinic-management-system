@@ -54,6 +54,7 @@ export function ClinicalOrdersTab({
   doctorPrcLicense,
   doctorPtrNumber,
   visitNumber,
+  hideLaboratoryOption,
 }: {
   consultationId: string;
   visitId: string;
@@ -63,7 +64,14 @@ export function ClinicalOrdersTab({
   doctorPrcLicense?: string | null;
   doctorPtrNumber?: string | null;
   visitNumber?: string | null;
+  // Doctor Workspace Configuration: the "Lab Requests" consultation section
+  // maps to hiding just the Laboratory category here (Radiology/
+  // Vaccination/Custom still use this same generic Orders tab) - never a
+  // whole separate tab, since those other categories aren't gated by that
+  // toggle.
+  hideLaboratoryOption?: boolean;
 }) {
+  const availableCategories = hideLaboratoryOption ? ORDER_CATEGORIES.filter((c) => c !== "Laboratory") : ORDER_CATEGORIES;
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
   const [printProcedure, setPrintProcedure] = useState<Procedure | null>(null);
   const [printReferral, setPrintReferral] = useState<Referral | null>(null);
@@ -83,7 +91,7 @@ export function ClinicalOrdersTab({
   const createReferral = useCreateReferral(consultationId, visitId);
 
   const [orderForm, setOrderForm] = useState<{ category: OrderCategory; priority: OrderPriority; scheduledDate: string; notes: string; itemName: string; examType: string; bodyPart: string; indication: string }>(
-    { category: "Laboratory", priority: "Routine", scheduledDate: "", notes: "", itemName: "", examType: "", bodyPart: "", indication: "" }
+    { category: availableCategories[0], priority: "Routine", scheduledDate: "", notes: "", itemName: "", examType: "", bodyPart: "", indication: "" }
   );
   const [procedureForm, setProcedureForm] = useState({ name: "", date: "", notes: "" });
   const [referralForm, setReferralForm] = useState({ referredTo: "", reason: "", notes: "" });
@@ -165,7 +173,7 @@ export function ClinicalOrdersTab({
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Category</label>
                   <Select value={orderForm.category} onChange={(e) => setOrderForm((f) => ({ ...f, category: e.target.value as OrderCategory }))}>
-                    {ORDER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {availableCategories.map((c) => <option key={c} value={c}>{c}</option>)}
                   </Select>
                 </div>
                 <div>

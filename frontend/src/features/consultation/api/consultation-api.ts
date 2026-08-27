@@ -95,6 +95,7 @@ function toConsultation(raw: any): Consultation {
     doctorName: raw.doctor_name,
     doctorPrcLicense: raw.doctor_prc_license,
     doctorPtrNumber: raw.doctor_ptr_number,
+    doctorWorkspaceConfig: raw.doctor_workspace_config ?? { sections: {} },
     patientName: raw.patient_name,
     patientNumber: raw.patient_number,
     visitNumber: raw.visit_number,

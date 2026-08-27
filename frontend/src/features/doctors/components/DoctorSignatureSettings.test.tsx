@@ -32,6 +32,7 @@ function buildDoctor(overrides: Partial<Doctor> = {}): Doctor {
     first_name: "Jose", last_name: "Rizal", status: "Active",
     created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
     signature_url: null,
+    workspace_config: { sections: {} },
     ...overrides,
   };
 }

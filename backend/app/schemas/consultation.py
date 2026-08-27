@@ -166,6 +166,11 @@ class ConsultationDetail(ConsultationRead):
     doctor_name: str | None = None
     doctor_prc_license: str | None = None
     doctor_ptr_number: str | None = None
+    # Fully resolved (see `Doctor.effective_workspace_config`) - drives
+    # which consultation sections the frontend shows/hides and marks
+    # required for THIS doctor. Never null - a doctor with no custom
+    # config still resolves to "every section visible, none required".
+    doctor_workspace_config: dict = Field(default_factory=dict)
     patient_name: str | None = None
     patient_number: str | None = None
     visit_number: str | None = None

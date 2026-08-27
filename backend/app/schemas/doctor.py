@@ -4,9 +4,34 @@ from datetime import datetime, time
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.doctor import DoctorStatus
+from app.models.doctor import CONSULTATION_SECTION_IDS, DoctorStatus
+
+
+class WorkspaceSectionConfig(BaseModel):
+    visible: bool = True
+    required: bool = False
+
+
+class WorkspaceConfig(BaseModel):
+    """Input shape for `DoctorUpdate.workspace_config` - validated against
+    the current `CONSULTATION_SECTION_IDS` so a typo/unknown section id is
+    rejected up front (422) rather than silently ignored. The actual
+    show/hide + required-only-if-visible resolution used everywhere else
+    happens in `resolve_workspace_config`, not here."""
+
+    sections: dict[str, WorkspaceSectionConfig] = Field(default_factory=dict)
+
+    @field_validator("sections")
+    @classmethod
+    def _known_section_ids(
+        cls, value: dict[str, WorkspaceSectionConfig]
+    ) -> dict[str, WorkspaceSectionConfig]:
+        unknown = set(value) - CONSULTATION_SECTION_IDS
+        if unknown:
+            raise ValueError(f"Unknown consultation section id(s): {', '.join(sorted(unknown))}")
+        return value
 
 
 class DoctorBase(BaseModel):
@@ -51,6 +76,7 @@ class DoctorUpdate(BaseModel):
     email: EmailStr | None = None
     consultation_fee: Decimal | None = None
     status: DoctorStatus | None = None
+    workspace_config: WorkspaceConfig | None = None
 
 
 class DoctorRead(DoctorBase):
@@ -59,6 +85,11 @@ class DoctorRead(DoctorBase):
     id: UUID
     clinic_id: UUID
     doctor_code: str
+    # Always the fully RESOLVED config (see `Doctor.effective_workspace_config`)
+    # - a doctor with no custom configuration still returns every section
+    # visible/not-required here, never null, so callers never have to
+    # special-case "no config yet" themselves.
+    workspace_config: dict = Field(validation_alias="effective_workspace_config")
     created_at: datetime
     updated_at: datetime
 
