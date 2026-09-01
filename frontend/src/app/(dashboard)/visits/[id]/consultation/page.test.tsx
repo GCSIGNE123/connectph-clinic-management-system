@@ -26,9 +26,10 @@ vi.mock("@/features/consultation/hooks/use-consultation", () => ({
   useCompleteConsultation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+const mockInitialize = vi.fn();
 vi.mock("@/features/consultation/hooks/use-soap-autosave", () => ({
   useSoapAutosave: () => ({
-    values: {}, setValues: vi.fn(), initialize: vi.fn(), saveNow: vi.fn(), isDirty: false, status: "idle",
+    values: {}, setValues: vi.fn(), initialize: mockInitialize, saveNow: vi.fn(), isDirty: false, status: "idle",
   }),
 }));
 
@@ -58,6 +59,14 @@ function allSections(visible: boolean, required = false): WorkspaceConfig {
     sections: Object.fromEntries(
       ["vitals", "diagnosis", "prescription", "lab_requests", "certificate", "attachments"].map((id) => [id, { visible, required }])
     ),
+    soap_fields: {
+      chief_complaint: true, history_of_present_illness: true, past_medical_history: true, family_history: true,
+      social_history: true, review_of_systems: true, subjective_notes: true,
+      blood_pressure: true, pulse_rate: true, respiratory_rate: true, temperature: true, height_cm: true, weight_kg: true,
+      bmi: true, oxygen_saturation: true, physical_examination: true, clinical_findings: true,
+      clinical_impression: true, differential_diagnosis: true, assessment_notes: true,
+      treatment_plan: true, patient_instructions: true, followup_recommendation: true, referral_notes: true,
+    },
   };
 }
 
@@ -138,5 +147,92 @@ describe("ConsultationPage - Doctor Workspace Configuration (section show/hide)"
     renderPage();
     await user.click(screen.getByRole("tab", { name: "Orders" }));
     expect(clinicalOrdersProps.at(-1)).toMatchObject({ hideLaboratoryOption: true });
+  });
+});
+
+describe("ConsultationPage - Doctor Workspace Configuration (per-field SOAP checklist)", () => {
+  beforeEach(() => {
+    useVisit.mockReturnValue({
+      data: { id: "visit-1", visitNumber: "VIS-1", patientId: "patient-1", queueNumber: null, timeline: [] },
+      isLoading: false,
+    });
+    usePatient.mockReturnValue({ data: { id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male" } });
+    useCurrentUser.mockReturnValue({ data: { role: "Doctor" } });
+  });
+
+  async function openSoapTab() {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: "SOAP" }));
+  }
+
+  it("shows every SOAP field when the doctor has the default (all-enabled) configuration", async () => {
+    useOpenConsultation.mockReturnValue({ data: buildConsultation(), isLoading: false, isError: false });
+    await openSoapTab();
+
+    expect(screen.getByText("Chief complaint")).toBeInTheDocument();
+    expect(screen.getByText("Family history")).toBeInTheDocument();
+    expect(screen.getByText("Social history")).toBeInTheDocument();
+    expect(screen.getByText("Differential diagnosis")).toBeInTheDocument();
+    expect(screen.getByText("Referral notes")).toBeInTheDocument();
+    expect(screen.getByText("BMI")).toBeInTheDocument();
+  });
+
+  it("hides Family history, Social history, Differential diagnosis, and Referral notes when disabled, while keeping other SOAP fields visible", async () => {
+    const config = allSections(true);
+    config.soap_fields = {
+      ...config.soap_fields,
+      family_history: false, social_history: false, differential_diagnosis: false, referral_notes: false,
+    };
+    useOpenConsultation.mockReturnValue({ data: buildConsultation({ doctorWorkspaceConfig: config }), isLoading: false, isError: false });
+    await openSoapTab();
+
+    expect(screen.queryByText("Family history")).not.toBeInTheDocument();
+    expect(screen.queryByText("Social history")).not.toBeInTheDocument();
+    expect(screen.queryByText("Differential diagnosis")).not.toBeInTheDocument();
+    expect(screen.queryByText("Referral notes")).not.toBeInTheDocument();
+
+    // Everything else in the same sections still renders.
+    expect(screen.getByText("Chief complaint")).toBeInTheDocument();
+    expect(screen.getByText("History of present illness")).toBeInTheDocument();
+    expect(screen.getByText("Clinical impression")).toBeInTheDocument();
+    expect(screen.getByText("Treatment plan")).toBeInTheDocument();
+    expect(screen.getByText("Patient instructions")).toBeInTheDocument();
+    expect(screen.getByText("Follow-up recommendation")).toBeInTheDocument();
+  });
+
+  it("hides only the BMI row when BMI is disabled, keeping Height/Weight and BMI's derived-value behavior otherwise unaffected", async () => {
+    const config = allSections(true);
+    config.soap_fields = { ...config.soap_fields, bmi: false };
+    useOpenConsultation.mockReturnValue({ data: buildConsultation({ doctorWorkspaceConfig: config }), isLoading: false, isError: false });
+    await openSoapTab();
+
+    expect(screen.queryByText("BMI")).not.toBeInTheDocument();
+    expect(screen.getByText("Height (cm)")).toBeInTheDocument();
+    expect(screen.getByText("Weight (kg)")).toBeInTheDocument();
+  });
+
+  it("does not clear previously saved data for a disabled field - autosave is still initialized with the hidden field's value", async () => {
+    mockInitialize.mockClear();
+    const config = allSections(true);
+    config.soap_fields = { ...config.soap_fields, family_history: false };
+    useOpenConsultation.mockReturnValue({
+      data: buildConsultation({
+        doctorWorkspaceConfig: config,
+        soapNote: {
+          id: "soap-1", consultationId: "cons-1", updatedAt: "2026-08-01T00:00:00Z",
+          familyHistory: "Father: Type 2 Diabetes",
+        } as never,
+      }),
+      isLoading: false, isError: false,
+    });
+    await openSoapTab();
+
+    // Hiding "Family history" only affects rendering - the value already
+    // saved on this consultation's SOAP note is still loaded into autosave
+    // state (and therefore still submitted on the next save), never
+    // dropped just because the field is hidden from view.
+    expect(mockInitialize).toHaveBeenCalledWith(expect.objectContaining({ familyHistory: "Father: Type 2 Diabetes" }));
+    expect(screen.queryByText("Family history")).not.toBeInTheDocument();
   });
 });

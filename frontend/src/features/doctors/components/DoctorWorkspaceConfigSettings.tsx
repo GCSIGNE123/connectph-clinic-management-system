@@ -7,7 +7,7 @@ import { useToast } from "@/components/ui/toast";
 import { ApiError } from "@/lib/api-client";
 import { createCrudApi } from "@/features/clinic-config/api/crud-factory";
 import type { Doctor, WorkspaceConfig } from "@/features/clinic-config/types";
-import { CONSULTATION_SECTIONS, WORKSPACE_CONFIG_PRESETS } from "@/features/doctors/workspace-config";
+import { CONSULTATION_SECTIONS, SOAP_FIELD_GROUPS, WORKSPACE_CONFIG_PRESETS } from "@/features/doctors/workspace-config";
 
 const doctorsApi = createCrudApi<Doctor>("/doctors");
 
@@ -15,9 +15,12 @@ const doctorsApi = createCrudApi<Doctor>("/doctors");
  * Per-doctor consultation workspace configuration: which sections
  * (vitals/diagnosis/prescription/lab requests/certificate/attachments) show
  * up for THIS doctor's consultations, and which of the visible ones are
- * required before the doctor can mark a consultation complete. Purely
- * data-driven - `CONSULTATION_SECTIONS` is the only place a section is
- * named; nothing here ever special-cases a specific doctor.
+ * required before the doctor can mark a consultation complete - plus, below
+ * that, which individual SOAP note fields this doctor wants to see at all.
+ * Purely data-driven - `CONSULTATION_SECTIONS`/`SOAP_FIELD_GROUPS` are the
+ * only places a section/field is named; nothing here ever special-cases a
+ * specific doctor. Disabling a SOAP field only hides it from this doctor's
+ * consultation form; it never deletes previously saved data for that field.
  *
  * Reuses the existing `PUT /doctors/{id}` endpoint (via `createCrudApi`)
  * rather than a dedicated one - `workspace_config` is just another Doctor
@@ -45,7 +48,17 @@ export function DoctorWorkspaceConfigSettings({ doctor, onDoctorUpdated }: { doc
   }
 
   function applyPreset(preset: keyof typeof WORKSPACE_CONFIG_PRESETS) {
-    setDraft(WORKSPACE_CONFIG_PRESETS[preset]);
+    // Presets only define section visibility/required - the doctor's own
+    // SOAP field checklist (a separate, independently-configured concern)
+    // is left exactly as-is rather than reset to all-enabled.
+    setDraft((prev) => ({ ...prev, sections: WORKSPACE_CONFIG_PRESETS[preset].sections }));
+  }
+
+  function setSoapField(fieldId: string, enabled: boolean) {
+    setDraft((prev) => ({
+      ...prev,
+      soap_fields: { ...prev.soap_fields, [fieldId]: enabled },
+    }));
   }
 
   async function handleSave() {
@@ -115,6 +128,33 @@ export function DoctorWorkspaceConfigSettings({ doctor, onDoctorUpdated }: { doc
             })}
           </tbody>
         </table>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-medium">Consultation SOAP Fields</h3>
+        <div className="mt-2 space-y-4">
+          {SOAP_FIELD_GROUPS.map((group) => (
+            <div key={group.id}>
+              <h4 className="text-xs font-semibold uppercase text-muted-foreground">{group.label}</h4>
+              <div className="mt-1.5 grid gap-y-1.5 gap-x-4 sm:grid-cols-2">
+                {group.fields.map((field) => {
+                  const enabled = draft.soap_fields?.[field.id] ?? true;
+                  return (
+                    <label key={field.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        aria-label={field.label}
+                        checked={enabled}
+                        disabled={saving}
+                        onChange={(e) => setSoapField(field.id, e.target.checked)}
+                      />
+                      {field.label}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

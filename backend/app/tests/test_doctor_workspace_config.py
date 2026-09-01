@@ -2,9 +2,11 @@
 show/hide + required toggles for consultation sections (vitals, diagnosis,
 prescription, lab requests, medical certificate, attachments), presets, the
 "no custom config = current behavior" default, and required-only-if-visible
-enforcement at consultation completion. See `app/models/doctor.py`'s
-`resolve_workspace_config`/`WORKSPACE_CONFIG_PRESETS` for the data-driven
-source of truth these tests exercise.
+enforcement at consultation completion - plus per-doctor SOAP field
+visibility (`soap_fields`), the same JSONB `workspace_config` blob extended
+with a flat {field_id: enabled} map. See `app/models/doctor.py`'s
+`resolve_workspace_config`/`WORKSPACE_CONFIG_PRESETS`/`SOAP_FIELD_IDS` for
+the data-driven source of truth these tests exercise.
 """
 
 import uuid
@@ -15,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
-from app.models.doctor import WORKSPACE_CONFIG_PRESETS
+from app.models.doctor import SOAP_FIELD_IDS, WORKSPACE_CONFIG_PRESETS
 from app.models.role import Role
 
 pytestmark = pytest.mark.asyncio
@@ -136,6 +138,10 @@ async def test_doctor_with_no_custom_config_resolves_to_all_visible_not_required
     config = fetched.json()["workspace_config"]
     assert set(config["sections"]) == {"vitals", "diagnosis", "prescription", "lab_requests", "certificate", "attachments"}
     assert all(s["visible"] is True and s["required"] is False for s in config["sections"].values())
+    # SOAP fields default to fully enabled too - a doctor with no custom
+    # config keeps the exact pre-feature SOAP workflow.
+    assert set(config["soap_fields"]) == SOAP_FIELD_IDS
+    assert all(enabled is True for enabled in config["soap_fields"].values())
 
 
 async def test_update_doctor_workspace_config_persists_and_merges_partial_input(
@@ -321,3 +327,144 @@ async def test_comprehensive_preset_blocks_completion_until_all_required_section
 
     complete = await client.post(f"/api/v1/consultations/{cid}/complete", headers=doc_headers)
     assert complete.status_code == 200, complete.text
+
+
+# --- Per-doctor SOAP field configuration ---
+
+async def test_doctor_can_save_and_retrieve_soap_field_configuration(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    doctor = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "New", "last_name": "Doctor"})
+    ).json()
+
+    update = await client.put(
+        f"/api/v1/doctors/{doctor['id']}", headers=headers,
+        json={"workspace_config": {"soap_fields": {"family_history": False, "social_history": False}}},
+    )
+    assert update.status_code == 200, update.text
+    saved = update.json()["workspace_config"]["soap_fields"]
+    assert saved["family_history"] is False
+    assert saved["social_history"] is False
+    # Every other SOAP field, untouched by the partial input, keeps its
+    # default-enabled state.
+    assert saved["chief_complaint"] is True
+    assert saved["referral_notes"] is True
+
+    fetched = await client.get(f"/api/v1/doctors/{doctor['id']}", headers=headers)
+    assert fetched.status_code == 200
+    refetched = fetched.json()["workspace_config"]["soap_fields"]
+    assert refetched["family_history"] is False
+    assert refetched["social_history"] is False
+    assert refetched["chief_complaint"] is True
+
+
+async def test_soap_field_configuration_is_doctor_specific(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    doctor_a = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "Doctor", "last_name": "A"})
+    ).json()
+    doctor_b = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "Doctor", "last_name": "B"})
+    ).json()
+
+    await client.put(
+        f"/api/v1/doctors/{doctor_a['id']}", headers=headers,
+        json={"workspace_config": {"soap_fields": {"differential_diagnosis": False, "referral_notes": False}}},
+    )
+
+    config_a = (await client.get(f"/api/v1/doctors/{doctor_a['id']}", headers=headers)).json()["workspace_config"]
+    config_b = (await client.get(f"/api/v1/doctors/{doctor_b['id']}", headers=headers)).json()["workspace_config"]
+
+    assert config_a["soap_fields"]["differential_diagnosis"] is False
+    assert config_a["soap_fields"]["referral_notes"] is False
+    # Doctor B was never touched - still every field enabled.
+    assert config_b["soap_fields"]["differential_diagnosis"] is True
+    assert config_b["soap_fields"]["referral_notes"] is True
+
+
+async def test_update_doctor_soap_field_configuration_rejects_unknown_field_id(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    doctor = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "New", "last_name": "Doctor"})
+    ).json()
+
+    update = await client.put(
+        f"/api/v1/doctors/{doctor['id']}", headers=headers,
+        json={"workspace_config": {"soap_fields": {"not_a_real_field": False}}},
+    )
+    assert update.status_code == 422
+
+
+async def test_soap_fields_missing_from_stored_config_safely_fall_back_to_enabled(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A doctor's `workspace_config` saved before `soap_fields` existed (or
+    with only `sections` ever written) has no `soap_fields` key at all in
+    the stored JSONB - `resolve_workspace_config` must still return every
+    SOAP field enabled, never null/missing/crash."""
+    from app.models.doctor import Doctor
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    doctor_resp = (
+        await client.post("/api/v1/doctors", headers=headers, json={"first_name": "New", "last_name": "Doctor"})
+    ).json()
+
+    doctor = await db_session.get(Doctor, uuid.UUID(doctor_resp["id"]))
+    doctor.workspace_config = {"sections": {"attachments": {"visible": False, "required": False}}}
+    await db_session.commit()
+
+    fetched = await client.get(f"/api/v1/doctors/{doctor_resp['id']}", headers=headers)
+    assert fetched.status_code == 200
+    config = fetched.json()["workspace_config"]
+    assert config["sections"]["attachments"]["visible"] is False
+    assert set(config["soap_fields"]) == SOAP_FIELD_IDS
+    assert all(enabled is True for enabled in config["soap_fields"].values())
+
+
+async def test_soap_field_configuration_is_exposed_on_consultation_detail(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    clinic, owner_headers, doc_headers, deps, visit_id = await _setup_doctor_and_visit(client, make_clinic_with_owner, db_session)
+    await client.put(
+        f"/api/v1/doctors/{deps['doctor_id']}", headers=owner_headers,
+        json={"workspace_config": {"soap_fields": {"family_history": False}}},
+    )
+
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    assert opened["doctor_workspace_config"]["soap_fields"]["family_history"] is False
+    assert opened["doctor_workspace_config"]["soap_fields"]["chief_complaint"] is True
+
+
+async def test_disabling_a_soap_field_does_not_delete_previously_saved_data(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Disabling a SOAP field is a display-only concern - it must never
+    clear/destroy data already saved in that field on an existing
+    consultation's SOAP note."""
+    clinic, owner_headers, doc_headers, deps, visit_id = await _setup_doctor_and_visit(client, make_clinic_with_owner, db_session)
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    cid = opened["id"]
+
+    saved = await client.put(
+        f"/api/v1/consultations/{cid}/soap", headers=doc_headers,
+        json={"family_history": "Father: Type 2 Diabetes", "referral_notes": "Refer to Cardiology"},
+    )
+    assert saved.status_code == 200, saved.text
+
+    # Now the doctor disables Family history and Referral notes going forward.
+    await client.put(
+        f"/api/v1/doctors/{deps['doctor_id']}", headers=owner_headers,
+        json={"workspace_config": {"soap_fields": {"family_history": False, "referral_notes": False}}},
+    )
+
+    refetched = await client.get(f"/api/v1/consultations/{cid}", headers=doc_headers)
+    assert refetched.status_code == 200, refetched.text
+    soap = refetched.json()["soap_note"]
+    # Data survives untouched even though the field is now hidden by config.
+    assert soap["family_history"] == "Father: Type 2 Diabetes"
+    assert soap["referral_notes"] == "Refer to Cardiology"
+    assert refetched.json()["doctor_workspace_config"]["soap_fields"]["family_history"] is False

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.doctor import CONSULTATION_SECTION_IDS, DoctorStatus
+from app.models.doctor import CONSULTATION_SECTION_IDS, SOAP_FIELD_IDS, DoctorStatus
 
 
 class WorkspaceSectionConfig(BaseModel):
@@ -16,12 +16,17 @@ class WorkspaceSectionConfig(BaseModel):
 
 class WorkspaceConfig(BaseModel):
     """Input shape for `DoctorUpdate.workspace_config` - validated against
-    the current `CONSULTATION_SECTION_IDS` so a typo/unknown section id is
-    rejected up front (422) rather than silently ignored. The actual
+    the current `CONSULTATION_SECTION_IDS`/`SOAP_FIELD_IDS` so a typo/unknown
+    id is rejected up front (422) rather than silently ignored. The actual
     show/hide + required-only-if-visible resolution used everywhere else
     happens in `resolve_workspace_config`, not here."""
 
     sections: dict[str, WorkspaceSectionConfig] = Field(default_factory=dict)
+    # Per-doctor SOAP note field visibility - {field_id: enabled}. See
+    # `SOAP_FIELD_GROUPS` in `models/doctor.py` for the full field list and
+    # why this is a flat bool map rather than a visible/required pair like
+    # `sections` above.
+    soap_fields: dict[str, bool] = Field(default_factory=dict)
 
     @field_validator("sections")
     @classmethod
@@ -31,6 +36,14 @@ class WorkspaceConfig(BaseModel):
         unknown = set(value) - CONSULTATION_SECTION_IDS
         if unknown:
             raise ValueError(f"Unknown consultation section id(s): {', '.join(sorted(unknown))}")
+        return value
+
+    @field_validator("soap_fields")
+    @classmethod
+    def _known_soap_field_ids(cls, value: dict[str, bool]) -> dict[str, bool]:
+        unknown = set(value) - SOAP_FIELD_IDS
+        if unknown:
+            raise ValueError(f"Unknown SOAP field id(s): {', '.join(sorted(unknown))}")
         return value
 
 

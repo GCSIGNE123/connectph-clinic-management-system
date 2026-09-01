@@ -31,7 +31,7 @@ import { PrescriptionTab } from "@/features/clinical-orders/components/Prescript
 import { MedicalCertificateTab } from "@/features/clinical-orders/components/MedicalCertificateTab";
 import { ApiError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/utils";
-import { isSectionVisible } from "@/features/doctors/workspace-config";
+import { SOAP_FIELD_GROUPS, isSectionVisible, isSoapFieldVisible } from "@/features/doctors/workspace-config";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -171,6 +171,18 @@ export default function ConsultationPage() {
     autosave.setValues({ ...autosave.values, [field]: value });
   };
 
+  // Per-doctor SOAP field checklist (Doctor Workspace Settings ->
+  // Consultation SOAP Fields): only render fields THIS doctor has enabled.
+  // Disabling a field only hides it here - it never clears/deletes
+  // previously saved data for that field (autosave still initializes and
+  // carries the value even when hidden, see the `autosave.initialize` call
+  // above, which is unconditional).
+  const soapField = (fieldId: string) => isSoapFieldVisible(workspaceConfig, fieldId);
+  const isSoapSectionVisible = (groupId: string) => {
+    const group = SOAP_FIELD_GROUPS.find((g) => g.id === groupId);
+    return group ? group.fields.some((f) => soapField(f.id)) : true;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -275,68 +287,122 @@ export default function ConsultationPage() {
 
       {activeTab === "soap" ? (
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Subjective</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
-              <Field label="Chief complaint" value={autosave.values.chiefComplaint} onChange={(v) => set("chiefComplaint", v)} disabled={!canEdit} />
-              <Field label="History of present illness" value={autosave.values.historyOfPresentIllness} onChange={(v) => set("historyOfPresentIllness", v)} disabled={!canEdit} />
-              <Field label="Past medical history" value={autosave.values.pastMedicalHistory} onChange={(v) => set("pastMedicalHistory", v)} disabled={!canEdit} />
-              <Field label="Family history" value={autosave.values.familyHistory} onChange={(v) => set("familyHistory", v)} disabled={!canEdit} />
-              <Field label="Social history" value={autosave.values.socialHistory} onChange={(v) => set("socialHistory", v)} disabled={!canEdit} />
-              <Field label="Review of systems" value={autosave.values.reviewOfSystems} onChange={(v) => set("reviewOfSystems", v)} disabled={!canEdit} />
-              <Field label="Additional subjective notes" value={autosave.values.subjectiveNotes} onChange={(v) => set("subjectiveNotes", v)} disabled={!canEdit} className="md:col-span-2" />
-            </CardContent>
-          </Card>
+          {isSoapSectionVisible("subjective") ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Subjective</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                {soapField("chief_complaint") ? (
+                  <Field label="Chief complaint" value={autosave.values.chiefComplaint} onChange={(v) => set("chiefComplaint", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("history_of_present_illness") ? (
+                  <Field label="History of present illness" value={autosave.values.historyOfPresentIllness} onChange={(v) => set("historyOfPresentIllness", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("past_medical_history") ? (
+                  <Field label="Past medical history" value={autosave.values.pastMedicalHistory} onChange={(v) => set("pastMedicalHistory", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("family_history") ? (
+                  <Field label="Family history" value={autosave.values.familyHistory} onChange={(v) => set("familyHistory", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("social_history") ? (
+                  <Field label="Social history" value={autosave.values.socialHistory} onChange={(v) => set("socialHistory", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("review_of_systems") ? (
+                  <Field label="Review of systems" value={autosave.values.reviewOfSystems} onChange={(v) => set("reviewOfSystems", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("subjective_notes") ? (
+                  <Field label="Additional subjective notes" value={autosave.values.subjectiveNotes} onChange={(v) => set("subjectiveNotes", v)} disabled={!canEdit} className="md:col-span-2" />
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
 
-          {isSectionVisible(workspaceConfig, "vitals") ? (
+          {isSectionVisible(workspaceConfig, "vitals") && isSoapSectionVisible("objective") ? (
             <Card>
               <CardHeader>
                 <CardTitle>Objective / Vitals</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <NumberField label="Blood pressure" value={autosave.values.bloodPressure ?? ""} onChange={(v) => set("bloodPressure", v)} disabled={!canEdit} isText />
-                  <NumberField label="Pulse (bpm)" value={autosave.values.pulseRate} onChange={(v) => set("pulseRate", v)} disabled={!canEdit} />
-                  <NumberField label="Resp. rate" value={autosave.values.respiratoryRate} onChange={(v) => set("respiratoryRate", v)} disabled={!canEdit} />
-                  <NumberField label="Temp (°C)" value={autosave.values.temperature} onChange={(v) => set("temperature", v)} disabled={!canEdit} />
-                  <NumberField label="Height (cm)" value={autosave.values.heightCm} onChange={(v) => set("heightCm", v)} disabled={!canEdit} />
-                  <NumberField label="Weight (kg)" value={autosave.values.weightKg} onChange={(v) => set("weightKg", v)} disabled={!canEdit} />
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">BMI</label>
-                    <p className="mt-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm font-medium">{liveBmi ?? "—"}</p>
-                  </div>
-                  <NumberField label="O2 sat (%)" value={autosave.values.oxygenSaturation} onChange={(v) => set("oxygenSaturation", v)} disabled={!canEdit} />
+                  {soapField("blood_pressure") ? (
+                    <NumberField label="Blood pressure" value={autosave.values.bloodPressure ?? ""} onChange={(v) => set("bloodPressure", v)} disabled={!canEdit} isText />
+                  ) : null}
+                  {soapField("pulse_rate") ? (
+                    <NumberField label="Pulse (bpm)" value={autosave.values.pulseRate} onChange={(v) => set("pulseRate", v)} disabled={!canEdit} />
+                  ) : null}
+                  {soapField("respiratory_rate") ? (
+                    <NumberField label="Respiratory rate" value={autosave.values.respiratoryRate} onChange={(v) => set("respiratoryRate", v)} disabled={!canEdit} />
+                  ) : null}
+                  {soapField("temperature") ? (
+                    <NumberField label="Temp (°C)" value={autosave.values.temperature} onChange={(v) => set("temperature", v)} disabled={!canEdit} />
+                  ) : null}
+                  {soapField("height_cm") ? (
+                    <NumberField label="Height (cm)" value={autosave.values.heightCm} onChange={(v) => set("heightCm", v)} disabled={!canEdit} />
+                  ) : null}
+                  {soapField("weight_kg") ? (
+                    <NumberField label="Weight (kg)" value={autosave.values.weightKg} onChange={(v) => set("weightKg", v)} disabled={!canEdit} />
+                  ) : null}
+                  {soapField("bmi") ? (
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">BMI</label>
+                      <p className="mt-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm font-medium">{liveBmi ?? "—"}</p>
+                    </div>
+                  ) : null}
+                  {soapField("oxygen_saturation") ? (
+                    <NumberField label="O2 sat (%)" value={autosave.values.oxygenSaturation} onChange={(v) => set("oxygenSaturation", v)} disabled={!canEdit} />
+                  ) : null}
                 </div>
-                <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} />
-                <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} />
+                {soapField("physical_examination") ? (
+                  <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("clinical_findings") ? (
+                  <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} />
+                ) : null}
               </CardContent>
             </Card>
           ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Assessment</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
-              <Field label="Clinical impression" value={autosave.values.clinicalImpression} onChange={(v) => set("clinicalImpression", v)} disabled={!canEdit} />
-              <Field label="Differential diagnosis" value={autosave.values.differentialDiagnosis} onChange={(v) => set("differentialDiagnosis", v)} disabled={!canEdit} />
-              <Field label="Assessment notes" value={autosave.values.assessmentNotes} onChange={(v) => set("assessmentNotes", v)} disabled={!canEdit} className="md:col-span-2" />
-            </CardContent>
-          </Card>
+          {isSoapSectionVisible("assessment") ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Assessment</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                {soapField("clinical_impression") ? (
+                  <Field label="Clinical impression" value={autosave.values.clinicalImpression} onChange={(v) => set("clinicalImpression", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("differential_diagnosis") ? (
+                  <Field label="Differential diagnosis" value={autosave.values.differentialDiagnosis} onChange={(v) => set("differentialDiagnosis", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("assessment_notes") ? (
+                  <Field label="Assessment notes" value={autosave.values.assessmentNotes} onChange={(v) => set("assessmentNotes", v)} disabled={!canEdit} className="md:col-span-2" />
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Plan</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
-              <Field label="Treatment plan" value={autosave.values.treatmentPlan} onChange={(v) => set("treatmentPlan", v)} disabled={!canEdit} />
-              <Field label="Patient instructions" value={autosave.values.patientInstructions} onChange={(v) => set("patientInstructions", v)} disabled={!canEdit} />
-              <Field label="Follow-up recommendation" value={autosave.values.followupRecommendation} onChange={(v) => set("followupRecommendation", v)} disabled={!canEdit} />
-              <Field label="Referral notes" value={autosave.values.referralNotes} onChange={(v) => set("referralNotes", v)} disabled={!canEdit} />
-            </CardContent>
-          </Card>
+          {isSoapSectionVisible("plan") ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Plan</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                {soapField("treatment_plan") ? (
+                  <Field label="Treatment plan" value={autosave.values.treatmentPlan} onChange={(v) => set("treatmentPlan", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("patient_instructions") ? (
+                  <Field label="Patient instructions" value={autosave.values.patientInstructions} onChange={(v) => set("patientInstructions", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("followup_recommendation") ? (
+                  <Field label="Follow-up recommendation" value={autosave.values.followupRecommendation} onChange={(v) => set("followupRecommendation", v)} disabled={!canEdit} />
+                ) : null}
+                {soapField("referral_notes") ? (
+                  <Field label="Referral notes" value={autosave.values.referralNotes} onChange={(v) => set("referralNotes", v)} disabled={!canEdit} />
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
 
           {canEdit ? (
             <div className="flex justify-end">

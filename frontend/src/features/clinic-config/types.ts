@@ -52,6 +52,12 @@ export interface WorkspaceSectionConfig {
 
 export interface WorkspaceConfig {
   sections: Record<string, WorkspaceSectionConfig>;
+  // Per-doctor SOAP note field visibility - {field_id: enabled}. Optional
+  // on the type (rather than required like `sections`) purely so existing
+  // literals built before this field existed keep compiling; the backend
+  // always resolves and returns it (never omitted, never null) - see
+  // `resolve_workspace_config` and `isSoapFieldVisible` below.
+  soap_fields?: Record<string, boolean>;
 }
 
 export interface Doctor {

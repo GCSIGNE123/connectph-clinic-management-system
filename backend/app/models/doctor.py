@@ -61,13 +61,82 @@ CONSULTATION_SECTIONS: list[dict[str, str]] = [
 ]
 CONSULTATION_SECTION_IDS: frozenset[str] = frozenset(s["id"] for s in CONSULTATION_SECTIONS)
 
+# --- Per-doctor SOAP field configuration ---
+# Which individual SOAP note fields a doctor wants to see/use in their own
+# consultation workflow. Deliberately a flat {field_id: bool} map inside the
+# same `workspace_config` JSONB blob as `sections` above (see
+# `resolve_workspace_config`) rather than a new column/table - this is the
+# same "show/hide, data-driven, one config blob per doctor" shape as
+# sections, just at field granularity instead of section granularity. There
+# is no "required" concept here (unlike sections) - the SOAP checklist is a
+# single visible/hidden toggle per field, per the feature spec.
+# Field ids match the corresponding `SoapNote` column names 1:1 (see
+# `models/soap_note.py`) so no translation layer is needed anywhere this
+# config is consumed. `bmi` is the one exception - it has no `SoapNote`
+# column of its own (it's server-computed from height/weight, see
+# `ConsultationService._compute_bmi`); the toggle here only controls whether
+# the BMI display row renders, never how BMI itself is calculated.
+SOAP_FIELD_GROUPS: list[dict[str, Any]] = [
+    {
+        "id": "subjective",
+        "label": "Subjective",
+        "fields": [
+            {"id": "chief_complaint", "label": "Chief complaint"},
+            {"id": "history_of_present_illness", "label": "History of present illness"},
+            {"id": "past_medical_history", "label": "Past medical history"},
+            {"id": "family_history", "label": "Family history"},
+            {"id": "social_history", "label": "Social history"},
+            {"id": "review_of_systems", "label": "Review of systems"},
+            {"id": "subjective_notes", "label": "Additional subjective notes"},
+        ],
+    },
+    {
+        "id": "objective",
+        "label": "Objective / Vitals",
+        "fields": [
+            {"id": "blood_pressure", "label": "Blood pressure"},
+            {"id": "pulse_rate", "label": "Pulse (bpm)"},
+            {"id": "respiratory_rate", "label": "Respiratory rate"},
+            {"id": "temperature", "label": "Temperature (°C)"},
+            {"id": "height_cm", "label": "Height (cm)"},
+            {"id": "weight_kg", "label": "Weight (kg)"},
+            {"id": "bmi", "label": "BMI"},
+            {"id": "oxygen_saturation", "label": "O₂ saturation (%)"},
+            {"id": "physical_examination", "label": "Physical examination"},
+            {"id": "clinical_findings", "label": "Clinical findings"},
+        ],
+    },
+    {
+        "id": "assessment",
+        "label": "Assessment",
+        "fields": [
+            {"id": "clinical_impression", "label": "Clinical impression"},
+            {"id": "differential_diagnosis", "label": "Differential diagnosis"},
+            {"id": "assessment_notes", "label": "Assessment notes"},
+        ],
+    },
+    {
+        "id": "plan",
+        "label": "Plan",
+        "fields": [
+            {"id": "treatment_plan", "label": "Treatment plan"},
+            {"id": "patient_instructions", "label": "Patient instructions"},
+            {"id": "followup_recommendation", "label": "Follow-up recommendation"},
+            {"id": "referral_notes", "label": "Referral notes"},
+        ],
+    },
+]
+SOAP_FIELD_IDS: frozenset[str] = frozenset(f["id"] for group in SOAP_FIELD_GROUPS for f in group["fields"])
+
 
 def default_workspace_config() -> dict[str, Any]:
-    """Every section visible, none required - the exact behavior the
-    consultation page already had before this feature existed. This is
-    also what a doctor with no custom configuration resolves to."""
+    """Every section visible/none required, every SOAP field enabled - the
+    exact behavior the consultation page already had before either feature
+    existed. This is also what a doctor with no custom configuration (or a
+    config saved before SOAP fields existed) resolves to."""
     return {
-        "sections": {sid: {"visible": True, "required": False} for sid in CONSULTATION_SECTION_IDS}
+        "sections": {sid: {"visible": True, "required": False} for sid in CONSULTATION_SECTION_IDS},
+        "soap_fields": {fid: True for fid in SOAP_FIELD_IDS},
     }
 
 
@@ -77,7 +146,10 @@ def _all_sections(*, visible: bool, required: bool) -> dict[str, dict[str, bool]
 
 # Presets are plain data (not per-doctor code paths) - applying one is just
 # copying this dict as a doctor's `workspace_config`, the same write path as
-# any hand-picked configuration.
+# any hand-picked configuration. Presets only vary `sections` - all three
+# leave `soap_fields` at "every field enabled" since the SOAP checklist is a
+# separate, independently-configured concern (see `SOAP_FIELD_GROUPS`).
+_DEFAULT_SOAP_FIELDS: dict[str, bool] = {fid: True for fid in SOAP_FIELD_IDS}
 WORKSPACE_CONFIG_PRESETS: dict[str, dict[str, Any]] = {
     # Minimal encounter: core clinical sections only.
     "simple": {
@@ -86,7 +158,8 @@ WORKSPACE_CONFIG_PRESETS: dict[str, dict[str, Any]] = {
             "vitals": {"visible": True, "required": False},
             "diagnosis": {"visible": True, "required": False},
             "prescription": {"visible": True, "required": False},
-        }
+        },
+        "soap_fields": dict(_DEFAULT_SOAP_FIELDS),
     },
     # Matches the no-custom-config default exactly - every section visible,
     # nothing mandatory.
@@ -98,19 +171,26 @@ WORKSPACE_CONFIG_PRESETS: dict[str, dict[str, Any]] = {
             "vitals": {"visible": True, "required": True},
             "diagnosis": {"visible": True, "required": True},
             "prescription": {"visible": True, "required": True},
-        }
+        },
+        "soap_fields": dict(_DEFAULT_SOAP_FIELDS),
     },
 }
 
 
 def resolve_workspace_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     """Merges a possibly partial/stale/absent stored config over the
-    current defaults, section-by-section:
+    current defaults, section-by-section and SOAP-field-by-field:
     - No stored config at all -> full default (unchanged pre-feature
       behavior for every existing doctor).
-    - A stored config missing a section that was added later still gets
-      that section's default rather than silently disappearing.
-    - An unknown/legacy section id in stored data is ignored, never raises.
+    - A stored config missing a section/field that was added later still
+      gets that section/field's default (enabled) rather than silently
+      disappearing - this is what makes "existing doctors keep every SOAP
+      field enabled after this feature ships" true without a migration
+      needing to touch a single row.
+    - An unknown/legacy section id or SOAP field id in stored data is
+      ignored, never raises - only the API layer (`WorkspaceConfig`
+      schema) rejects unknown ids up front; this function is the last line
+      of defense for stale/hand-edited data and must never blow up.
     - A section marked required while NOT visible has `required` forced
       back to False here - the single place that invariant is enforced, so
       every caller (API responses, consultation rendering, completion
@@ -127,6 +207,13 @@ def resolve_workspace_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         entry = raw_sections.get(sid) if isinstance(raw_sections, dict) else None
         required = bool(entry.get("required", False)) if isinstance(entry, dict) else False
         sections[sid]["required"] = required and sections[sid]["visible"]
+
+    soap_fields = resolved["soap_fields"]
+    raw_soap_fields = raw.get("soap_fields") if isinstance(raw, dict) else None
+    if isinstance(raw_soap_fields, dict):
+        for fid in SOAP_FIELD_IDS:
+            if fid in raw_soap_fields:
+                soap_fields[fid] = bool(raw_soap_fields[fid])
     return resolved
 
 
