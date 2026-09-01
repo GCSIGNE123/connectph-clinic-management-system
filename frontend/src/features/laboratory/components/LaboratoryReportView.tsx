@@ -18,7 +18,7 @@ import type { LaboratoryOrder } from "@/features/laboratory/types";
  * template's reference ranges change later.
  *
  * Round 4 (Assessment -> Flag, matching the clinic's existing paper
- * report convention): the last column now prints a bare "L"/"H" (or
+ * report convention): the last column now prints a bare "L"/"H"/"A" (or
  * blank) instead of the full word/icon - see `FlagText`. FLAG only ever
  * holds a single character, so its column shrank from 19% to 8%; that
  * freed width went mostly to NORMAL VALUES (27% -> 35%), which is the
@@ -139,7 +139,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
                         {result.normalRange ?? ""}
                       </td>
                       <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
-                        <FlagText value={result.interpretation} />
+                        <FlagText value={result.interpretation} resultType={result.resultType} />
                       </td>
                     </tr>
                   ))

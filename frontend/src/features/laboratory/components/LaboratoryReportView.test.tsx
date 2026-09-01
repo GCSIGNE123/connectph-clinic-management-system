@@ -601,11 +601,85 @@ describe("LaboratoryReportView", () => {
       expect(table.className).toContain("max-w-full");
     });
 
-    it("a persisted 'Abnormal' (non-directional, qualitative) interpretation prints blank rather than guessing H or L", () => {
-      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Abnormal" })] })} />);
+    it("a persisted 'Abnormal' (non-directional, qualitative) interpretation on a Text result prints blank rather than guessing H or L", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ resultType: "Text", interpretation: "Abnormal" })] })} />);
       expect(screen.queryByText("L")).not.toBeInTheDocument();
       expect(screen.queryByText("H")).not.toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
       expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
+    });
+  });
+
+  // --- HBsAg PDF Flag fix: a Categorical Positive/Negative result's
+  // `Abnormal`/`Normal` interpretation now maps to a distinct "A" flag
+  // (Categorical only) - separate from L/H (numeric direction, unchanged)
+  // and separate from Text's own still-blank `Abnormal` convention above.
+  describe("Laboratory Report print redesign - Categorical Positive/Negative Flag ('A')", () => {
+    it("1: a Categorical result with Abnormal interpretation (e.g. HBsAg Positive) renders 'A'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: null,
+            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })],
+          })}
+        />
+      );
+      expect(screen.getByText("A")).toBeInTheDocument();
+    });
+
+    it("2: the 'A' flag carries the red/destructive color class, same urgency tier as 'L'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })] })}
+        />
+      );
+      expect(screen.getByText("A").className).toContain("text-destructive");
+    });
+
+    it("3: a Categorical result with Normal interpretation (e.g. HBsAg Negative) renders blank, not 'A'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: null,
+            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Negative" }, interpretation: "Normal" })],
+          })}
+        />
+      );
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+    });
+
+    it("4: the FLAG column never prints the word 'Abnormal' for a Categorical result - only the single character 'A'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })] })}
+        />
+      );
+      expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
+      expect(screen.getByText("A")).toBeInTheDocument();
+    });
+
+    it("5: Numeric Low/High/Normal flags are unaffected by the Categorical 'A' addition", () => {
+      const { rerender } = render(<LaboratoryReportView order={order({ results: [result({ resultType: "Numeric", interpretation: "Low" })] })} />);
+      expect(screen.getByText("L")).toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result({ resultType: "Numeric", interpretation: "High" })] })} />);
+      expect(screen.getByText("H")).toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result({ resultType: "Numeric", interpretation: "Normal" })] })} />);
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+    });
+
+    it("6: a Text result's Abnormal interpretation still renders blank, not 'A' - the Round 4 Text convention is untouched", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ resultType: "Text", interpretation: "Abnormal" })] })} />);
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
     });
   });
 
