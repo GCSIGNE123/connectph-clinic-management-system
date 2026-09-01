@@ -73,6 +73,25 @@ describe("buildReportRows", () => {
     expect(rows.map((r) => r.parameterName)).toEqual(["Hemoglobin"]);
   });
 
+  // Client-reported "blank FLAG column" investigation: confirms
+  // `buildReportRows` never reads/drops/recalculates `interpretation` - it
+  // carries the whole `LaboratoryResult` object through untouched, so
+  // whatever the backend computed (or didn't compute - see
+  // `interpret_result`'s "never guess" contract) survives verbatim into
+  // the row the report renders. Data-driven over every interpretation this
+  // codebase produces, not just Low/High.
+  it.each([
+    ["Low", "Low"],
+    ["High", "High"],
+    ["Normal", "Normal"],
+    ["Abnormal", "Abnormal"],
+    [null, null],
+  ] as const)("a Numeric result's interpretation (%s) passes through buildReportRows unchanged", (stored, expected) => {
+    const o = order({ results: [result({ resultType: "Numeric", interpretation: stored })] });
+    const rows = buildReportRows(o);
+    expect(rows[0].results[0].interpretation).toBe(expected);
+  });
+
   it("an untemplated order lists results as-is with no section", () => {
     const o = order({ template: null, templateId: null });
     const rows = buildReportRows(o);

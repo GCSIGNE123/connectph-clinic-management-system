@@ -106,9 +106,15 @@ async def get_order(
     # source); list/action endpoints are unaffected.
     clinic = await db.get(Clinic, clinic_id)
     order.clinic_name = clinic.name if clinic else None
-    # Round 5: same join convention `MedicalCertificateService._to_detail`
-    # already uses for `clinic_address` - existing columns, no new ones.
-    order.clinic_address = ", ".join(filter(None, [clinic.address, clinic.city, clinic.province])) or None if clinic else None
+    # Round 5 (client feedback: include Barangay): the printed report's
+    # address line, in `<address>, <barangay>, <city>, <province>` order -
+    # all four already-existing `Clinic` columns (Phase 4 clinic-settings
+    # fields), no new columns/migration. `filter(None, ...)` drops any
+    # component that isn't configured so a missing one is omitted cleanly
+    # (never a dangling/duplicated comma from a blank segment) rather than
+    # inventing a placeholder - same convention the rest of this endpoint's
+    # clinic fields already use below.
+    order.clinic_address = ", ".join(filter(None, [clinic.address, clinic.barangay, clinic.city, clinic.province])) or None if clinic else None
     order.clinic_phone = (clinic.telephone or clinic.mobile) if clinic else None
     order.clinic_email = clinic.email if clinic else None
     # Round 7: same shared `Clinic.logo_url` branding value the TV Display

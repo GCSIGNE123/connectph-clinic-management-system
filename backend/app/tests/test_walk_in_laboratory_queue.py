@@ -152,6 +152,48 @@ async def test_walk_in_laboratory_queue_ticket_creates_lab_order_even_with_custo
     assert lab_order["order_id"] is None
     assert lab_order["doctor_id"] is None
     assert lab_order["queue_number"] == queue["queue_number"]
+    # Client feedback: a walk-in order (no `order_id`) previously printed
+    # "Order No. : -" on its Laboratory Report - it now gets its own
+    # `ORD-YYYYMMDD-NNNNNN` number, same format/generator Phase 9's
+    # doctor-referred orders already use (see `standalone_order_number`).
+    assert lab_order["order_number"] is not None
+    assert lab_order["order_number"].startswith("ORD-")
+
+
+async def test_walk_in_lab_order_number_is_unique_per_ticket_and_shares_the_daily_counter(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Two walk-in lab orders created back to back the same day get two
+    distinct, sequential numbers - proves this isn't a fixed/hardcoded
+    string and that the counter genuinely advances per order. Two
+    different patients (an existing "one active queue ticket per patient/
+    department/day" guard - unrelated to this feature - would otherwise
+    reject a second ticket for the same patient/department same day)."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps_a = await _setup(client, owner_headers, department_code="D03")
+    second_patient = (
+        await client.post(
+            "/api/v1/patients", headers=owner_headers,
+            json={
+                "first_name": "Maria", "last_name": "Santos", "birth_date": "1985-03-20",
+                "gender": "Female", "civil_status": "Single", "mobile_number": "+639179998888",
+            },
+        )
+    ).json()["patient"]
+    deps_b = {**deps_a, "patient_id": second_patient["id"]}
+
+    first = await _create_paid_lab_queue(client, owner_headers, deps_a)
+    assert first.status_code == 201, first.text
+    second = await _create_paid_lab_queue(client, owner_headers, deps_b)
+    assert second.status_code == 201, second.text
+
+    first_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={first.json()['visit_id']}", headers=owner_headers)).json()
+    second_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={second.json()['visit_id']}", headers=owner_headers)).json()
+    first_number = first_orders[0]["order_number"]
+    second_number = second_orders[0]["order_number"]
+    assert first_number != second_number
+    assert first_number.startswith("ORD-")
+    assert second_number.startswith("ORD-")
 
 
 async def test_walk_in_lab_order_created_even_with_no_matching_template(

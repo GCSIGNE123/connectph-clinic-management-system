@@ -58,6 +58,17 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
     )
+    # Client feedback (Laboratory Report printing "Order No. : -" for a
+    # walk-in order): a doctor-referred lab order reads its printed order
+    # number from `order.order_number` via the `order_id` FK above. A
+    # walk-in order has no `Order` row to read one from, so it gets its own
+    # number here instead - generated once, at creation
+    # (`create_from_queue_ticket`), via the exact same `OrderNumberGenerator`
+    # Phase 9 orders use (same `ORD-YYYYMMDD-NNNNNN` format/shared daily
+    # counter - the two origins' numbers never collide). Always null for a
+    # doctor-referred order (it has `order_id` instead); `_to_read` falls
+    # back to this column only when `order_id` is unset.
+    standalone_order_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
     visit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
     patient_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -210,12 +210,14 @@ class LaboratoryOrderRead(BaseModel):
     clinic_name: str | None = None
     # Round 5 (report header contact info): same additive/optional,
     # `GET /laboratory/orders/{id}`-only convention as `clinic_name` above -
-    # sourced from the existing `Clinic.address`/`city`/`province` and
-    # `telephone`/`mobile`/`email` columns (Phase 4 clinic-settings fields),
-    # no new database columns. `clinic_address` is pre-joined server-side
-    # (same convention `MedicalCertificateService._to_detail` already uses
-    # for `clinic_address`); `clinic_phone` prefers `telephone` and falls
-    # back to `mobile` when only one is configured.
+    # sourced from the existing `Clinic.address`/`barangay`/`city`/
+    # `province` and `telephone`/`mobile`/`email` columns (Phase 4
+    # clinic-settings fields), no new database columns. `clinic_address` is
+    # pre-joined server-side as "<address>, <barangay>, <city>, <province>"
+    # (client feedback: Barangay was missing) - a component that isn't
+    # configured is simply omitted rather than left as a blank/dangling
+    # comma; `clinic_phone` prefers `telephone` and falls back to `mobile`
+    # when only one is configured.
     clinic_address: str | None = None
     clinic_phone: str | None = None
     clinic_email: str | None = None

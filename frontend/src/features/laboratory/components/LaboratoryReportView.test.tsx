@@ -683,6 +683,96 @@ describe("LaboratoryReportView", () => {
     });
   });
 
+  // --- Client-reported "FLAG column is blank on a standard report" bug
+  // investigation. Root cause (see the implementation report): NOT a code
+  // defect in this pipeline - `interpret_result` (backend), the API
+  // response, `report.ts`, and `FlagText` all already round-trip
+  // Low/High/Normal correctly (proven by the pre-existing Round 4 suite
+  // above, still 100% passing). The live blank flags were traced to one
+  // specific lab template whose parameters had only the legacy free-text
+  // `normal_range` string configured, with no structured `range_low`/
+  // `range_high` - `interpret_result` correctly refuses to guess an
+  // interpretation from unparsed text (documented "never guess"
+  // contract), so `interpretation` was `null` for that data, and `null`
+  // has always rendered blank. This describe block is a regression lock,
+  // not a bug fix - it renders a MULTI-ROW numeric panel (deliberately
+  // NOT named "CBC" - `isQualitativeCategoricalRow`/`FlagText` are driven
+  // purely by `resultType`/`interpretation`, never by test/parameter name)
+  // and proves every row's FLAG cell matches its already-computed,
+  // already-persisted `interpretation`, data-driven over a table rather
+  // than one hardcoded assertion. ---
+  describe("Laboratory Report FLAG column - standard numeric report, data-driven Low/High/Normal", () => {
+    // Mirrors the exact values from the client's reported screenshot (a
+    // CBC-style panel), but the template/test name is deliberately generic
+    // ("Generic Numeric Panel") - this suite is proving the flag pipeline
+    // is name-agnostic, not re-testing CBC specifically.
+    const rows: { parameterName: string; numericValue: number; interpretation: "Low" | "High" | "Normal"; expectedFlag: "L" | "H" | null }[] = [
+      { parameterName: "Param A (in range)", numericValue: 22, interpretation: "Normal", expectedFlag: null },
+      { parameterName: "Param B (below range)", numericValue: 5, interpretation: "Low", expectedFlag: "L" },
+      { parameterName: "Param C (above range)", numericValue: 6, interpretation: "High", expectedFlag: "H" },
+      { parameterName: "Param D (below range)", numericValue: 115, interpretation: "Low", expectedFlag: "L" },
+      { parameterName: "Param E (above range)", numericValue: 0.3, interpretation: "High", expectedFlag: "H" },
+    ];
+
+    function buildPanelOrder() {
+      return order({
+        testType: "Generic Numeric Panel",
+        template: {
+          id: "t-panel", testName: "Generic Numeric Panel", testCategory: null, specimenType: null, defaultPrice: 0,
+          turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+          parameters: rows.map((r) => param({ parameterName: r.parameterName })),
+        },
+        results: rows.map((r) =>
+          result({ parameterName: r.parameterName, numericValue: r.numericValue, interpretation: r.interpretation })
+        ),
+      });
+    }
+
+    it.each(rows)("$parameterName: interpretation '$interpretation' renders FLAG '$expectedFlag' (blank when null)", ({ parameterName, expectedFlag }) => {
+      render(<LaboratoryReportView order={buildPanelOrder()} />);
+      const dataRow = screen.getByText(parameterName).closest("tr") as HTMLTableRowElement;
+      const flagCell = dataRow.children[4];
+      expect(flagCell).toHaveTextContent(expectedFlag ?? "");
+    });
+
+    it("a full multi-row standard report renders every row's flag independently, in template order", () => {
+      render(<LaboratoryReportView order={buildPanelOrder()} />);
+      for (const r of rows) {
+        const dataRow = screen.getByText(r.parameterName).closest("tr") as HTMLTableRowElement;
+        expect(dataRow.children[4]).toHaveTextContent(r.expectedFlag ?? "");
+      }
+      // Sanity: the panel's own out-of-range rows produced visible L/H
+      // text somewhere in the document (proves this isn't a false-positive
+      // "no flag anywhere is blank" check).
+      expect(screen.getAllByText("L").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("H").length).toBeGreaterThan(0);
+    });
+
+    it("a qualitative Positive/Negative matrix report is unaffected - still no FLAG column, no L/H/A for Positive/Negative", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "Generic Serology Panel",
+            template: {
+              id: "t-matrix-panel", testName: "Generic Serology Panel", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [param({ parameterName: "Marker", resultType: "Categorical", options: ["Positive", "Negative"] })],
+            },
+            results: [
+              result({ parameterName: "Marker", resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" }),
+            ],
+          })}
+        />
+      );
+      // No standard 5-column Flag header exists on a pure-matrix report.
+      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.queryByText("L")).not.toBeInTheDocument();
+      expect(screen.queryByText("H")).not.toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+      expect(screen.getByText("Positive")).toBeInTheDocument();
+    });
+  });
+
   // --- Qualitative Positive/Negative MATRIX layout (client reference:
   // the parent test name as the matrix's own first cell/row label - "TEST
   // | NS1 | IgM | IgG" / "DENGUE RAPID TEST | Negative | Positive |
@@ -885,7 +975,9 @@ describe("LaboratoryReportView", () => {
         <LaboratoryReportView
           order={order({
             medTechNameSnapshot: "Aijilie Mosquite",
+            medTechLicenseSnapshot: "123456",
             pathologistNameSnapshot: "Dr. Santos",
+            pathologistLicenseSnapshot: "PRC-SANTOS-001",
             template: {
               id: "t-hbsag2", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: null, specimenType: null, defaultPrice: 0,
               turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
@@ -900,6 +992,19 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByTestId("pathologist-signatory")).toBeInTheDocument();
       expect(screen.getByText("Aijilie Mosquite")).toBeInTheDocument();
       expect(screen.getByText("Dr. Santos")).toBeInTheDocument();
+      // Client feedback: the "MED TECHNOLOGIST IN CHARGE" / "PATHOLOGIST"
+      // role headings are redundant (the name, license, and role line
+      // already identify the signatory) - removed from every report type,
+      // matrix included (see the standard-report equivalent test below).
+      expect(screen.queryByText("Med Technologist in Charge")).not.toBeInTheDocument();
+      expect(screen.queryByText("MED TECHNOLOGIST IN CHARGE")).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Pathologist$/i, { selector: "p.mb-1" })).not.toBeInTheDocument();
+      // Everything below the (now-removed) heading still renders: name,
+      // license number (each signatory's own convention), and role line.
+      expect(screen.getByText("RMT No. 123456")).toBeInTheDocument();
+      expect(screen.getByText("Lic. No. PRC-SANTOS-001")).toBeInTheDocument();
+      expect(screen.getByText("Medical Technologist")).toBeInTheDocument();
+      expect(screen.getByTestId("pathologist-signatory")).toHaveTextContent("Pathologist");
     });
 
     it("also prints the 'refer to your doctor' note only for a qualitative matrix report, not for a purely quantitative one", () => {
@@ -959,6 +1064,66 @@ describe("LaboratoryReportView", () => {
         Array.from(node.parentElement!.children).indexOf(node);
       expect(position(clinicName)).toBeLessThan(position(contactLine));
       expect(position(contactLine)).toBeLessThan(position(reportTitle));
+    });
+
+    // Client feedback: the printed address must read "<address>, <barangay>,
+    // <city>, <province>" - the join itself happens server-side (see
+    // `laboratory.py`'s `get_order`), so this component just needs to keep
+    // rendering `order.clinicAddress` verbatim, in whatever already-joined
+    // form the backend sends, unchanged by this feature.
+    it("4b: the full address including Barangay renders verbatim, in the client's reference order", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ clinicAddress: "123 Rizal St., Brgy. Poblacion, Mabini, Leyte" })}
+        />
+      );
+      expect(screen.getByText(/123 Rizal St\., Brgy\. Poblacion, Mabini, Leyte/)).toBeInTheDocument();
+    });
+
+    it("4c: an address string with a component omitted upstream never shows a malformed/dangling comma", () => {
+      // Simulates the backend's own "omit, don't fabricate" join for a
+      // clinic missing one component (e.g. no Barangay configured) -
+      // proves this component doesn't add its own separators/formatting
+      // on top of the already-joined string.
+      render(<LaboratoryReportView order={order({ clinicAddress: "123 Main Street, Ormoc City, Leyte" })} />);
+      const addressText = screen.getByText(/123 Main Street, Ormoc City, Leyte/).textContent ?? "";
+      expect(addressText).not.toMatch(/,\s*,/);
+      expect(addressText).not.toMatch(/^\s*,|,\s*$/);
+    });
+
+    it("4d: clinic name, logo-fallback icon, and the 'Laboratory Report' title are unaffected by the Barangay-inclusive address", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicName: "Canora Medical Clinic & Laboratory",
+            clinicAddress: "123 Rizal St., Brgy. Poblacion, Mabini, Leyte",
+          })}
+        />
+      );
+      expect(screen.getByText("Canora Medical Clinic & Laboratory")).toBeInTheDocument();
+      expect(screen.getByText("Laboratory Report")).toBeInTheDocument();
+    });
+
+    it("4e: the Barangay-inclusive address renders identically for a qualitative matrix report", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            clinicAddress: "123 Rizal St., Brgy. Poblacion, Mabini, Leyte",
+            testType: "HEPATITIS B ANTIGEN (HBSAG)",
+            template: {
+              id: "t-hbsag-addr", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [param({ parameterName: "HBsAg", resultType: "Categorical", options: ["Positive", "Negative"] })],
+            },
+            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal", normalRange: "Negative", units: null })],
+          })}
+        />
+      );
+      expect(screen.getByText(/123 Rizal St\., Brgy\. Poblacion, Mabini, Leyte/)).toBeInTheDocument();
+      // Matrix-report requirements from the prior change remain intact:
+      // parent test name inside the matrix, no duplicate header "Test" row.
+      expect(screen.getAllByText("Test")).toHaveLength(1);
+      expect(screen.getByText("HEPATITIS B ANTIGEN (HBSAG)")).toBeInTheDocument();
     });
 
     it("5: values are read from the order's existing clinic configuration fields, not hard-coded", () => {
@@ -1081,6 +1246,42 @@ describe("LaboratoryReportView", () => {
       // Med Tech's license line uses "RMT No." (not the Pathologist's
       // "Lic. No.") per the client's reference format.
       expect(screen.getByText("RMT No. MT-001")).toBeInTheDocument();
+      // Client feedback (round 2): the "MED TECHNOLOGIST IN CHARGE" heading
+      // is redundant on EVERY report, including this standard (non-matrix)
+      // one (default `order()` here has no qualitative rows) - it was
+      // previously removed ONLY for a matrix report, which is exactly why
+      // it kept reappearing on a standard CBC-style report. See the
+      // dedicated regression test below for the full before/after proof.
+      expect(screen.queryByText("Med Technologist in Charge")).not.toBeInTheDocument();
+    });
+
+    it("5e (regression - client-reported 'heading reappeared on the standard report'): neither 'MED TECHNOLOGIST IN CHARGE' nor 'PATHOLOGIST' renders on a standard CBC-style report, while every other signatory field still does", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            testType: "CBC",
+            medTechNameSnapshot: "Aijilie Mosquite", medTechLicenseSnapshot: "123456",
+            pathologistNameSnapshot: "Dr. Santos", pathologistLicenseSnapshot: "PRC-SANTOS-001",
+          })}
+        />
+      );
+      // The two redundant headings must not render anywhere in the report.
+      expect(screen.queryByText("Med Technologist in Charge")).not.toBeInTheDocument();
+      expect(screen.queryByText("MED TECHNOLOGIST IN CHARGE")).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Pathologist$/i, { selector: "p.mb-1" })).not.toBeInTheDocument();
+      // Everything else the signatory footer is required to keep still
+      // renders: names, both license-number conventions, and both role
+      // lines (the role line and the removed heading share the word
+      // "Pathologist" - `toHaveTextContent` below proves it's still
+      // present on the column, distinct from the heading-specific query
+      // above which targets only the `p.mb-1` heading element).
+      expect(screen.getByText("Aijilie Mosquite")).toBeInTheDocument();
+      expect(screen.getByText("Dr. Santos")).toBeInTheDocument();
+      expect(screen.getByText("RMT No. 123456")).toBeInTheDocument();
+      expect(screen.getByText("Lic. No. PRC-SANTOS-001")).toBeInTheDocument();
+      expect(screen.getByText("Medical Technologist")).toBeInTheDocument();
+      expect(screen.getByTestId("pathologist-signatory")).toHaveTextContent("Pathologist");
     });
 
     it("5b: the Pathologist's license line uses 'Lic. No.', distinct from the Med Tech's 'RMT No.'", () => {

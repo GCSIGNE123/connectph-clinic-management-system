@@ -45,6 +45,7 @@ from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
 from app.repositories.laboratory_repository import LaboratoryRepository
 from app.repositories.visit_repository import VisitRepository
+from app.services.clinical_number_generator import OrderNumberGenerator
 from app.schemas.laboratory import (
     LaboratoryAttachmentRead,
     LaboratoryOrderRead,
@@ -159,7 +160,13 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
     return LaboratoryOrderRead(
         id=lab_order.id,
         order_id=lab_order.order_id,
-        order_number=order.order_number if order else None,
+        # A doctor-referred lab order reads its number from the Phase 9
+        # `Order` it's attached to (unchanged). A walk-in order (no `Order`
+        # - see `create_from_queue_ticket`) has its own `ORD-YYYYMMDD-NNNNNN`
+        # number generated at creation time via the same `OrderNumberGenerator`
+        # and stored directly on `LaboratoryOrder.standalone_order_number`,
+        # so every Laboratory Report prints a real Order No., not "-".
+        order_number=order.order_number if order else lab_order.standalone_order_number,
         visit_id=lab_order.visit_id,
         visit_number=lab_order.visit.visit_number if lab_order.visit else None,
         queue_number=lab_order.visit.queue.queue_number if lab_order.visit and lab_order.visit.queue else None,
@@ -319,7 +326,15 @@ class LaboratoryService:
         fallback, not a precondition for the row existing. A clinic with no
         Laboratory templates configured yet (a real, observed case) still
         needs the order to show up on the worklist; it just won't have
-        structured parameters until a template is added and linked."""
+        structured parameters until a template is added and linked.
+
+        Client feedback: a walk-in order has no Phase 9 `Order` to read an
+        order number from, so its printed report showed "Order No. : -".
+        Generates its own number here via the same `OrderNumberGenerator`
+        Phase 9's `ClinicalOrdersService.create_order` uses (identical
+        `ORD-YYYYMMDD-NNNNNN` format/counter - one shared daily sequence
+        across both origins, so numbers never collide), stored on
+        `standalone_order_number` since there's no `Order` row to hold it."""
         templates = await self.repo.list_templates(clinic_id, active_only=True)
         template_id = None
         for t in templates:
@@ -327,10 +342,12 @@ class LaboratoryService:
                 template_id = t.id
                 break
 
+        order_number = await OrderNumberGenerator(self.session).next_number(clinic_id)
+
         return await self.repo.create_laboratory_order(
             clinic_id=clinic_id, order_id=None, branch_id=branch_id, visit_id=visit_id,
             patient_id=patient_id, doctor_id=None, template_id=template_id, test_type=service_name,
-            status=LaboratoryOrderStatus.REQUESTED,
+            status=LaboratoryOrderStatus.REQUESTED, standalone_order_number=order_number,
         )
 
     # --- Reads ---

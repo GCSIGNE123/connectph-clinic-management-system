@@ -3543,9 +3543,11 @@ async def test_phase_4g_list_endpoints_do_not_populate_clinic_name(
 
 # --- Round 5: Laboratory Report header contact info (clinic address/phone/
 # email) - same additive, GET-order-only convention as `clinic_name` above.
-# Sourced from the existing `Clinic.address`/`city`/`province` and
-# `telephone`/`mobile`/`email` columns (Phase 4 clinic-settings fields
-# already exposed by `GET /clinic-settings`), no new database columns. ---
+# Sourced from the existing `Clinic.address`/`barangay`/`city`/`province`
+# and `telephone`/`mobile`/`email` columns (Phase 4 clinic-settings fields
+# already exposed by `GET /clinic-settings`), no new database columns.
+# `clinic_address` is joined as "<address>, <barangay>, <city>, <province>"
+# (client feedback: the original 3-part join omitted Barangay). ---
 
 
 async def test_round5_get_order_includes_clinic_contact_fields_for_report_header(
@@ -3553,13 +3555,16 @@ async def test_round5_get_order_includes_clinic_contact_fields_for_report_header
 ) -> None:
     """`GET /laboratory/orders/{id}` also returns `clinic_address`/
     `clinic_phone`/`clinic_email`, joined/resolved from the existing Clinic
-    columns already editable via Clinic Settings - no new columns."""
+    columns already editable via Clinic Settings - no new columns.
+    `clinic_address` includes Barangay, in address/barangay/city/province
+    order, per the client's reference format."""
     from app.models.clinic import Clinic
 
     ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
     clinic_row = (await db_session.execute(select(Clinic).where(Clinic.id == ctx["clinic"].id))).scalar_one()
-    clinic_row.address = "123 Main Street"
-    clinic_row.city = "Ormoc City"
+    clinic_row.address = "123 Rizal St."
+    clinic_row.barangay = "Brgy. Poblacion"
+    clinic_row.city = "Mabini"
     clinic_row.province = "Leyte"
     clinic_row.telephone = "0917-123-4567"
     clinic_row.mobile = "0918-999-0000"
@@ -3567,10 +3572,33 @@ async def test_round5_get_order_includes_clinic_contact_fields_for_report_header
     await db_session.commit()
 
     order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])).json()
-    assert order["clinic_address"] == "123 Main Street, Ormoc City, Leyte"
+    assert order["clinic_address"] == "123 Rizal St., Brgy. Poblacion, Mabini, Leyte"
     # Telephone is preferred over mobile when both are configured.
     assert order["clinic_phone"] == "0917-123-4567"
     assert order["clinic_email"] == "clinic@canora.com"
+
+
+async def test_round5_clinic_address_omits_missing_barangay_without_dangling_comma(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A clinic with no Barangay configured (only address/city/province)
+    still joins cleanly - no ", ," or trailing/leading comma from the
+    missing component, matching the existing "omit, never fabricate"
+    convention for every other optional field on this endpoint."""
+    from app.models.clinic import Clinic
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+    clinic_row = (await db_session.execute(select(Clinic).where(Clinic.id == ctx["clinic"].id))).scalar_one()
+    clinic_row.address = "123 Main Street"
+    clinic_row.barangay = None
+    clinic_row.city = "Ormoc City"
+    clinic_row.province = "Leyte"
+    await db_session.commit()
+
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_order']['id']}", headers=ctx["owner_headers"])).json()
+    assert order["clinic_address"] == "123 Main Street, Ormoc City, Leyte"
+    assert ",," not in order["clinic_address"]
+    assert ", ," not in order["clinic_address"]
 
 
 async def test_round5_clinic_phone_falls_back_to_mobile_when_telephone_unset(

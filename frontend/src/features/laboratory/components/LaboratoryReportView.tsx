@@ -202,7 +202,16 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           `LaboratorySignatoryFooter`'s own docstring. Placed at the very
           end of the report, after the result table and notes, per the
           clinical-document convention the feature spec called for -
-          never repeated per page/section. */}
+          never repeated per page/section.
+
+          Client feedback (round 2): the "MED TECHNOLOGIST IN CHARGE" /
+          "PATHOLOGIST" role headings above each signature are redundant on
+          EVERY report - the name + license + role line beneath already
+          identifies the signatory. Previously removed ONLY for a matrix
+          report (a now-removed `showHeading` prop this call site set
+          `false` for); `LaboratorySignatoryFooter` itself no longer ever
+          renders the heading, for standard and matrix reports alike - one
+          call site, no report-type-specific opt-in/out. */}
       <LaboratorySignatoryFooter order={order} />
     </div>
   );
