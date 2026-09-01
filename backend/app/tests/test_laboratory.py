@@ -2377,6 +2377,35 @@ async def test_phase_4c_no_interpretation_is_invented_for_qualitative_results(
 # result the same way it already does for Text, and that an arbitrary
 # (non-configured) value is still rejected.
 
+async def test_doctor_ordered_lab_order_reports_the_correct_visit_number(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Doctor-ordered flow (Visit # investigation fix, counterpart to
+    `test_walk_in_lab_order_reports_the_correct_visit_number` in
+    `test_walk_in_laboratory_queue.py`): a Laboratory order created via a
+    doctor's consultation (`_order_for_template`, which drives a real
+    Queue -> Visit -> doctor consultation -> order flow) already has its
+    `visit_id` set - `GET /laboratory/orders/{id}` and the worklist listing
+    must report that Visit's actual `visit_number`, and the Requesting
+    Doctor (`doctor_id`) must remain populated exactly as before - this fix
+    only touches the previously-hardcoded `visit_number` field, nothing
+    about doctor attribution."""
+    ctx = await _order_for_template(client, make_clinic_with_owner, db_session, "Hepatitis B Antigen (HBsAg)")
+
+    detail = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_id']}", headers=ctx["owner_headers"])).json()
+    assert detail["visit_id"] is not None
+    assert detail["doctor_id"] is not None  # Requesting Doctor - unaffected by this fix
+
+    visit = (await client.get(f"/api/v1/visits/{detail['visit_id']}", headers=ctx["owner_headers"])).json()
+    assert visit["visit_number"]
+    assert detail["visit_number"] == visit["visit_number"]
+
+    worklist = (await client.get(f"/api/v1/laboratory/orders?visit_id={detail['visit_id']}", headers=ctx["owner_headers"])).json()
+    listed = next(o for o in worklist if o["id"] == ctx["lab_id"])
+    assert listed["visit_number"] == visit["visit_number"]
+    assert listed["doctor_id"] == detail["doctor_id"]
+
+
 async def _hbsag_order_with_options(client: AsyncClient, make_clinic_with_owner, db_session) -> dict:
     ctx = await _order_for_template(client, make_clinic_with_owner, db_session, "Hepatitis B Antigen (HBsAg)")
     templates = (await client.get("/api/v1/laboratory/templates", headers=ctx["owner_headers"])).json()

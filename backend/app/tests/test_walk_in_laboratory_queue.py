@@ -202,6 +202,50 @@ async def test_lab_queue_ticket_can_have_a_doctor_assigned_and_still_auto_create
     assert orders[0]["test_type"] == "CBC, PLATELET"
 
 
+async def test_walk_in_lab_order_reports_the_correct_visit_number(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """Direct-to-Laboratory / doctor-less flow (Visit # investigation fix):
+    the draft Visit created by the pay-first workflow already has a real
+    `visit_number` and `doctor_id=None` - `LaboratoryService._to_read` used
+    to hardcode `visit_number=None` on every order regardless, even though
+    `lab_order.visit` was already loaded (proven by `queue_number` already
+    working off that same relationship). Both `GET /laboratory/orders/{id}`
+    and the worklist listing (`GET /laboratory/orders?visit_id=...`) must
+    now return the linked Visit's actual number."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, owner_headers, department_code="D03", department_name="Laboratory")
+
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue = queue_resp.json()
+
+    visit_resp = await client.get(f"/api/v1/visits/{queue['visit_id']}", headers=owner_headers)
+    assert visit_resp.status_code == 200, visit_resp.text
+    visit = visit_resp.json()
+    assert visit["doctor_id"] is None
+    assert visit["visit_number"]
+
+    lab_email = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Laboratory")
+    lab_login = await client.post(
+        "/api/v1/auth/login", json={"email_or_username": lab_email, "password": "TestPass123!", "clinic_slug": clinic.slug}
+    )
+    lab_headers = {"Authorization": f"Bearer {lab_login.json()['access_token']}"}
+
+    worklist = await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=lab_headers)
+    assert worklist.status_code == 200, worklist.text
+    orders = worklist.json()
+    assert len(orders) == 1
+    lab_order = orders[0]
+    assert lab_order["visit_id"] == visit["id"]
+    assert lab_order["doctor_id"] is None
+    assert lab_order["visit_number"] == visit["visit_number"]
+
+    detail_resp = await client.get(f"/api/v1/laboratory/orders/{lab_order['id']}", headers=lab_headers)
+    assert detail_resp.status_code == 200, detail_resp.text
+    assert detail_resp.json()["visit_number"] == visit["visit_number"]
+
+
 async def test_non_laboratory_department_walk_in_queue_does_not_create_lab_order(
     client: AsyncClient, make_clinic_with_owner
 ) -> None:

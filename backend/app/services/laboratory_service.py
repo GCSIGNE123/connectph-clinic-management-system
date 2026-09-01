@@ -161,7 +161,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         order_id=lab_order.order_id,
         order_number=order.order_number if order else None,
         visit_id=lab_order.visit_id,
-        visit_number=None,
+        visit_number=lab_order.visit.visit_number if lab_order.visit else None,
         queue_number=lab_order.visit.queue.queue_number if lab_order.visit and lab_order.visit.queue else None,
         patient_id=lab_order.patient_id,
         patient_name=_full_name(lab_order.patient),
