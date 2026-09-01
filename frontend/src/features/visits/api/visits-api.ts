@@ -208,12 +208,17 @@ export const visitsApi = {
     return toVisitDetail(raw);
   },
 
-  async listForPatient(patientId: string, params: { page?: number; pageSize?: number } = {}): Promise<PaginatedResponse<VisitListItem>> {
+  async listForPatient(
+    patientId: string,
+    params: { page?: number; pageSize?: number; dateFrom?: string; dateTo?: string } = {}
+  ): Promise<PaginatedResponse<VisitListItem>> {
     const pageSize = params.pageSize ?? 50;
     const page = params.page ?? 1;
     const search = new URLSearchParams();
     search.set("limit", String(pageSize));
     search.set("offset", String((page - 1) * pageSize));
+    if (params.dateFrom) search.set("date_from", params.dateFrom);
+    if (params.dateTo) search.set("date_to", params.dateTo);
     const raw = await apiClient.get<{ items: RawVisitListItem[]; total: number; limit: number; offset: number }>(
       `/patients/${patientId}/visits?${search.toString()}`
     );

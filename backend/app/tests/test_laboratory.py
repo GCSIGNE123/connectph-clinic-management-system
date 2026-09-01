@@ -3821,3 +3821,80 @@ async def test_laboratory_worklist_uses_id_descending_as_a_stable_tie_break_for_
     assert resp.status_code == 200, resp.text
     ids_in_order = [row["id"] for row in resp.json()]
     assert ids_in_order.index(expected_first) < ids_in_order.index(expected_second)
+
+
+# --- Recent-records convention: date-range filter on the worklist and patient history ---
+
+async def test_laboratory_worklist_date_range_filter_and_empty_and_tenant_isolation(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    from datetime import UTC, datetime as _dt
+
+    from app.models.laboratory_order import LaboratoryOrder
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    branch = (await client.post("/api/v1/branches", headers=headers, json={"name": "Main Branch", "code": "MAIN"})).json()
+    department = (
+        await client.post("/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"})
+    ).json()
+    service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+        )
+    ).json()
+
+    in_range = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+    out_of_range = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+
+    (await db_session.get(LaboratoryOrder, uuid.UUID(in_range["id"]))).created_at = _dt(2026, 6, 15, 10, 0, 0, tzinfo=UTC)
+    (await db_session.get(LaboratoryOrder, uuid.UUID(out_of_range["id"]))).created_at = _dt(2026, 7, 1, 10, 0, 0, tzinfo=UTC)
+    await db_session.commit()
+
+    # In range.
+    resp = await client.get(
+        "/api/v1/laboratory/orders", headers=headers, params={"date_from": "2026-06-01", "date_to": "2026-06-30"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert [o["id"] for o in resp.json()] == [in_range["id"]]
+
+    # No matches.
+    empty = await client.get(
+        "/api/v1/laboratory/orders", headers=headers, params={"date_from": "2020-01-01", "date_to": "2020-01-31"}
+    )
+    assert empty.json() == []
+
+    # Tenant isolation still holds under a date filter that would otherwise match.
+    _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+    other_clinic = await client.get(
+        "/api/v1/laboratory/orders", headers=headers_b, params={"date_from": "2026-06-01", "date_to": "2026-06-30"}
+    )
+    assert other_clinic.json() == []
+
+
+async def test_laboratory_patient_history_supports_date_range_filter(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    from datetime import UTC, datetime as _dt
+
+    from app.models.laboratory_order import LaboratoryOrder
+
+    ctx = await _order_for_template(client, make_clinic_with_owner, db_session, "Blood Typing")
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_id']}", headers=ctx["owner_headers"])).json()
+    patient_id = order["patient_id"]
+
+    (await db_session.get(LaboratoryOrder, uuid.UUID(ctx["lab_id"]))).created_at = _dt(2026, 6, 15, 10, 0, 0, tzinfo=UTC)
+    await db_session.commit()
+
+    in_range = await client.get(
+        f"/api/v1/patients/{patient_id}/laboratory", headers=ctx["owner_headers"],
+        params={"date_from": "2026-06-01", "date_to": "2026-06-30"},
+    )
+    assert in_range.status_code == 200, in_range.text
+    assert any(o["id"] == ctx["lab_id"] for o in in_range.json())
+
+    out_of_range = await client.get(
+        f"/api/v1/patients/{patient_id}/laboratory", headers=ctx["owner_headers"],
+        params={"date_from": "2020-01-01", "date_to": "2020-01-31"},
+    )
+    assert out_of_range.json() == []

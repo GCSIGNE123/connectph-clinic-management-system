@@ -6,38 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useDebouncedValue } from "@/features/patients/hooks/use-patients";
 import { useVisits } from "@/features/visits/hooks/use-visits";
 import { VisitTable } from "@/features/visits/components/VisitTable";
 import { VISIT_STATUS_LABELS, VISIT_TYPE_LABELS, VisitStatus, VisitType } from "@/features/visits/types";
 
 const PAGE_SIZE = 20;
-
-type DateRangePreset = "all" | "today" | "yesterday" | "week";
-
-function toIsoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function resolveDateRange(preset: DateRangePreset): { dateFrom?: string; dateTo?: string } {
-  const now = new Date();
-  if (preset === "today") {
-    const today = toIsoDate(now);
-    return { dateFrom: today, dateTo: today };
-  }
-  if (preset === "yesterday") {
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const iso = toIsoDate(yesterday);
-    return { dateFrom: iso, dateTo: iso };
-  }
-  if (preset === "week") {
-    const weekAgo = new Date(now);
-    weekAgo.setDate(weekAgo.getDate() - 6);
-    return { dateFrom: toIsoDate(weekAgo), dateTo: toIsoDate(now) };
-  }
-  return {};
-}
 
 /**
  * Visit List: searchable/filterable/paginated table of all visits
@@ -50,10 +25,11 @@ export default function VisitsPage() {
   const debouncedSearch = useDebouncedValue(searchInput, 300);
   const [status, setStatus] = useState<VisitStatus | "">("");
   const [visitType, setVisitType] = useState<VisitType | "">("");
-  const [datePreset, setDatePreset] = useState<DateRangePreset>("today");
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({
+    dateFrom: new Date().toISOString().slice(0, 10),
+    dateTo: new Date().toISOString().slice(0, 10),
+  });
   const [page, setPage] = useState(1);
-
-  const dateRange = useMemo(() => resolveDateRange(datePreset), [datePreset]);
 
   const params = useMemo(
     () => ({
@@ -94,19 +70,13 @@ export default function VisitsPage() {
             }}
           />
         </div>
-        <Select
-          value={datePreset}
-          onChange={(e) => {
-            setDatePreset(e.target.value as DateRangePreset);
+        <RecordDateRangeFilter
+          defaultPreset="today"
+          onApply={(range) => {
+            setDateRange(range);
             setPage(1);
           }}
-          className="sm:w-44"
-        >
-          <option value="today">Today</option>
-          <option value="yesterday">Yesterday</option>
-          <option value="week">This week</option>
-          <option value="all">All dates</option>
-        </Select>
+        />
         <Select
           value={status}
           onChange={(e) => {

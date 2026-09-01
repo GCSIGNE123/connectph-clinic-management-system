@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useBillingDashboard } from "@/features/billing/hooks/use-billing-dashboard";
 import { useInvoices } from "@/features/billing/hooks/use-invoices";
 import { InvoiceTable } from "@/features/billing/components/InvoiceTable";
@@ -22,7 +23,15 @@ export default function BillingDashboardPage() {
   const { data: dashboard, isLoading: dashboardLoading } = useBillingDashboard();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<InvoiceStatus | "">("");
-  const { data, isLoading } = useInvoices({ q: q || undefined, status: status || undefined, limit: 20, offset: 0 });
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data, isLoading } = useInvoices({
+    q: q || undefined,
+    status: status || undefined,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
+    limit: 20,
+    offset: 0,
+  });
 
   return (
     <div className="space-y-6">
@@ -80,6 +89,7 @@ export default function BillingDashboardPage() {
                 </option>
               ))}
             </Select>
+            <RecordDateRangeFilter onApply={setDateRange} />
           </div>
         </CardHeader>
         <CardContent className="p-0">

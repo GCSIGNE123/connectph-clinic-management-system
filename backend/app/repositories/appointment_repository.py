@@ -120,12 +120,27 @@ class AppointmentRepository(BaseRepository[Appointment]):
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows), total
 
-    async def list_for_patient(self, clinic_id: UUID, patient_id: UUID) -> list[Appointment]:
+    async def list_for_patient(
+        self,
+        clinic_id: UUID,
+        patient_id: UUID,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[Appointment]:
+        filters = [Appointment.clinic_id == clinic_id, Appointment.patient_id == patient_id, Appointment.is_deleted.is_(False)]
+        if date_from is not None:
+            filters.append(Appointment.appointment_date >= date_from)
+        if date_to is not None:
+            filters.append(Appointment.appointment_date <= date_to)
         stmt = (
             select(Appointment)
-            .where(Appointment.clinic_id == clinic_id, Appointment.patient_id == patient_id, Appointment.is_deleted.is_(False))
+            .where(*filters)
             .options(selectinload(Appointment.doctor), selectinload(Appointment.department))
-            .order_by(Appointment.appointment_date.desc(), Appointment.start_time.desc())
+            # History view (past appointments first, unlike the forward-
+            # looking main schedule) - id is a stable tie-break for same
+            # date/time entries.
+            .order_by(Appointment.appointment_date.desc(), Appointment.start_time.desc(), Appointment.id.desc())
         )
         rows = (await self.session.execute(stmt)).scalars().all()
         return list(rows)

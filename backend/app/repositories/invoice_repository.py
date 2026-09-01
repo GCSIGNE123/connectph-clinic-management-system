@@ -162,22 +162,39 @@ class InvoiceRepository:
             base_query.options(
                 selectinload(Invoice.patient), selectinload(Invoice.doctor), selectinload(Invoice.visit)
             )
-            .order_by(Invoice.created_at.desc())
+            # Sort on the same field the date filter above applies to
+            # (invoice_date) - previously sorted on created_at, which could
+            # disagree with a `date_from`/`date_to` filter on invoice_date.
+            # created_at/id are stable tie-breaks for same-day invoices.
+            .order_by(Invoice.invoice_date.desc(), Invoice.created_at.desc(), Invoice.id.desc())
             .offset(params.offset)
             .limit(params.limit)
         )
         rows = (await self.session.execute(stmt)).scalars().unique().all()
         return list(rows), total
 
-    async def list_for_patient(self, clinic_id: UUID, patient_id: UUID, *, limit: int = 50, offset: int = 0) -> tuple[list[Invoice], int]:
+    async def list_for_patient(
+        self,
+        clinic_id: UUID,
+        patient_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> tuple[list[Invoice], int]:
         filters = [Invoice.clinic_id == clinic_id, Invoice.patient_id == patient_id, Invoice.is_deleted.is_(False)]
+        if date_from is not None:
+            filters.append(Invoice.invoice_date >= date_from)
+        if date_to is not None:
+            filters.append(Invoice.invoice_date <= date_to)
         count_stmt = select(func.count()).select_from(Invoice).where(and_(*filters))
         total = int((await self.session.execute(count_stmt)).scalar_one())
         stmt = (
             select(Invoice)
             .where(and_(*filters))
             .options(selectinload(Invoice.visit))
-            .order_by(Invoice.invoice_date.desc(), Invoice.created_at.desc())
+            .order_by(Invoice.invoice_date.desc(), Invoice.created_at.desc(), Invoice.id.desc())
             .offset(offset)
             .limit(limit)
         )

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useDebouncedValue } from "@/features/patients/hooks/use-patients";
 import { useQueues, useQueueRealtime } from "@/features/queue/hooks/use-queues";
@@ -52,6 +53,10 @@ export default function QueuePage() {
   const [status, setStatus] = useState<QueueStatus | "">("");
   const [priority, setPriority] = useState<QueuePriority | "">("");
   const [visitClassification, setVisitClassification] = useState<VisitClassification | "">("");
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({
+    dateFrom: new Date().toISOString().slice(0, 10),
+    dateTo: new Date().toISOString().slice(0, 10),
+  });
 
   const [newQueueOpen, setNewQueueOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
@@ -74,10 +79,12 @@ export default function QueuePage() {
       status: status || undefined,
       priority: priority || undefined,
       visitClassification: visitClassification || undefined,
+      dateFrom: dateRange.dateFrom,
+      dateTo: dateRange.dateTo,
       pageSize: 100,
       page: 1,
     }),
-    [debouncedSearch, status, priority, visitClassification]
+    [debouncedSearch, status, priority, visitClassification, dateRange]
   );
 
   const { data, isLoading } = useQueues(params);
@@ -137,6 +144,7 @@ export default function QueuePage() {
             </option>
           ))}
         </Select>
+        <RecordDateRangeFilter defaultPreset="today" onApply={setDateRange} />
       </div>
 
       <Card>

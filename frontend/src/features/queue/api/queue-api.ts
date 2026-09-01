@@ -156,6 +156,8 @@ function toQueryString(params: QueueListParams): string {
   if (params.priority) search.set("priority", params.priority);
   if (params.visitClassification) search.set("visit_classification", params.visitClassification);
   if (params.queueDate) search.set("queue_date", params.queueDate);
+  if (params.dateFrom) search.set("date_from", params.dateFrom);
+  if (params.dateTo) search.set("date_to", params.dateTo);
 
   const pageSize = params.pageSize ?? 50;
   const page = params.page ?? 1;

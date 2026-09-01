@@ -44,6 +44,8 @@ async def list_queues(
         default=None, description="Filter by YAKAP/Regular per-encounter classification."
     ),
     queue_date: date | None = Query(default=None, description="Defaults to today's queue when omitted server-side."),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     clinic_id: UUID = Depends(require_clinic_context),
@@ -53,7 +55,7 @@ async def list_queues(
     params = QueueSearchParams(
         q=q, branch_id=branch_id, department_id=department_id, doctor_id=doctor_id,
         status=status_filter, priority=priority, visit_classification=visit_classification,
-        queue_date=queue_date, limit=limit, offset=offset,
+        queue_date=queue_date, date_from=date_from, date_to=date_to, limit=limit, offset=offset,
     )
     service = QueueService(db)
     items, total = await service.search(clinic_id=clinic_id, params=params)

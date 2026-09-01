@@ -21,10 +21,15 @@ export function useVisits(params: VisitListParams) {
   });
 }
 
-export function useVisitsForPatient(patientId: string | null, page = 1, pageSize = 10) {
+export function useVisitsForPatient(
+  patientId: string | null,
+  page = 1,
+  pageSize = 10,
+  dateRange?: { dateFrom?: string; dateTo?: string }
+) {
   return useQuery({
-    queryKey: visitKeys.forPatient(patientId ?? "", page),
-    queryFn: () => visitsApi.listForPatient(patientId as string, { page, pageSize }),
+    queryKey: [...visitKeys.forPatient(patientId ?? "", page), dateRange ?? {}],
+    queryFn: () => visitsApi.listForPatient(patientId as string, { page, pageSize, ...dateRange }),
     enabled: Boolean(patientId),
     placeholderData: (previousData) => previousData,
   });

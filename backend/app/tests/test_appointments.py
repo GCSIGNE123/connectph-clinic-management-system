@@ -324,3 +324,62 @@ async def test_tenant_isolation(client: AsyncClient, make_clinic_with_owner):
     _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
     cross = await client.get(f"/api/v1/appointments/{created['id']}", headers=headers_b)
     assert cross.status_code == 404
+
+
+# --- Recent-records convention: date-range filter on the patient history tab ---
+# Appointments' own MAIN schedule list intentionally stays soonest-first
+# (appointment_date ASC) - a forward-looking schedule, not a "recent
+# activity" log - so only the date-range filter is added there; sort order
+# is untouched (see `AppointmentRepository.search`, unchanged). The patient
+# history tab's own upcoming/completed/cancelled/no_show status bucketing
+# (also untouched) applies AFTER the date filter below.
+
+async def test_patient_appointments_date_range_filter_excludes_outside_the_range(
+    client: AsyncClient, make_clinic_with_owner
+):
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_deps(client, headers)
+    await _set_schedule(client, headers, deps["doctor_id"])
+    await client.post(
+        "/api/v1/appointments", headers=headers,
+        json=_apt_payload(deps, appointment_date=FUTURE_DATE, start_time="09:00:00"),
+    )
+
+    in_range = await client.get(
+        f"/api/v1/patients/{deps['patient_id']}/appointments", headers=headers,
+        params={"date_from": "2027-03-01", "date_to": "2027-03-31"},
+    )
+    assert in_range.status_code == 200, in_range.text
+    assert len(in_range.json()["upcoming"]) == 1
+
+    out_of_range = await client.get(
+        f"/api/v1/patients/{deps['patient_id']}/appointments", headers=headers,
+        params={"date_from": "2020-01-01", "date_to": "2020-01-31"},
+    )
+    assert out_of_range.status_code == 200, out_of_range.text
+    assert all(len(v) == 0 for v in out_of_range.json().values())
+
+
+async def test_patient_appointments_date_range_does_not_disturb_status_bucketing(
+    client: AsyncClient, make_clinic_with_owner
+):
+    """The status bucketing (upcoming/completed/cancelled/no_show) is
+    computed AFTER the date filter - a matched appointment still lands in
+    the correct bucket, not flattened into one list."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_deps(client, headers)
+    await _set_schedule(client, headers, deps["doctor_id"])
+    await client.post(
+        "/api/v1/appointments", headers=headers,
+        json=_apt_payload(deps, appointment_date=FUTURE_DATE, start_time="09:00:00"),
+    )
+
+    resp = await client.get(
+        f"/api/v1/patients/{deps['patient_id']}/appointments", headers=headers,
+        params={"date_from": "2027-01-01", "date_to": "2027-12-31"},
+    )
+    body = resp.json()
+    assert len(body["upcoming"]) == 1
+    assert body["completed"] == []
+    assert body["cancelled"] == []
+    assert body["no_show"] == []

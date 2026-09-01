@@ -405,3 +405,168 @@ async def test_tenant_isolation(client: AsyncClient, make_clinic_with_owner, db_
 
     list_resp = await client.get("/api/v1/invoices", headers=owner_headers_b)
     assert all(i["id"] != invoice_id for i in list_resp.json()["items"])
+
+
+# --- Recent-records convention: newest invoice_date first, date-range filter ---
+
+async def _second_invoice_same_clinic(client, db_session, *, clinic, owner_headers, deps) -> tuple[str, str]:
+    """Creates one more patient -> queue -> consultation -> complete cycle
+    in the SAME clinic/doctor as `_complete_consultation_flow` already set
+    up, so a test can end up with two invoices in one clinic. Returns
+    (visit_id, invoice_id)."""
+    patient = (
+        await client.post(
+            "/api/v1/patients", headers=owner_headers,
+            json={
+                "first_name": "Maria", "last_name": "Santos", "birth_date": "1985-03-20",
+                "gender": "Female", "civil_status": "Single", "mobile_number": "+639171234599",
+            },
+        )
+    ).json()["patient"]
+    queue = (
+        await client.post(
+            "/api/v1/queues", headers=owner_headers,
+            json={
+                "patient_id": patient["id"], "branch_id": deps["branch_id"], "department_id": deps["department_id"],
+                "doctor_id": deps["doctor_id"], "service_id": deps["service_id"], "priority": "Normal",
+            },
+        )
+    ).json()
+    visit_id = queue["visit_id"]
+
+    doc_email, _doc_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor", doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "TestPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    complete_resp = await client.post(f"/api/v1/consultations/{opened['id']}/complete", headers=doc_headers)
+    assert complete_resp.status_code == 200, complete_resp.text
+
+    invoice = (await client.get(f"/api/v1/visits/{visit_id}/invoice", headers=owner_headers)).json()
+    return visit_id, invoice["id"]
+
+
+async def test_invoice_list_sorts_by_invoice_date_descending_not_created_at(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The primary sort must match the field the date filter itself applies
+    to (invoice_date) - an invoice created later but with an earlier
+    invoice_date (e.g. backdated) must still sort as the OLDER record."""
+    from datetime import date
+
+    from app.models.invoice import Invoice
+
+    clinic, owner_headers, _doc_headers, _cashier_headers, deps, visit_id_a, _cid = await _complete_consultation_flow(
+        client, make_clinic_with_owner, db_session
+    )
+    invoice_a_id = (await client.get(f"/api/v1/visits/{visit_id_a}/invoice", headers=owner_headers)).json()["id"]
+    _visit_id_b, invoice_b_id = await _second_invoice_same_clinic(
+        client, db_session, clinic=clinic, owner_headers=owner_headers, deps=deps
+    )
+
+    invoice_a = await db_session.get(Invoice, uuid.UUID(invoice_a_id))
+    invoice_b = await db_session.get(Invoice, uuid.UUID(invoice_b_id))
+    invoice_a.invoice_date = date(2026, 6, 10)
+    invoice_b.invoice_date = date(2026, 6, 1)
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/invoices", headers=owner_headers)
+    assert resp.status_code == 200, resp.text
+    ids = [i["id"] for i in resp.json()["items"]]
+    assert ids == [invoice_a_id, invoice_b_id]
+
+
+async def test_invoice_date_range_filter_excludes_invoices_outside_the_range(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    from datetime import date
+
+    from app.models.invoice import Invoice
+
+    clinic, owner_headers, _doc_headers, _cashier_headers, deps, visit_id_a, _cid = await _complete_consultation_flow(
+        client, make_clinic_with_owner, db_session
+    )
+    invoice_a_id = (await client.get(f"/api/v1/visits/{visit_id_a}/invoice", headers=owner_headers)).json()["id"]
+    _visit_id_b, invoice_b_id = await _second_invoice_same_clinic(
+        client, db_session, clinic=clinic, owner_headers=owner_headers, deps=deps
+    )
+
+    (await db_session.get(Invoice, uuid.UUID(invoice_a_id))).invoice_date = date(2026, 6, 15)
+    (await db_session.get(Invoice, uuid.UUID(invoice_b_id))).invoice_date = date(2026, 7, 1)
+    await db_session.commit()
+
+    resp = await client.get(
+        "/api/v1/invoices", headers=owner_headers, params={"date_from": "2026-06-01", "date_to": "2026-06-30"}
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [i["id"] for i in resp.json()["items"]]
+    assert ids == [invoice_a_id]
+
+
+async def test_invoice_date_range_with_no_matches_returns_empty(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    _clinic, owner_headers, _doc_headers, _cashier_headers, _deps, _visit_id, _cid = await _complete_consultation_flow(
+        client, make_clinic_with_owner, db_session
+    )
+    resp = await client.get(
+        "/api/v1/invoices", headers=owner_headers, params={"date_from": "2020-01-01", "date_to": "2020-01-31"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"] == []
+
+
+async def test_invoice_date_range_combines_with_status_filter(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    from datetime import date
+
+    _clinic, owner_headers, _doc_headers, _cashier_headers, _deps, visit_id, _cid = await _complete_consultation_flow(
+        client, make_clinic_with_owner, db_session
+    )
+    invoice = (await client.get(f"/api/v1/visits/{visit_id}/invoice", headers=owner_headers)).json()
+    today = date.fromisoformat(invoice["invoice_date"])
+
+    matching = await client.get(
+        "/api/v1/invoices", headers=owner_headers,
+        params={"status": "PendingPayment", "date_from": today.isoformat(), "date_to": today.isoformat()},
+    )
+    assert matching.json()["items"] != []
+
+    wrong_status = await client.get(
+        "/api/v1/invoices", headers=owner_headers,
+        params={"status": "Paid", "date_from": today.isoformat(), "date_to": today.isoformat()},
+    )
+    assert wrong_status.json()["items"] == []
+
+
+async def test_invoice_list_uses_id_as_stable_tie_break_for_identical_invoice_date_and_created_at(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    from datetime import UTC, date, datetime
+
+    from app.models.invoice import Invoice
+
+    clinic, owner_headers, _doc_headers, _cashier_headers, deps, visit_id_a, _cid = await _complete_consultation_flow(
+        client, make_clinic_with_owner, db_session
+    )
+    invoice_a_id = (await client.get(f"/api/v1/visits/{visit_id_a}/invoice", headers=owner_headers)).json()["id"]
+    _visit_id_b, invoice_b_id = await _second_invoice_same_clinic(
+        client, db_session, clinic=clinic, owner_headers=owner_headers, deps=deps
+    )
+
+    invoice_a = await db_session.get(Invoice, uuid.UUID(invoice_a_id))
+    invoice_b = await db_session.get(Invoice, uuid.UUID(invoice_b_id))
+    same_date = date(2026, 6, 1)
+    same_time = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    invoice_a.invoice_date = same_date
+    invoice_b.invoice_date = same_date
+    invoice_a.created_at = same_time
+    invoice_b.created_at = same_time
+    await db_session.commit()
+
+    expected_first, expected_second = (
+        (invoice_a_id, invoice_b_id) if invoice_a_id > invoice_b_id else (invoice_b_id, invoice_a_id)
+    )
+    resp = await client.get("/api/v1/invoices", headers=owner_headers)
+    ids = [i["id"] for i in resp.json()["items"]]
+    assert ids.index(expected_first) < ids.index(expected_second)

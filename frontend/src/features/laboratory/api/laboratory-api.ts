@@ -208,16 +208,26 @@ function fromTemplateParameterInput(p: LaboratoryTemplateParameter) {
 export const laboratoryApi = {
   getDashboard: () => apiClient.get<any>("/laboratory/dashboard").then(toDashboard),
 
-  listOrders: (visitId?: string) =>
-    apiClient
-      .get<any[]>(visitId ? `/laboratory/orders?visit_id=${visitId}` : "/laboratory/orders")
-      .then((rows) => rows.map(toOrder)),
+  listOrders: (visitId?: string, params?: { dateFrom?: string; dateTo?: string }) => {
+    const query = new URLSearchParams();
+    if (visitId) query.set("visit_id", visitId);
+    if (params?.dateFrom) query.set("date_from", params.dateFrom);
+    if (params?.dateTo) query.set("date_to", params.dateTo);
+    const qs = query.toString();
+    return apiClient.get<any[]>(`/laboratory/orders${qs ? `?${qs}` : ""}`).then((rows) => rows.map(toOrder));
+  },
 
   getOrder: (id: string) => apiClient.get<any>(`/laboratory/orders/${id}`).then(toOrder),
 
   listForVisit: (visitId: string) => apiClient.get<any[]>(`/visits/${visitId}/laboratory`).then((rows) => rows.map(toOrder)),
 
-  listForPatient: (patientId: string) => apiClient.get<any[]>(`/patients/${patientId}/laboratory`).then((rows) => rows.map(toOrder)),
+  listForPatient: (patientId: string, params?: { dateFrom?: string; dateTo?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.dateFrom) query.set("date_from", params.dateFrom);
+    if (params?.dateTo) query.set("date_to", params.dateTo);
+    const qs = query.toString();
+    return apiClient.get<any[]>(`/patients/${patientId}/laboratory${qs ? `?${qs}` : ""}`).then((rows) => rows.map(toOrder));
+  },
 
   collectSpecimen: (id: string) => apiClient.post<any>(`/laboratory/orders/${id}/collect`).then(toOrder),
 

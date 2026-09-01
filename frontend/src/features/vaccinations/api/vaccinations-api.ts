@@ -26,10 +26,12 @@ function toVaccination(raw: any): VaccinationAdministration {
 }
 
 export const vaccinationsApi = {
-  list: (params?: { status?: string; patientId?: string }) => {
+  list: (params?: { status?: string; patientId?: string; dateFrom?: string; dateTo?: string }) => {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status_filter", params.status);
     if (params?.patientId) qs.set("patient_id", params.patientId);
+    if (params?.dateFrom) qs.set("date_from", params.dateFrom);
+    if (params?.dateTo) qs.set("date_to", params.dateTo);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiClient.get<any[]>(`/vaccinations${suffix}`).then((rows) => rows.map(toVaccination));
   },

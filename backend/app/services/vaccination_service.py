@@ -9,7 +9,7 @@ Administrator may perform it - not just the ordering doctor (enforced by
 `VACCINATION_ADMINISTER_ROLES` at the API layer, not here).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -71,8 +71,15 @@ class VaccinationService:
 
     # --- Reads ---
 
-    async def list_for_clinic(self, clinic_id: UUID, *, status_filter: VaccinationStatus | None = None) -> list[VaccinationAdministrationRead]:
-        rows = await self.repo.list_for_clinic(clinic_id, status=status_filter)
+    async def list_for_clinic(
+        self,
+        clinic_id: UUID,
+        *,
+        status_filter: VaccinationStatus | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[VaccinationAdministrationRead]:
+        rows = await self.repo.list_for_clinic(clinic_id, status=status_filter, date_from=date_from, date_to=date_to)
         return [_to_read(r) for r in rows]
 
     async def list_for_patient(self, patient_id: UUID, clinic_id: UUID) -> list[VaccinationAdministrationRead]:

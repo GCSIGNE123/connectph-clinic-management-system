@@ -41,10 +41,10 @@ export function useLaboratoryDashboard() {
   });
 }
 
-export function useLaboratoryWorklist() {
+export function useLaboratoryWorklist(params?: { dateFrom?: string; dateTo?: string }) {
   return useQuery({
-    queryKey: laboratoryKeys.dashboardOrders(),
-    queryFn: () => laboratoryApi.listOrders(),
+    queryKey: [...laboratoryKeys.dashboardOrders(), params ?? {}],
+    queryFn: () => laboratoryApi.listOrders(undefined, params),
     refetchInterval: 30_000,
   });
 }
@@ -65,10 +65,15 @@ export function useLaboratoryForVisit(visitId: string | null | undefined) {
   });
 }
 
-export function useLaboratoryForPatient(patientId: string | null | undefined) {
+export function useLaboratoryForPatient(
+  patientId: string | null | undefined,
+  params?: { dateFrom?: string; dateTo?: string }
+) {
   return useQuery({
-    queryKey: patientId ? laboratoryKeys.forPatient(patientId) : ["laboratory", "orders", "patient", "none"],
-    queryFn: () => laboratoryApi.listForPatient(patientId as string),
+    queryKey: patientId
+      ? [...laboratoryKeys.forPatient(patientId), params ?? {}]
+      : ["laboratory", "orders", "patient", "none"],
+    queryFn: () => laboratoryApi.listForPatient(patientId as string, params),
     enabled: Boolean(patientId),
   });
 }

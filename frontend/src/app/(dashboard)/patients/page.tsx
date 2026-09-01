@@ -6,6 +6,7 @@ import { Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useDebouncedValue, usePatients } from "@/features/patients/hooks/use-patients";
 import { patientsApi } from "@/features/patients/api/patients-api";
@@ -41,6 +42,7 @@ export default function PatientsPage() {
   const [gender, setGender] = useState<PatientGender | "">("");
   const [status, setStatus] = useState<PatientStatus | "">(PatientStatus.Active);
   const [sort, setSort] = useState<PatientSortOption>("newest");
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
   const [page, setPage] = useState(1);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -55,10 +57,12 @@ export default function PatientsPage() {
       gender: gender || undefined,
       status: status || undefined,
       sort,
+      registeredFrom: dateRange.dateFrom,
+      registeredTo: dateRange.dateTo,
       page,
       pageSize: PAGE_SIZE,
     }),
-    [debouncedSearch, gender, status, sort, page]
+    [debouncedSearch, gender, status, sort, dateRange, page]
   );
 
   const { data, isLoading, isFetching } = usePatients(params);
@@ -152,6 +156,13 @@ export default function PatientsPage() {
           <option value="alphabetical">Alphabetical</option>
           <option value="recently_visited">Recently visited</option>
         </Select>
+
+        <RecordDateRangeFilter
+          onApply={(range) => {
+            setDateRange(range);
+            setPage(1);
+          }}
+        />
       </div>
 
       <PatientsTable

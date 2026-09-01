@@ -458,6 +458,120 @@ async def test_newest_first_ordering_does_not_break_existing_filters(client: Asy
     assert listed["items"][1]["vitals_taken"] is True
 
 
+async def test_queue_sorts_by_queue_date_descending_not_created_at(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """The primary sort must match the field the new date-range filter
+    applies to (queue_date) - a ticket created later but backdated to an
+    earlier queue_date must still sort as the OLDER record."""
+    import uuid as _uuid
+    from datetime import date as _date
+
+    from app.models.queue import Queue
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    first = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    patient2 = await _second_patient(client, headers, first_name="Backdated", mobile="+639170000020")
+    second = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    queue_first = await db_session.get(Queue, _uuid.UUID(first["id"]))
+    queue_second = await db_session.get(Queue, _uuid.UUID(second["id"]))
+    queue_first.queue_date = _date(2026, 6, 10)
+    queue_second.queue_date = _date(2026, 6, 1)
+    await db_session.commit()
+
+    response = await client.get("/api/v1/queues", headers=headers)
+    assert [i["id"] for i in response.json()["items"]] == [first["id"], second["id"]]
+
+
+async def test_queue_date_range_filter_excludes_tickets_outside_the_range(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    import uuid as _uuid
+    from datetime import date as _date
+
+    from app.models.queue import Queue
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    in_range = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    patient2 = await _second_patient(client, headers, first_name="Outside", mobile="+639170000021")
+    out_of_range = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    (await db_session.get(Queue, _uuid.UUID(in_range["id"]))).queue_date = _date(2026, 6, 15)
+    (await db_session.get(Queue, _uuid.UUID(out_of_range["id"]))).queue_date = _date(2026, 7, 1)
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/v1/queues", headers=headers, params={"date_from": "2026-06-01", "date_to": "2026-06-30"}
+    )
+    assert response.status_code == 200, response.text
+    assert [i["id"] for i in response.json()["items"]] == [in_range["id"]]
+
+
+async def test_queue_date_range_with_no_matches_returns_empty(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))
+
+    response = await client.get(
+        "/api/v1/queues", headers=headers, params={"date_from": "2020-01-01", "date_to": "2020-01-31"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 0
+    assert response.json()["items"] == []
+
+
+async def test_queue_date_range_combines_with_status_filter(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    ticket = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    today = ticket["queue_date"]
+
+    matching = await client.get(
+        "/api/v1/queues", headers=headers, params={"status": "Waiting", "date_from": today, "date_to": today}
+    )
+    assert matching.json()["total"] == 1
+
+    wrong_status = await client.get(
+        "/api/v1/queues", headers=headers, params={"status": "Completed", "date_from": today, "date_to": today}
+    )
+    assert wrong_status.json()["total"] == 0
+
+
+async def test_queue_date_range_does_not_interfere_with_existing_exact_day_queue_date_param(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """The pre-existing exact-day `queue_date` filter keeps working
+    unchanged - the new `date_from`/`date_to` range is additive."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    ticket = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    response = await client.get("/api/v1/queues", headers=headers, params={"queue_date": ticket["queue_date"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+
+
+async def test_queue_tenant_isolation_holds_with_date_range_filter(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic_a, _owner_a, headers_a = await _owner_headers(client, make_clinic_with_owner)
+    deps_a = await _setup_queue_deps(client, headers_a)
+    ticket = (await client.post("/api/v1/queues", headers=headers_a, json=_queue_payload(deps_a))).json()
+
+    _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+    response = await client.get(
+        "/api/v1/queues", headers=headers_b,
+        params={"date_from": ticket["queue_date"], "date_to": ticket["queue_date"]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 0
+
+
 async def test_patient_yakap_flag_defaults_false_and_persists(client: AsyncClient, make_clinic_with_owner) -> None:
     """Phase 2.7: `Patient.is_yakap_beneficiary` defaults False for existing-
     style patient creation, and a patient explicitly marked YAKAP persists

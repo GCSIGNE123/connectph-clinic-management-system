@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useLaboratoryForPatient } from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryStatusBadge } from "@/features/laboratory/components/LaboratoryStatusBadge";
 import { InterpretationBadge } from "@/features/laboratory/components/InterpretationBadge";
@@ -28,17 +29,25 @@ import { formatDate } from "@/lib/utils";
  * interpretation) - never the current template/reference-range config, so
  * a later template edit can't change what an old printed report shows. */
 export function PatientLaboratoryHistory({ patientId }: { patientId: string }) {
-  const { data: labOrders, isLoading } = useLaboratoryForPatient(patientId);
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data: labOrders, isLoading } = useLaboratoryForPatient(patientId, dateRange);
   const [selected, setSelected] = useState<LaboratoryOrder | null>(null);
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
 
   if (isLoading) return <SkeletonList rows={3} />;
   if (!labOrders || labOrders.length === 0) {
-    return <EmptyState title="No laboratory orders yet" description="Laboratory orders for this patient will appear here." />;
+    return (
+      <div className="space-y-3">
+        <RecordDateRangeFilter onApply={setDateRange} />
+        <EmptyState title="No laboratory orders yet" description="Laboratory orders for this patient will appear here." />
+      </div>
+    );
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="space-y-3">
+      <RecordDateRangeFilter onApply={setDateRange} />
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
@@ -94,6 +103,7 @@ export function PatientLaboratoryHistory({ patientId }: { patientId: string }) {
 
       <LaboratoryOrderDetailDialog order={selected} open={selected !== null} onOpenChange={(open) => !open && setSelected(null)} />
       <LaboratoryReportDialog orderId={printOrderId} open={printOrderId !== null} onOpenChange={(open) => !open && setPrintOrderId(null)} />
+      </div>
     </div>
   );
 }

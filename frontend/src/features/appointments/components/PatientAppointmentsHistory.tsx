@@ -1,16 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { usePatientAppointments } from "@/features/appointments/hooks/use-appointments";
 import { AppointmentStatusBadge } from "@/features/appointments/components/AppointmentStatusBadge";
 import type { AppointmentListItem } from "@/features/appointments/types";
 import { formatDate } from "@/lib/utils";
 
 /** Patient Profile "Appointments" tab (Phase 11) - Upcoming/Completed/
- * Cancelled/No-show buckets, mirroring `PatientLaboratoryHistory`'s shape. */
+ * Cancelled/No-show buckets, mirroring `PatientLaboratoryHistory`'s shape.
+ * The date filter applies BEFORE this status bucketing (see the backend
+ * endpoint) - the bucketing itself is untouched. */
 export function PatientAppointmentsHistory({ patientId }: { patientId: string }) {
-  const { data, isLoading } = usePatientAppointments(patientId);
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data, isLoading } = usePatientAppointments(patientId, dateRange);
 
   if (isLoading) return <SkeletonList rows={3} />;
 
@@ -23,11 +28,17 @@ export function PatientAppointmentsHistory({ patientId }: { patientId: string })
 
   const total = buckets.reduce((sum, b) => sum + b.items.length, 0);
   if (total === 0) {
-    return <EmptyState title="No appointments yet" description="Appointments for this patient will appear here." />;
+    return (
+      <div className="space-y-3">
+        <RecordDateRangeFilter onApply={setDateRange} />
+        <EmptyState title="No appointments yet" description="Appointments for this patient will appear here." />
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
+      <RecordDateRangeFilter onApply={setDateRange} />
       {buckets
         .filter((b) => b.items.length > 0)
         .map((bucket) => (

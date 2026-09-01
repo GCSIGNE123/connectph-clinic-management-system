@@ -9,6 +9,7 @@ ordering Doctor and Owner/Administrator, matching real clinic staffing
 where front-desk/nursing staff routinely give injections a doctor ordered.
 """
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -32,6 +33,8 @@ router = APIRouter(prefix="/vaccinations", tags=["vaccinations"])
 async def list_vaccinations(
     status_filter: VaccinationStatus | None = None,
     patient_id: UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_vaccination_view_role),
@@ -39,7 +42,7 @@ async def list_vaccinations(
     service = VaccinationService(db)
     if patient_id is not None:
         return await service.list_for_patient(patient_id, clinic_id)
-    return await service.list_for_clinic(clinic_id, status_filter=status_filter)
+    return await service.list_for_clinic(clinic_id, status_filter=status_filter, date_from=date_from, date_to=date_to)
 
 
 @router.post("/{vaccination_id}/administer", response_model=VaccinationAdministrationRead)

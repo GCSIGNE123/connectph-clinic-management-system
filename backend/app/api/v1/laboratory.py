@@ -80,6 +80,8 @@ async def get_dashboard(
 @router.get("/orders", response_model=list[LaboratoryOrderRead])
 async def list_orders(
     visit_id: UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_lab_view_role),
@@ -87,7 +89,7 @@ async def list_orders(
     service = LaboratoryService(db)
     if visit_id is not None:
         return await service.list_for_visit(visit_id, clinic_id=clinic_id)
-    return await service.list_for_dashboard(clinic_id=clinic_id)
+    return await service.list_for_dashboard(clinic_id=clinic_id, date_from=date_from, date_to=date_to)
 
 
 @router.get("/orders/{laboratory_order_id}", response_model=LaboratoryOrderRead)
@@ -512,8 +514,10 @@ async def get_visit_laboratory(
 @visit_router.get("/patients/{patient_id}/laboratory", response_model=list[LaboratoryOrderRead])
 async def get_patient_laboratory(
     patient_id: UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_lab_view_role),
 ) -> list[LaboratoryOrderRead]:
-    return await LaboratoryService(db).list_for_patient(patient_id, clinic_id=clinic_id)
+    return await LaboratoryService(db).list_for_patient(patient_id, clinic_id=clinic_id, date_from=date_from, date_to=date_to)

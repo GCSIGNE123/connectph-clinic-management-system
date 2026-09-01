@@ -152,12 +152,16 @@ async def get_billing_history(
     patient_id: UUID,
     limit: int = 50,
     offset: int = 0,
+    date_from: date | None = None,
+    date_to: date | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_billing_view_role),
 ):
     service = InvoiceService(db)
-    items, total = await service.get_billing_history_for_patient(clinic_id=clinic_id, patient_id=patient_id, limit=limit, offset=offset)
+    items, total = await service.get_billing_history_for_patient(
+        clinic_id=clinic_id, patient_id=patient_id, limit=limit, offset=offset, date_from=date_from, date_to=date_to
+    )
     return {"items": items, "total": total}
 
 

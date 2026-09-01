@@ -232,3 +232,115 @@ async def test_vaccination_role_gating_unchanged(client: AsyncClient, make_clini
 
     resp = await client.post(f"/api/v1/vaccinations/{ctx['vaccination']['id']}/administer", headers=cashier_headers, json={})
     assert resp.status_code == 403
+
+
+# --- Recent-records convention: newest vaccination request first, date-range filter ---
+
+async def _second_vaccination_order(client: AsyncClient, ctx: dict, *, vaccine_name: str) -> dict:
+    order_resp = await client.post(
+        f"/api/v1/consultations/{ctx['consultation_id']}/orders", headers=ctx["doc_headers"],
+        json={"order_category": "Vaccination", "items": [{"item_name": vaccine_name}]},
+    )
+    assert order_resp.status_code == 200, order_resp.text
+    order = order_resp.json()
+    list_resp = await client.get(f"/api/v1/vaccinations?patient_id={ctx['deps']['patient_id']}", headers=ctx["owner_headers"])
+    return next(v for v in list_resp.json() if v["order_id"] == order["id"])
+
+
+async def test_vaccination_list_sorts_newest_created_first_with_id_as_tie_break(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from app.models.vaccination_administration import VaccinationAdministration
+
+    ctx = await _setup_with_vaccination_order(client, make_clinic_with_owner, db_session)
+    second = await _second_vaccination_order(client, ctx, vaccine_name="Hepatitis B Vaccine")
+
+    row_first = await db_session.get(VaccinationAdministration, _uuid.UUID(ctx["vaccination"]["id"]))
+    row_second = await db_session.get(VaccinationAdministration, _uuid.UUID(second["id"]))
+    row_first.created_at = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    row_second.created_at = datetime(2026, 6, 5, 10, 0, 0, tzinfo=UTC)
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/vaccinations", headers=ctx["owner_headers"])
+    ids = [v["id"] for v in resp.json()]
+    assert ids.index(second["id"]) < ids.index(ctx["vaccination"]["id"])
+
+
+async def test_vaccination_date_range_filter_excludes_records_outside_the_range(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from app.models.vaccination_administration import VaccinationAdministration
+
+    ctx = await _setup_with_vaccination_order(client, make_clinic_with_owner, db_session)
+    second = await _second_vaccination_order(client, ctx, vaccine_name="Hepatitis B Vaccine")
+
+    (await db_session.get(VaccinationAdministration, _uuid.UUID(ctx["vaccination"]["id"]))).created_at = datetime(
+        2026, 6, 15, 10, 0, 0, tzinfo=UTC
+    )
+    (await db_session.get(VaccinationAdministration, _uuid.UUID(second["id"]))).created_at = datetime(
+        2026, 7, 1, 10, 0, 0, tzinfo=UTC
+    )
+    await db_session.commit()
+
+    resp = await client.get(
+        "/api/v1/vaccinations", headers=ctx["owner_headers"],
+        params={"date_from": "2026-06-01", "date_to": "2026-06-30"},
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [v["id"] for v in resp.json()]
+    assert ids == [ctx["vaccination"]["id"]]
+
+
+async def test_vaccination_date_range_with_no_matches_returns_empty(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_vaccination_order(client, make_clinic_with_owner, db_session)
+    resp = await client.get(
+        "/api/v1/vaccinations", headers=ctx["owner_headers"],
+        params={"date_from": "2020-01-01", "date_to": "2020-01-31"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+async def test_vaccination_date_range_combines_with_status_filter(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_vaccination_order(client, make_clinic_with_owner, db_session)
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
+
+    matching = await client.get(
+        "/api/v1/vaccinations", headers=ctx["owner_headers"],
+        params={"status_filter": "Requested", "date_from": today, "date_to": today},
+    )
+    assert any(v["id"] == ctx["vaccination"]["id"] for v in matching.json())
+
+    wrong_status = await client.get(
+        "/api/v1/vaccinations", headers=ctx["owner_headers"],
+        params={"status_filter": "Administered", "date_from": today, "date_to": today},
+    )
+    assert all(v["id"] != ctx["vaccination"]["id"] for v in wrong_status.json())
+
+
+async def test_vaccination_tenant_isolation_holds_with_date_range_filter(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_vaccination_order(client, make_clinic_with_owner, db_session)
+    _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    resp = await client.get(
+        "/api/v1/vaccinations", headers=headers_b, params={"date_from": today, "date_to": today}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []

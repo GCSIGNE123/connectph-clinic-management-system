@@ -52,6 +52,13 @@ class QueueRepository(BaseRepository[Queue]):
             filters.append(Queue.visit_classification == params.visit_classification)
         if params.queue_date is not None:
             filters.append(Queue.queue_date == params.queue_date)
+        # Additive range filter, alongside (not replacing) the existing
+        # exact-day `queue_date` param above - a caller may use either, but
+        # the new date-range UI only ever sends date_from/date_to.
+        if params.date_from is not None:
+            filters.append(Queue.queue_date >= params.date_from)
+        if params.date_to is not None:
+            filters.append(Queue.queue_date <= params.date_to)
         return filters
 
     async def search(self, clinic_id: UUID, params: QueueSearchParams) -> tuple[list[Queue], int]:
@@ -78,16 +85,20 @@ class QueueRepository(BaseRepository[Queue]):
                 selectinload(Queue.doctor),
                 selectinload(Queue.service),
             )
-            # Reception Queue default ordering: newest-created ticket first.
-            # This is real server-side pagination (offset/limit), so the
-            # order here determines which tickets land on page 1, not just
-            # their order within an already-fetched page - a client-side-
-            # only "reverse the current page" would still show the OLDEST
-            # tickets on page 1 whenever there are more tickets than fit on
-            # one page. `QueueTable`'s own column-sort-by-click (frontend,
-            # unaffected by this) still lets staff re-sort the fetched page
-            # by any column, ascending or descending, same as before.
-            .order_by(Queue.created_at.desc())
+            # Reception Queue default ordering: newest ticket first. Sorted
+            # on `queue_date` (the actual business date a ticket belongs to
+            # - what the new date-range filter above applies to) rather
+            # than `created_at` alone, with `created_at`/`id` as stable
+            # tie-breaks for same-day tickets. This is real server-side
+            # pagination (offset/limit), so the order here determines which
+            # tickets land on page 1, not just their order within an
+            # already-fetched page - a client-side-only "reverse the
+            # current page" would still show the OLDEST tickets on page 1
+            # whenever there are more tickets than fit on one page.
+            # `QueueTable`'s own column-sort-by-click (frontend, unaffected
+            # by this) still lets staff re-sort the fetched page by any
+            # column, ascending or descending, same as before.
+            .order_by(Queue.queue_date.desc(), Queue.created_at.desc(), Queue.id.desc())
             .offset(params.offset)
             .limit(params.limit)
         )

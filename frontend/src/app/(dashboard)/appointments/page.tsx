@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { useDebouncedValue } from "@/features/patients/hooks/use-patients";
 import { useAppointments } from "@/features/appointments/hooks/use-appointments";
@@ -53,10 +54,13 @@ export default function AppointmentsPage() {
   const [newAppointmentOpen, setNewAppointmentOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [view, setView] = useState<PageView>("list");
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
 
   const { data, isLoading } = useAppointments({
     search: debouncedSearch || undefined,
     status: status || undefined,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
     pageSize: 50,
   });
 
@@ -142,6 +146,7 @@ export default function AppointmentsPage() {
                 <option key={s} value={s}>{APPOINTMENT_STATUS_LABELS[s]}</option>
               ))}
             </Select>
+            <RecordDateRangeFilter onApply={setDateRange} />
           </div>
 
           <AppointmentTable

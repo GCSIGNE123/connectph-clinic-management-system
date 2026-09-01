@@ -165,6 +165,10 @@ class QueueSearchParams(BaseModel):
     priority: QueuePriority | None = None
     visit_classification: VisitClassification | None = None
     queue_date: date | None = None
+    # Additive date-range filter (recent-records convention) - alongside,
+    # not replacing, the exact-day `queue_date` above.
+    date_from: date | None = None
+    date_to: date | None = None
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
 

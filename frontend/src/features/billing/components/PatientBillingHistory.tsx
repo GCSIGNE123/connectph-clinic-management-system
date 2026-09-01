@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { InvoiceStatusBadge } from "@/features/billing/components/InvoiceStatusBadge";
 import { useBillingHistory } from "@/features/billing/hooks/use-invoices";
 import { formatDate } from "@/lib/utils";
@@ -12,7 +14,8 @@ import { formatDate } from "@/lib/utils";
  * replacing the Phase 3 "coming soon" placeholder. */
 export function PatientBillingHistory({ patientId }: { patientId: string }) {
   const router = useRouter();
-  const { data: items, isLoading } = useBillingHistory(patientId);
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data: items, isLoading } = useBillingHistory(patientId, dateRange);
 
   if (isLoading) {
     return (
@@ -25,11 +28,18 @@ export function PatientBillingHistory({ patientId }: { patientId: string }) {
   }
 
   if (!items || items.length === 0) {
-    return <EmptyState title="No billing history" description="This patient has no invoices yet." />;
+    return (
+      <div className="space-y-3">
+        <RecordDateRangeFilter onApply={setDateRange} />
+        <EmptyState title="No billing history" description="This patient has no invoices yet." />
+      </div>
+    );
   }
 
   return (
-    <Table>
+    <div className="space-y-3">
+      <RecordDateRangeFilter onApply={setDateRange} />
+      <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Invoice #</TableHead>
@@ -52,6 +62,7 @@ export function PatientBillingHistory({ patientId }: { patientId: string }) {
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+      </Table>
+    </div>
   );
 }

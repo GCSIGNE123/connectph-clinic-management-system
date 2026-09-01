@@ -13,10 +13,15 @@ export function useInvoices(params: InvoiceSearchParams) {
   });
 }
 
-export function useBillingHistory(patientId: string | null | undefined) {
+export function useBillingHistory(
+  patientId: string | null | undefined,
+  params?: { dateFrom?: string; dateTo?: string }
+) {
   return useQuery({
-    queryKey: patientId ? billingKeys.history(patientId) : ["billing", "history", "none"],
-    queryFn: () => billingApi.getBillingHistory(patientId as string),
+    queryKey: patientId
+      ? [...billingKeys.history(patientId), params ?? {}]
+      : ["billing", "history", "none"],
+    queryFn: () => billingApi.getBillingHistory(patientId as string, params),
     enabled: Boolean(patientId),
   });
 }

@@ -241,10 +241,17 @@ export const appointmentsApi = {
     return appointmentsApi.getSchedule(doctorId);
   },
 
-  async listForPatient(patientId: string): Promise<PatientAppointmentsBuckets> {
+  async listForPatient(
+    patientId: string,
+    params?: { dateFrom?: string; dateTo?: string }
+  ): Promise<PatientAppointmentsBuckets> {
+    const query = new URLSearchParams();
+    if (params?.dateFrom) query.set("date_from", params.dateFrom);
+    if (params?.dateTo) query.set("date_to", params.dateTo);
+    const qs = query.toString();
     const raw = await apiClient.get<{
       upcoming: RawAppointmentListItem[]; completed: RawAppointmentListItem[]; cancelled: RawAppointmentListItem[]; no_show: RawAppointmentListItem[];
-    }>(`/patients/${patientId}/appointments`);
+    }>(`/patients/${patientId}/appointments${qs ? `?${qs}` : ""}`);
     return {
       upcoming: raw.upcoming.map(toListItem),
       completed: raw.completed.map(toListItem),

@@ -1,11 +1,13 @@
 """Repository for Vaccination Administration records (Post-RC1)."""
 
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.db.date_filters import datetime_range_filters
 from app.models.vaccination_administration import VaccinationAdministration, VaccinationStatus
 
 
@@ -53,15 +55,23 @@ class VaccinationRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_for_clinic(self, clinic_id: UUID, *, status: VaccinationStatus | None = None) -> list[VaccinationAdministration]:
+    async def list_for_clinic(
+        self,
+        clinic_id: UUID,
+        *,
+        status: VaccinationStatus | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[VaccinationAdministration]:
         filters = [VaccinationAdministration.clinic_id == clinic_id, VaccinationAdministration.is_deleted.is_(False)]
         if status is not None:
             filters.append(VaccinationAdministration.status == status)
+        filters.extend(datetime_range_filters(VaccinationAdministration.created_at, date_from, date_to))
         stmt = (
             select(VaccinationAdministration)
             .where(*filters)
             .options(*_options())
-            .order_by(VaccinationAdministration.created_at.desc())
+            .order_by(VaccinationAdministration.created_at.desc(), VaccinationAdministration.id.desc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
 

@@ -341,8 +341,10 @@ class LaboratoryService:
         await self._overlay_resolved_ranges(order_read, lab_order, clinic_id=clinic_id)
         return order_read
 
-    async def list_for_dashboard(self, *, clinic_id: UUID) -> list[LaboratoryOrderRead]:
-        rows = await self.repo.list_for_clinic(clinic_id)
+    async def list_for_dashboard(
+        self, *, clinic_id: UUID, date_from: date | None = None, date_to: date | None = None
+    ) -> list[LaboratoryOrderRead]:
+        rows = await self.repo.list_for_clinic(clinic_id, date_from=date_from, date_to=date_to)
         return [_to_read(r) for r in rows]
 
     async def dashboard_stats(self, *, clinic_id: UUID) -> dict:
@@ -353,8 +355,10 @@ class LaboratoryService:
         rows = await self.repo.list_for_visit(visit_id, clinic_id)
         return [_to_read(r) for r in rows]
 
-    async def list_for_patient(self, patient_id: UUID, *, clinic_id: UUID) -> list[LaboratoryOrderRead]:
-        rows = await self.repo.list_for_patient(patient_id, clinic_id)
+    async def list_for_patient(
+        self, patient_id: UUID, *, clinic_id: UUID, date_from: date | None = None, date_to: date | None = None
+    ) -> list[LaboratoryOrderRead]:
+        rows = await self.repo.list_for_patient(patient_id, clinic_id, date_from=date_from, date_to=date_to)
         return [_to_read(r) for r in rows]
 
     # --- Transitions ---

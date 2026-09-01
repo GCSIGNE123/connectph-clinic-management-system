@@ -173,6 +173,8 @@ async def get_patient_visits(
     patient_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_patient_view_role),
@@ -180,7 +182,9 @@ async def get_patient_visits(
     """Paginated visit history for the Patient Details 'Visit History' tab
     (Phase 6). Reuses `VisitService` rather than duplicating query logic."""
     service = VisitService(db)
-    items, total = await service.list_for_patient(clinic_id=clinic_id, patient_id=patient_id, limit=limit, offset=offset)
+    items, total = await service.list_for_patient(
+        clinic_id=clinic_id, patient_id=patient_id, limit=limit, offset=offset, date_from=date_from, date_to=date_to
+    )
     return VisitListResponse(items=items, total=total, limit=limit, offset=offset)
 
 

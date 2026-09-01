@@ -161,6 +161,8 @@ export interface QueueListParams {
   priority?: QueuePriority;
   visitClassification?: VisitClassification;
   queueDate?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   pageSize?: number;
 }

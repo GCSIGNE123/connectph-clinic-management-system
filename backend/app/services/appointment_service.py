@@ -516,8 +516,10 @@ class AppointmentService:
         ]
         return items, total
 
-    async def list_for_patient(self, patient_id: UUID, *, clinic_id: UUID) -> list[AppointmentListItem]:
-        rows = await self.repo.list_for_patient(clinic_id, patient_id)
+    async def list_for_patient(
+        self, patient_id: UUID, *, clinic_id: UUID, date_from: date | None = None, date_to: date | None = None
+    ) -> list[AppointmentListItem]:
+        rows = await self.repo.list_for_patient(clinic_id, patient_id, date_from=date_from, date_to=date_to)
         return [
             AppointmentListItem(
                 id=r.id, appointment_number=r.appointment_number, appointment_date=r.appointment_date,

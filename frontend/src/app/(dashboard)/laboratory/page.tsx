@@ -4,12 +4,14 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useLaboratoryDashboard, useLaboratoryWorklist } from "@/features/laboratory/hooks/use-laboratory";
 import { LaboratoryWorklistTable } from "@/features/laboratory/components/LaboratoryWorklistTable";
 
 export default function LaboratoryDashboardPage() {
   const { data: dashboard, isLoading: dashboardLoading } = useLaboratoryDashboard();
-  const { data: orders, isLoading: ordersLoading } = useLaboratoryWorklist();
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data: orders, isLoading: ordersLoading } = useLaboratoryWorklist(dateRange);
   const [q, setQ] = useState("");
 
   const filtered = useMemo(() => {
@@ -44,12 +46,15 @@ export default function LaboratoryDashboardPage() {
       <Card>
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>Worklist</CardTitle>
-          <Input
-            placeholder="Search order #, patient, test, doctor..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="sm:w-80"
-          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              placeholder="Search order #, patient, test, doctor..."
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="sm:w-80"
+            />
+            <RecordDateRangeFilter onApply={setDateRange} />
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <LaboratoryWorklistTable orders={filtered} isLoading={ordersLoading} />

@@ -7,7 +7,8 @@ import { ApiError } from "@/lib/api-client";
 import type { VaccinationAdministerInput } from "@/features/vaccinations/types";
 
 export const vaccinationKeys = {
-  list: (status?: string) => ["vaccinations", "list", status ?? "all"] as const,
+  list: (status?: string, dateRange?: { dateFrom?: string; dateTo?: string }) =>
+    ["vaccinations", "list", status ?? "all", dateRange ?? {}] as const,
   forPatient: (patientId: string) => ["vaccinations", "patient", patientId] as const,
 };
 
@@ -15,10 +16,10 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Something went wrong.";
 }
 
-export function useVaccinationsWorklist(status?: string) {
+export function useVaccinationsWorklist(status?: string, dateRange?: { dateFrom?: string; dateTo?: string }) {
   return useQuery({
-    queryKey: vaccinationKeys.list(status),
-    queryFn: () => vaccinationsApi.list({ status }),
+    queryKey: vaccinationKeys.list(status, dateRange),
+    queryFn: () => vaccinationsApi.list({ status, ...dateRange }),
     refetchInterval: 30_000,
   });
 }

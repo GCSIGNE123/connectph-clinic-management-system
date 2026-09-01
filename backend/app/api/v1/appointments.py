@@ -308,13 +308,19 @@ async def get_available_slots(
 @patients_router.get("/{patient_id}/appointments")
 async def list_patient_appointments(
     patient_id: UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_appointment_view_role),
 ) -> dict:
     from app.models.appointment import AppointmentStatus
 
-    items = await AppointmentService(db).list_for_patient(patient_id, clinic_id=clinic_id)
+    # Date filter applies BEFORE the status bucketing below - the existing
+    # upcoming/completed/cancelled/no_show grouping (business-specific,
+    # preserved unchanged) still applies to whatever range the caller asked
+    # for, not the other way around.
+    items = await AppointmentService(db).list_for_patient(patient_id, clinic_id=clinic_id, date_from=date_from, date_to=date_to)
     return {
         "upcoming": [i for i in items if i.status in (AppointmentStatus.BOOKED, AppointmentStatus.CONFIRMED, AppointmentStatus.CHECKED_IN, AppointmentStatus.WAITING, AppointmentStatus.IN_CONSULTATION)],
         "completed": [i for i in items if i.status == AppointmentStatus.COMPLETED],

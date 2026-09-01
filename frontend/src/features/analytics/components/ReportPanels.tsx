@@ -4,9 +4,10 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { BarChart } from "@/features/analytics/components/BarChart";
 import { LineChart } from "@/features/analytics/components/LineChart";
-import { DateRangeFilter } from "@/features/analytics/components/DateRangeFilter";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { ExportButtons } from "@/features/analytics/components/ExportButtons";
 import { ReportSection } from "@/features/analytics/components/ReportSection";
+import { DATE_RANGE_PRESETS } from "@/features/analytics/lib/date-range";
 import {
   useAppointmentReport,
   useDoctorReport,
@@ -51,7 +52,7 @@ export function PatientReportPanel() {
     <ReportSection
       title="Patient Report"
       isLoading={isLoading || !validRange}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="patients" filters={filters} />}
     >
       {data ? (
@@ -90,7 +91,7 @@ export function DoctorReportPanel() {
     <ReportSection
       title="Doctor Report"
       isLoading={isLoading}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="doctors" filters={filters} />}
     >
       {data ? (
@@ -147,7 +148,7 @@ export function RevenueReportPanel() {
     <ReportSection
       title="Revenue Report"
       isLoading={isLoading}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="revenue" filters={filters} />}
     >
       {data ? (
@@ -193,7 +194,7 @@ export function QueueReportPanel() {
     <ReportSection
       title="Queue Report"
       isLoading={isLoading}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="queue" filters={filters} />}
     >
       {data ? (
@@ -222,7 +223,7 @@ export function LaboratoryReportPanel() {
     <ReportSection
       title="Laboratory Report"
       isLoading={isLoading}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="laboratory" filters={filters} />}
     >
       {data ? (
@@ -257,7 +258,7 @@ export function AppointmentReportPanel() {
     <ReportSection
       title="Appointment Report"
       isLoading={isLoading}
-      filters={<DateRangeFilter preset={filters.dateRange} start={filters.start} end={filters.end} onChange={onChange} />}
+      filters={<DateRangeFilter preset={filters.dateRange} presets={DATE_RANGE_PRESETS} start={filters.start} end={filters.end} onChange={onChange} />}
       actions={<ExportButtons report="appointments" filters={filters} />}
     >
       {data ? (

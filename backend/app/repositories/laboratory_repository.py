@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.db.date_filters import datetime_range_filters
 from app.models.laboratory_attachment import LaboratoryAttachment
 from app.models.laboratory_order import LaboratoryOrder, LaboratoryOrderStatus
 from app.models.laboratory_reference_range import LaboratoryReferenceRange
@@ -67,7 +68,14 @@ class LaboratoryRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_for_clinic(self, clinic_id: UUID, *, status: LaboratoryOrderStatus | None = None) -> list[LaboratoryOrder]:
+    async def list_for_clinic(
+        self,
+        clinic_id: UUID,
+        *,
+        status: LaboratoryOrderStatus | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[LaboratoryOrder]:
         """The sole backer of the Laboratory tab/worklist (`GET /laboratory/orders`
         with no `visit_id`, via `LaboratoryService.list_for_dashboard`) - newest
         request first. Sorted by `created_at` (when the laboratory REQUEST/order
@@ -83,6 +91,7 @@ class LaboratoryRepository:
         filters = [LaboratoryOrder.clinic_id == clinic_id, LaboratoryOrder.is_deleted.is_(False)]
         if status is not None:
             filters.append(LaboratoryOrder.status == status)
+        filters.extend(datetime_range_filters(LaboratoryOrder.created_at, date_from, date_to))
         stmt = (
             select(LaboratoryOrder)
             .where(*filters)
@@ -100,12 +109,25 @@ class LaboratoryRepository:
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
-    async def list_for_patient(self, patient_id: UUID, clinic_id: UUID) -> list[LaboratoryOrder]:
+    async def list_for_patient(
+        self,
+        patient_id: UUID,
+        clinic_id: UUID,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[LaboratoryOrder]:
+        filters = [
+            LaboratoryOrder.patient_id == patient_id,
+            LaboratoryOrder.clinic_id == clinic_id,
+            LaboratoryOrder.is_deleted.is_(False),
+            *datetime_range_filters(LaboratoryOrder.created_at, date_from, date_to),
+        ]
         stmt = (
             select(LaboratoryOrder)
-            .where(LaboratoryOrder.patient_id == patient_id, LaboratoryOrder.clinic_id == clinic_id, LaboratoryOrder.is_deleted.is_(False))
+            .where(*filters)
             .options(*_order_options())
-            .order_by(LaboratoryOrder.created_at.desc())
+            .order_by(LaboratoryOrder.created_at.desc(), LaboratoryOrder.id.desc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
 

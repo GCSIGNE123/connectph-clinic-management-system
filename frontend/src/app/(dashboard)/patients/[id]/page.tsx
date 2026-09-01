@@ -9,6 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { cn } from "@/lib/utils";
 import { usePatient, usePatientQr } from "@/features/patients/hooks/use-patient";
 import { useUploadPatientPhoto } from "@/features/patients/hooks/use-patient-mutations";
@@ -57,9 +58,12 @@ export default function PatientProfilePage() {
   const uploadPhoto = useUploadPatientPhoto(patientId);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [visitsPage, setVisitsPage] = useState(1);
+  const [visitsDateRange, setVisitsDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
   const { data: visitsData, isLoading: visitsLoading } = useVisitsForPatient(
     activeTab === "visits" ? patientId : null,
-    visitsPage
+    visitsPage,
+    10,
+    visitsDateRange
   );
 
   if (isLoading) {
@@ -234,6 +238,12 @@ export default function PatientProfilePage() {
             <CardTitle>Visit history</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <RecordDateRangeFilter
+              onApply={(range) => {
+                setVisitsDateRange(range);
+                setVisitsPage(1);
+              }}
+            />
             <VisitTable items={visitsData?.data ?? []} isLoading={visitsLoading} />
             {visitsData && visitsData.meta.totalPages > 1 ? (
               <div className="flex items-center justify-between text-sm text-muted-foreground">

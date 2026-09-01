@@ -198,8 +198,15 @@ export const billingApi = {
     );
     return toInvoice(raw);
   },
-  getBillingHistory: async (patientId: string): Promise<BillingHistoryItem[]> => {
-    const raw = await apiClient.get<any>(`/patients/${patientId}/billing-history`);
+  getBillingHistory: async (
+    patientId: string,
+    params?: { dateFrom?: string; dateTo?: string }
+  ): Promise<BillingHistoryItem[]> => {
+    const query = new URLSearchParams();
+    if (params?.dateFrom) query.set("date_from", params.dateFrom);
+    if (params?.dateTo) query.set("date_to", params.dateTo);
+    const qs = query.toString();
+    const raw = await apiClient.get<any>(`/patients/${patientId}/billing-history${qs ? `?${qs}` : ""}`);
     return (raw.items ?? []).map(toBillingHistoryItem);
   },
   addItem: async (

@@ -463,8 +463,19 @@ class InvoiceService:
         rows, total = await self.repo.search(clinic_id, params)
         return [_to_list_item(r) for r in rows], total
 
-    async def get_billing_history_for_patient(self, *, clinic_id: UUID, patient_id: UUID, limit: int = 50, offset: int = 0) -> tuple[list[BillingHistoryItem], int]:
-        rows, total = await self.repo.list_for_patient(clinic_id, patient_id, limit=limit, offset=offset)
+    async def get_billing_history_for_patient(
+        self,
+        *,
+        clinic_id: UUID,
+        patient_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> tuple[list[BillingHistoryItem], int]:
+        rows, total = await self.repo.list_for_patient(
+            clinic_id, patient_id, limit=limit, offset=offset, date_from=date_from, date_to=date_to
+        )
         items = [
             BillingHistoryItem(
                 id=r.id, invoice_number=r.invoice_number, invoice_date=r.invoice_date, grand_total=r.grand_total,

@@ -57,10 +57,13 @@ export function useDoctorSchedule(doctorId: string | null) {
   });
 }
 
-export function usePatientAppointments(patientId: string | null) {
+export function usePatientAppointments(
+  patientId: string | null,
+  params?: { dateFrom?: string; dateTo?: string }
+) {
   return useQuery({
-    queryKey: appointmentKeys.forPatient(patientId ?? ""),
-    queryFn: () => appointmentsApi.listForPatient(patientId as string),
+    queryKey: [...appointmentKeys.forPatient(patientId ?? ""), params ?? {}],
+    queryFn: () => appointmentsApi.listForPatient(patientId as string, params),
     enabled: Boolean(patientId),
   });
 }

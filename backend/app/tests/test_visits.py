@@ -14,6 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    from app.core.rate_limit import _memory_buckets
+
+    _memory_buckets.clear()
+    yield
+    _memory_buckets.clear()
+
+
 async def _login(client: AsyncClient, clinic_slug: str, email: str, password: str) -> str:
     response = await client.post(
         "/api/v1/auth/login",
@@ -331,6 +340,174 @@ async def test_visit_tenant_isolation(client: AsyncClient, make_clinic_with_owne
 
     list_response = await client.get("/api/v1/visits", headers=headers_b)
     assert list_response.json()["total"] == 0
+
+
+# --- Recent-records convention: newest visit_date first, date-range filter ---
+# The frontend resolves Today/This Week/This Month/Custom presets into
+# concrete `date_from`/`date_to` bounds before calling this same endpoint
+# (see `resolveRecordDateRange` in `frontend/src/lib/date-range.ts`) - the
+# backend only ever sees plain date bounds, so these tests exercise the
+# bounds directly rather than re-deriving preset math server-side.
+
+async def test_visit_search_sorts_by_visit_date_descending_not_created_at(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """The primary sort must match the field the date filter itself applies
+    to (visit_date) - a visit created later but with an earlier visit_date
+    (e.g. backdated) must still sort as the OLDER record."""
+    import uuid as _uuid
+    from datetime import date as _date
+
+    from app.models.visit import Visit
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    queue_a = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    patient2 = await _make_patient(client, headers, first_name="Second", mobile="+639171234571")
+    queue_b = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    # queue_b's visit was created AFTER queue_a's (later created_at), but
+    # give it an EARLIER visit_date - if the endpoint still sorted by
+    # created_at, queue_b would incorrectly appear first.
+    visit_a = await db_session.get(Visit, _uuid.UUID(queue_a["visit_id"]))
+    visit_b = await db_session.get(Visit, _uuid.UUID(queue_b["visit_id"]))
+
+    visit_a.visit_date = _date(2026, 6, 10)
+    visit_b.visit_date = _date(2026, 6, 1)
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/visits", headers=headers)
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [i["id"] for i in items] == [queue_a["visit_id"], queue_b["visit_id"]]
+
+
+async def test_visit_date_range_filter_excludes_visits_outside_the_range(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    from app.models.visit import Visit
+    from datetime import date as _date
+    import uuid as _uuid
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    queue_in = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+
+    patient2 = await _make_patient(client, headers, first_name="Outside", mobile="+639171234572")
+    queue_out = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    (await db_session.get(Visit, _uuid.UUID(queue_in["visit_id"]))).visit_date = _date(2026, 6, 15)
+    (await db_session.get(Visit, _uuid.UUID(queue_out["visit_id"]))).visit_date = _date(2026, 7, 1)
+    await db_session.commit()
+
+    # "This Month" for June, resolved client-side, arrives as a plain range.
+    resp = await client.get(
+        "/api/v1/visits", headers=headers, params={"date_from": "2026-06-01", "date_to": "2026-06-30"}
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [i["id"] for i in items] == [queue_in["visit_id"]]
+
+
+async def test_visit_date_range_with_no_matching_visits_returns_empty(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))
+
+    resp = await client.get(
+        "/api/v1/visits", headers=headers, params={"date_from": "2020-01-01", "date_to": "2020-01-31"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["total"] == 0
+    assert resp.json()["items"] == []
+
+
+async def test_visit_date_range_combines_with_status_filter(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    """Status = Waiting AND This Month must both apply - not either/or."""
+    from app.models.visit import Visit
+    from datetime import date as _date
+    import uuid as _uuid
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    queue = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    visit = await db_session.get(Visit, _uuid.UUID(queue["visit_id"]))
+    today = visit.visit_date
+
+    matching = await client.get(
+        "/api/v1/visits", headers=headers,
+        params={"status": "Waiting", "date_from": today.isoformat(), "date_to": today.isoformat()},
+    )
+    assert matching.json()["total"] == 1
+
+    wrong_status = await client.get(
+        "/api/v1/visits", headers=headers,
+        params={"status": "Completed", "date_from": today.isoformat(), "date_to": today.isoformat()},
+    )
+    assert wrong_status.json()["total"] == 0
+
+
+async def test_visit_search_uses_id_as_stable_tie_break_for_identical_visit_date_and_created_at(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    from app.models.visit import Visit
+    from datetime import UTC, datetime
+    import uuid as _uuid
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+    queue_a = (await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))).json()
+    patient2 = await _make_patient(client, headers, first_name="Tiebreak", mobile="+639171234573")
+    queue_b = (
+        await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps, patient_id=patient2["id"]))
+    ).json()
+
+    visit_a = await db_session.get(Visit, _uuid.UUID(queue_a["visit_id"]))
+    visit_b = await db_session.get(Visit, _uuid.UUID(queue_b["visit_id"]))
+    same_time = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    visit_a.created_at = same_time
+    visit_b.created_at = same_time
+    await db_session.commit()
+
+    expected_first, expected_second = (
+        (queue_a["visit_id"], queue_b["visit_id"])
+        if queue_a["visit_id"] > queue_b["visit_id"]
+        else (queue_b["visit_id"], queue_a["visit_id"])
+    )
+
+    resp = await client.get("/api/v1/visits", headers=headers)
+    ids = [i["id"] for i in resp.json()["items"]]
+    assert ids.index(expected_first) < ids.index(expected_second)
+
+
+async def test_visit_tenant_isolation_holds_with_date_range_filter(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """A date range that matches records in ANOTHER clinic must not leak
+    them into this clinic's filtered results."""
+    _clinic_a, _owner_a, headers_a = await _owner_headers(client, make_clinic_with_owner)
+    deps_a = await _setup_queue_deps(client, headers_a)
+    await client.post("/api/v1/queues", headers=headers_a, json=_queue_payload(deps_a))
+
+    _clinic_b, _owner_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+
+    from datetime import date
+
+    today = date.today().isoformat()
+    resp = await client.get(
+        "/api/v1/visits", headers=headers_b, params={"date_from": today, "date_to": today}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["total"] == 0
 
 
 async def test_existing_queue_endpoints_still_work(client: AsyncClient, make_clinic_with_owner) -> None:

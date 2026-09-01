@@ -305,9 +305,18 @@ class VisitService:
         return [_to_list_item(v) for v in rows], total
 
     async def list_for_patient(
-        self, *, clinic_id: UUID, patient_id: UUID, limit: int = 50, offset: int = 0
+        self,
+        *,
+        clinic_id: UUID,
+        patient_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[VisitListItem], int]:
-        rows, total = await self.repo.list_for_patient(clinic_id, patient_id, limit=limit, offset=offset)
+        rows, total = await self.repo.list_for_patient(
+            clinic_id, patient_id, limit=limit, offset=offset, date_from=date_from, date_to=date_to
+        )
         return [_to_list_item(v) for v in rows], total
 
     async def get_detail(self, visit_id: UUID, *, clinic_id: UUID) -> VisitDetail:

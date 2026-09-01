@@ -87,7 +87,12 @@ class VisitRepository(BaseRepository[Visit]):
                 selectinload(Visit.service),
                 selectinload(Visit.queue),
             )
-            .order_by(Visit.created_at.desc())
+            # Sort on the same field the date filter above applies to
+            # (visit_date) - previously sorted on created_at, which could
+            # disagree with a `date_from`/`date_to` filter on visit_date
+            # (e.g. a backdated visit_date). created_at/id are stable
+            # tie-breaks for same-day visits.
+            .order_by(Visit.visit_date.desc(), Visit.created_at.desc(), Visit.id.desc())
             .offset(params.offset)
             .limit(params.limit)
         )
@@ -95,13 +100,24 @@ class VisitRepository(BaseRepository[Visit]):
         return list(rows), total
 
     async def list_for_patient(
-        self, clinic_id: UUID, patient_id: UUID, *, limit: int = 50, offset: int = 0
+        self,
+        clinic_id: UUID,
+        patient_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[Visit], int]:
         filters = [
             Visit.clinic_id == clinic_id,
             Visit.patient_id == patient_id,
             Visit.is_deleted.is_(False),
         ]
+        if date_from is not None:
+            filters.append(Visit.visit_date >= date_from)
+        if date_to is not None:
+            filters.append(Visit.visit_date <= date_to)
         count_stmt = select(func.count()).select_from(Visit).where(and_(*filters))
         total = int((await self.session.execute(count_stmt)).scalar_one())
 
@@ -115,7 +131,7 @@ class VisitRepository(BaseRepository[Visit]):
                 selectinload(Visit.service),
                 selectinload(Visit.queue),
             )
-            .order_by(Visit.visit_date.desc(), Visit.created_at.desc())
+            .order_by(Visit.visit_date.desc(), Visit.created_at.desc(), Visit.id.desc())
             .offset(offset)
             .limit(limit)
         )

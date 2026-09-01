@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecordDateRangeFilter } from "@/components/filters/RecordDateRangeFilter";
 import { useVaccinationsWorklist, useCancelVaccination } from "@/features/vaccinations/hooks/use-vaccinations";
 import { AdministerVaccinationDialog } from "@/features/vaccinations/components/AdministerVaccinationDialog";
 import type { VaccinationAdministration, VaccinationStatus } from "@/features/vaccinations/types";
@@ -18,7 +19,8 @@ const STATUS_VARIANT: Record<VaccinationStatus, "default" | "success" | "seconda
 };
 
 export default function VaccinationsPage() {
-  const { data: vaccinations, isLoading } = useVaccinationsWorklist();
+  const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
+  const { data: vaccinations, isLoading } = useVaccinationsWorklist(undefined, dateRange);
   const cancelVaccination = useCancelVaccination();
   const [q, setQ] = useState("");
   const [administering, setAdministering] = useState<VaccinationAdministration | null>(null);
@@ -50,7 +52,10 @@ export default function VaccinationsPage() {
       <Card>
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>Worklist</CardTitle>
-          <Input placeholder="Search vaccine name..." value={q} onChange={(e) => setQ(e.target.value)} className="sm:w-80" />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input placeholder="Search vaccine name..." value={q} onChange={(e) => setQ(e.target.value)} className="sm:w-80" />
+            <RecordDateRangeFilter onApply={setDateRange} />
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
