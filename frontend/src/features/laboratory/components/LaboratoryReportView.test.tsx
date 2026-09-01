@@ -839,7 +839,54 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByTestId("med-tech-signatory")).toBeInTheDocument();
       expect(screen.getByText("Maria Cruz")).toBeInTheDocument();
       expect(screen.getByText("Medical Technologist")).toBeInTheDocument();
-      expect(screen.getByText("Lic. No. MT-001")).toBeInTheDocument();
+      // Med Tech's license line uses "RMT No." (not the Pathologist's
+      // "Lic. No.") per the client's reference format.
+      expect(screen.getByText("RMT No. MT-001")).toBeInTheDocument();
+    });
+
+    it("5b: the Pathologist's license line uses 'Lic. No.', distinct from the Med Tech's 'RMT No.'", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            medTechNameSnapshot: "Maria Cruz", medTechLicenseSnapshot: "MT-001",
+            pathologistNameSnapshot: "Dr. Santos", pathologistLicenseSnapshot: "85469",
+          })}
+        />
+      );
+      const pathologistColumn = screen.getByTestId("pathologist-signatory");
+      expect(pathologistColumn).toHaveTextContent("Dr. Santos");
+      expect(pathologistColumn).toHaveTextContent("Pathologist");
+      expect(screen.getByText("Lic. No. 85469")).toBeInTheDocument();
+      expect(screen.queryByText("RMT No. 85469")).not.toBeInTheDocument();
+      // Both license lines coexist without colliding.
+      expect(screen.getByText("RMT No. MT-001")).toBeInTheDocument();
+    });
+
+    it("5c: a Med Tech with no license number configured omits the 'RMT No.' line entirely - name/role still render, never a blank 'RMT No.'", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ medTechNameSnapshot: "Maria Cruz", medTechLicenseSnapshot: null })}
+        />
+      );
+      const medTechColumn = screen.getByTestId("med-tech-signatory");
+      expect(medTechColumn).toHaveTextContent("Maria Cruz");
+      expect(medTechColumn).toHaveTextContent("Medical Technologist");
+      expect(screen.queryByText(/RMT No\./)).not.toBeInTheDocument();
+    });
+
+    it("5d: a Pathologist with no license number configured omits the 'Lic. No.' line entirely - name/role still render, never a blank 'Lic. No.'", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ pathologistNameSnapshot: "Dr. Santos", pathologistLicenseSnapshot: null })}
+        />
+      );
+      const pathologistColumn = screen.getByTestId("pathologist-signatory");
+      expect(pathologistColumn).toHaveTextContent("Dr. Santos");
+      expect(pathologistColumn).toHaveTextContent("Pathologist");
+      expect(screen.queryByText(/Lic\. No\./)).not.toBeInTheDocument();
     });
 
     it("6: the signature image is fetched and rendered ABOVE the printed name", async () => {

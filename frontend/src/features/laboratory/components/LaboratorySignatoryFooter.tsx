@@ -25,6 +25,7 @@ export function LaboratorySignatoryFooter({ order }: { order: LaboratoryOrder })
         label="Med Technician in Charge"
         name={order.medTechNameSnapshot}
         roleLabel="Medical Technologist"
+        licenseLabel="RMT No."
         licenseNumber={order.medTechLicenseSnapshot}
         signatureApiPath={order.medTechSignatureSnapshotUrl ? `/laboratory/orders/${order.id}/med-tech-signature/file` : null}
         testId="med-tech-signatory"
@@ -33,6 +34,7 @@ export function LaboratorySignatoryFooter({ order }: { order: LaboratoryOrder })
         label="Pathologist"
         name={order.pathologistNameSnapshot}
         roleLabel="Pathologist"
+        licenseLabel="Lic. No."
         licenseNumber={order.pathologistLicenseSnapshot}
         signatureApiPath={order.pathologistSignatureSnapshotUrl ? `/laboratory/orders/${order.id}/pathologist-signature/file` : null}
         testId="pathologist-signatory"
@@ -45,6 +47,7 @@ function SignatoryColumn({
   label,
   name,
   roleLabel,
+  licenseLabel,
   licenseNumber,
   signatureApiPath,
   testId,
@@ -52,6 +55,10 @@ function SignatoryColumn({
   label: string;
   name?: string | null;
   roleLabel: string;
+  /** "RMT No." for the Med Tech, "Lic. No." for the Pathologist - the two
+   * signatories use different professional-license conventions (client
+   * reference format), never a shared generic label. */
+  licenseLabel: string;
   licenseNumber?: string | null;
   signatureApiPath: string | null;
   testId: string;
@@ -86,8 +93,16 @@ function SignatoryColumn({
       </div>
       <div className="border-t border-slate-400 pt-1">
         {name ? <p className="font-medium text-slate-900">{name}</p> : <p>&nbsp;</p>}
+        {/* Client reference format: Name, then license number, then role -
+            omitted entirely (not "RMT No." / "Lic. No." with a blank
+            trailing value) when no license number was captured, so a
+            signatory with none configured still prints cleanly. */}
+        {licenseNumber ? (
+          <p className="text-muted-foreground">
+            {licenseLabel} {licenseNumber}
+          </p>
+        ) : null}
         <p className="text-muted-foreground">{roleLabel}</p>
-        {licenseNumber ? <p className="text-muted-foreground">Lic. No. {licenseNumber}</p> : null}
       </div>
     </div>
   );
