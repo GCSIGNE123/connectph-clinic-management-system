@@ -683,9 +683,12 @@ describe("LaboratoryReportView", () => {
     });
   });
 
-  // --- Qualitative Positive/Negative MATRIX layout (client sample: one row
-  // per test, one column per Categorical parameter - "TEST | NS1 | IgM |
-  // IgG", never Unit/Normal Values/Flag/Interpretation for this layout).
+  // --- Qualitative Positive/Negative MATRIX layout (client sample: one
+  // column per Categorical parameter - "NS1 | IgM | IgG", never
+  // Unit/Normal Values/Flag/Interpretation for this layout, and never a
+  // "Test"/parent-test-name column - the report header's own "Test: ..."
+  // InfoRow already carries the parent test name, so the matrix itself
+  // only ever holds parameter names and their results.
   // Selected purely by `isQualitativeCategoricalRow` (resultType +
   // configured `options`), never by test name - every test below uses a
   // different, fictional parameter set to prove that. ---
@@ -697,7 +700,7 @@ describe("LaboratoryReportView", () => {
       return result({ parameterName: name, resultType: "Categorical", structuredValue: { value }, interpretation: value === "Positive" ? "Abnormal" : "Normal", normalRange: "Negative", units: null });
     }
 
-    it("A: a 3-parameter test (Dengue-style) renders one TEST column plus one column per parameter, with matching results", () => {
+    it("A: a 3-parameter test (Dengue-style) renders one column per parameter (no TEST column), with matching results, and the parent test name only in the report header", () => {
       render(
         <LaboratoryReportView
           order={order({
@@ -715,10 +718,13 @@ describe("LaboratoryReportView", () => {
           })}
         />
       );
+      // The matrix's own headers are exactly the 3 parameter names - no
+      // "Test" column heading, no parent test-name row.
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "NS1", "IgM", "IgG"]);
-      // Appears twice - the header's "Test" info row, and the matrix's own TEST cell.
-      expect(screen.getAllByText("DENGUE RAPID TEST (DRT)")).toHaveLength(2);
+      expect(headers).toEqual(["NS1", "IgM", "IgG"]);
+      // "DENGUE RAPID TEST (DRT)" appears exactly ONCE now - only in the
+      // report header's "Test" info row, never repeated as a matrix cell.
+      expect(screen.getAllByText("DENGUE RAPID TEST (DRT)")).toHaveLength(1);
       const negatives = screen.getAllByText("Negative");
       expect(negatives).toHaveLength(3);
       // No Unit/Normal Values/Flag/Interpretation columns for this layout.
@@ -728,7 +734,7 @@ describe("LaboratoryReportView", () => {
       expect(screen.queryByText("A")).not.toBeInTheDocument();
     });
 
-    it("B: a 2-parameter test (Typhoid-style) renders IgM/IgG columns with Positive results", () => {
+    it("B: a 2-parameter test (Typhoid-style) renders IgM/IgG columns with Positive results, no TEST column", () => {
       render(
         <LaboratoryReportView
           order={order({
@@ -743,15 +749,16 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "IgM", "IgG"]);
-      expect(screen.getAllByText("S TYPHI TYPHOID")).toHaveLength(2);
+      expect(headers).toEqual(["IgM", "IgG"]);
+      // "S TYPHI TYPHOID" appears exactly once - only in the report header.
+      expect(screen.getAllByText("S TYPHI TYPHOID")).toHaveLength(1);
       expect(screen.getAllByText("Positive")).toHaveLength(2);
       expect(screen.queryByRole("columnheader", { name: "Unit" })).not.toBeInTheDocument();
       expect(screen.queryByRole("columnheader", { name: "Normal Values" })).not.toBeInTheDocument();
       expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
     });
 
-    it("C: a single-parameter test (HBsAg-style) uses the parameter name itself as the column heading, not a generic 'Result'", () => {
+    it("C: a single-parameter test (HBsAg-style) uses the parameter name itself as the column heading, not a generic 'Result' or the parent test name", () => {
       render(
         <LaboratoryReportView
           order={order({
@@ -766,15 +773,15 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "HBsAg"]);
+      expect(headers).toEqual(["HBsAg"]);
       expect(screen.queryByText("Result")).not.toBeInTheDocument();
-      // "HEPATITIS B ANTIGEN (HBSAG)" legitimately appears twice - once in
-      // the header's "Test" info row, once as the matrix's own TEST cell.
-      expect(screen.getAllByText("HEPATITIS B ANTIGEN (HBSAG)")).toHaveLength(2);
+      // "HEPATITIS B ANTIGEN (HBSAG)" appears exactly once - only in the
+      // header's "Test" info row, no redundant matrix row for it.
+      expect(screen.getAllByText("HEPATITIS B ANTIGEN (HBSAG)")).toHaveLength(1);
       expect(screen.getByText("Positive")).toBeInTheDocument();
     });
 
-    it("D: a 4-parameter test is fully dynamic - not assuming exactly 2 or 3 columns", () => {
+    it("D: a 4-parameter test is fully dynamic - not assuming exactly 1/2/3 columns, still no TEST column", () => {
       render(
         <LaboratoryReportView
           order={order({
@@ -792,7 +799,8 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "A", "B", "C", "D"]);
+      expect(headers).toEqual(["A", "B", "C", "D"]);
+      expect(screen.getAllByText("Fictional 4-Analyte Panel")).toHaveLength(1);
     });
 
     it("E: Numeric reports are completely unaffected by the matrix layout - Unit/Normal Values/Flag still render", () => {
