@@ -2457,6 +2457,142 @@ async def test_hbsag_explicit_client_interpretation_is_still_respected_as_overri
     assert resp.json()["results"][0]["interpretation"] == "Normal"
 
 
+# --- Laboratory Categorical Audit: HAV IgM and every other true qualitative
+# Positive/Negative test corrected to the exact HBsAg working pattern
+# (options=["Positive","Negative"], normal_range="Negative",
+# expected_normal_text="Negative") - proving the fix is data-driven via the
+# existing template PATCH mechanism, not special-cased to HBsAg's name, and
+# generalizes to any Categorical parameter an Administrator configures the
+# same way. The seeded "Hepatitis A Virus Test (HAV)" template stands in for
+# the real clinic's "HAV IgM" template from the audit (same shape: one
+# Categorical "Result" parameter) - the disposable test database has no
+# clinic-specific templates, only the seed catalog. ---
+
+async def _positive_negative_order(client: AsyncClient, make_clinic_with_owner, db_session, test_name: str, parameter_name: str = "Result") -> dict:
+    """Same seed-template-and-order flow as `_hbsag_order_with_options`,
+    generalized to any seeded qualitative template's first parameter -
+    configures it with the exact HBsAg-matching Positive/Negative pattern
+    via the existing template PATCH endpoint (the same admin-configuration
+    mechanism used in production), then returns an order ready for result
+    entry."""
+    ctx = await _order_for_template(client, make_clinic_with_owner, db_session, test_name)
+    templates = (await client.get("/api/v1/laboratory/templates", headers=ctx["owner_headers"])).json()
+    template = next(t for t in templates if t["test_name"] == test_name)
+    param = next(p for p in template["parameters"] if p["parameter_name"] == parameter_name)
+    update = await client.patch(
+        f"/api/v1/laboratory/templates/{template['id']}", headers=ctx["owner_headers"],
+        json={
+            "parameters": [
+                {
+                    "id": param["id"], "parameter_name": parameter_name, "result_type": "Categorical",
+                    "options": ["Positive", "Negative"], "normal_range": "Negative", "expected_normal_text": "Negative",
+                }
+            ]
+        },
+    )
+    assert update.status_code == 200, update.text
+    ctx["template"] = update.json()
+    return ctx
+
+
+async def test_hav_positive_result_is_accepted_and_interpreted_as_abnormal(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """HAV IgM audit fix #1: configured exactly like HBsAg, a Positive
+    result is accepted and auto-interpreted as Abnormal."""
+    ctx = await _positive_negative_order(client, make_clinic_with_owner, db_session, "Hepatitis A Virus Test (HAV)")
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "Result", "result_type": "Categorical", "structured_value": {"value": "Positive"}}]},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["structured_value"] == {"value": "Positive"}
+    assert result["interpretation"] == "Abnormal"
+
+
+async def test_hav_negative_result_is_accepted_and_interpreted_as_normal(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """HAV IgM audit fix #2: a Negative result is accepted and
+    auto-interpreted as Normal - mirrors the HBsAg reference behavior."""
+    ctx = await _positive_negative_order(client, make_clinic_with_owner, db_session, "Hepatitis A Virus Test (HAV)")
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "Result", "result_type": "Categorical", "structured_value": {"value": "Negative"}}]},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["structured_value"] == {"value": "Negative"}
+    assert result["interpretation"] == "Normal"
+
+
+async def test_hav_template_parameter_matches_hbsag_configuration_shape(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Audit requirement: HAV IgM's parameter is configured as Categorical
+    Positive/Negative with the exact same shape as the working HBsAg
+    example (options, normal_range, expected_normal_text, unit=None)."""
+    ctx = await _positive_negative_order(client, make_clinic_with_owner, db_session, "Hepatitis A Virus Test (HAV)")
+    param = ctx["template"]["parameters"][0]
+    assert param["result_type"] == "Categorical"
+    assert param["options"] == ["Positive", "Negative"]
+    assert param["normal_range"] == "Negative"
+    assert param["expected_normal_text"] == "Negative"
+    assert param["unit"] is None
+
+
+@pytest.mark.parametrize("test_name", ["VDRL / Syphilis Test", "Hepatitis B Antigen (HBsAg)", "Hepatitis A Virus Test (HAV)"])
+async def test_every_corrected_positive_negative_parameter_shares_the_same_generic_behavior(
+    client: AsyncClient, make_clinic_with_owner, db_session, test_name: str
+) -> None:
+    """Audit requirement: every corrected Positive/Negative parameter
+    (not just HAV IgM) behaves identically once configured with the same
+    options/expected_normal_text pattern - proving the interpretation rule
+    is generic (`options` + `expected_normal_text`), never hard-coded per
+    test name."""
+    ctx = await _positive_negative_order(client, make_clinic_with_owner, db_session, test_name)
+    positive = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "Result", "result_type": "Categorical", "structured_value": {"value": "Positive"}}]},
+    )
+    assert positive.status_code == 200, positive.text
+    assert positive.json()["results"][0]["interpretation"] == "Abnormal"
+
+
+async def test_correcting_a_categorical_template_parameter_does_not_duplicate_templates_or_parameters(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Audit requirement: applying the Positive/Negative correction (via
+    the existing template PATCH/replace-parameters mechanism) twice in a
+    row never creates a second template with the same name, nor extra
+    parameter rows - the template list still shows exactly one HAV
+    template with exactly one parameter after two corrections."""
+    ctx = await _positive_negative_order(client, make_clinic_with_owner, db_session, "Hepatitis A Virus Test (HAV)")
+    template = ctx["template"]
+    param = template["parameters"][0]
+
+    # Re-apply the identical correction a second time, against the same
+    # template id, exactly as re-running the fix script would.
+    reapplied = await client.patch(
+        f"/api/v1/laboratory/templates/{template['id']}", headers=ctx["owner_headers"],
+        json={
+            "parameters": [
+                {
+                    "id": param["id"], "parameter_name": "Result", "result_type": "Categorical",
+                    "options": ["Positive", "Negative"], "normal_range": "Negative", "expected_normal_text": "Negative",
+                }
+            ]
+        },
+    )
+    assert reapplied.status_code == 200, reapplied.text
+
+    templates = (await client.get("/api/v1/laboratory/templates", headers=ctx["owner_headers"])).json()
+    hav_templates = [t for t in templates if t["test_name"] == "Hepatitis A Virus Test (HAV)"]
+    assert len(hav_templates) == 1
+    assert len(hav_templates[0]["parameters"]) == 1
+
+
 async def test_phase_4c_does_not_affect_cbc_blood_typing_or_urinalysis(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
@@ -2489,6 +2625,124 @@ async def test_phase_4c_does_not_affect_cbc_blood_typing_or_urinalysis(
         json={"results": [{"parameter_name": "ABO Group", "result_type": "Categorical", "structured_value": {"value": "O"}}]},
     )
     assert bt_resp.status_code == 200, bt_resp.text
+
+
+# --- Laboratory Categorical Audit: Service Catalog <-> Laboratory Template
+# exact-name auto-link regression. Reproduces, in the disposable test
+# database, the exact class of bug the audit found live (a Service Catalog
+# item and its intended Laboratory Template drifting to different names,
+# e.g. "HAV IgM" vs "HEPATITIS A VIRUS TEST (HAV)") - proving: (1) a
+# mismatched name leaves a new order untemplated, (2) renaming the template
+# to match the Service Catalog name (the existing PATCH mechanism, not a
+# new one) makes a NEW order auto-link, and (3) the EARLIER, already-created
+# order is never retroactively touched - its template_id/test_type stay
+# exactly as they were. No fuzzy/substring matching is introduced anywhere
+# here; this only exercises the existing exact-name-match rule. ---
+
+async def test_service_and_template_name_mismatch_leaves_new_orders_untemplated(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A doctor's free-text order item name that does not exactly match any
+    active template's `test_name` (e.g. the clinic's real Service Catalog
+    wording "HAV IgM" vs the seeded template "Hepatitis A Virus Test
+    (HAV)") creates a real LaboratoryOrder (never blocked), but with
+    `template=None` - the same "best-effort, not a precondition" fallback
+    already proven for other untemplated orders."""
+    ctx = await _order_for_template(client, make_clinic_with_owner, db_session, "HAV IgM")
+    order = (await client.get(f"/api/v1/laboratory/orders/{ctx['lab_id']}", headers=ctx["owner_headers"])).json()
+    assert order["template"] is None
+    assert order["test_type"] == "HAV IgM"
+
+
+async def _second_order_same_clinic(client: AsyncClient, db_session, *, clinic, owner_headers, deps, test_name: str) -> str:
+    """Creates one more Laboratory order in an ALREADY set-up clinic (same
+    branch/department/doctor from `_order_for_template`'s own
+    `_setup_queue_deps` call) - a fresh queue/visit/consultation (and a
+    fresh patient, to avoid `has_active_duplicate`'s same-patient/
+    department/day rejection on a second queue ticket) is still required
+    per order. Returns the new order's `laboratory_orders` id. Each call
+    gets a distinctly-named patient - reusing the same demographics twice
+    in one clinic trips the existing possible-duplicate-patient guard
+    (`POST /patients` then returns `patient: null` + `duplicates`), which
+    isn't what this helper is testing."""
+    suffix = uuid.uuid4().hex[:8]
+    digits = str(int(suffix, 16))[:7].rjust(7, "1")
+    patient = (
+        await client.post(
+            "/api/v1/patients", headers=owner_headers,
+            json={
+                "first_name": "Maria", "last_name": f"Santos-{suffix}", "birth_date": "1988-03-20",
+                "gender": "Female", "civil_status": "Single", "mobile_number": f"+63917{digits}",
+            },
+        )
+    ).json()["patient"]
+    queue_payload = {**_queue_payload(deps), "patient_id": patient["id"]}
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=queue_payload)).json()
+    visit_id = queue["visit_id"]
+    doc_email, _doc_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor", doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "TestPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    order = (
+        await client.post(
+            f"/api/v1/consultations/{opened['id']}/orders", headers=doc_headers,
+            json={"order_category": "Laboratory", "items": [{"item_name": test_name}]},
+        )
+    ).json()
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    return next(lo for lo in lab_orders if lo["order_id"] == order["id"])["id"]
+
+
+async def test_renaming_template_to_match_service_catalog_name_auto_links_new_orders_only(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The audit's actual fix, reproduced generically, within ONE clinic:
+    renaming a Laboratory Template's `test_name` (via the existing
+    template PATCH endpoint - the same mechanism an Administrator uses) to
+    exactly match the name actually used at order time makes a brand-new
+    order auto-link to the template. An order created BEFORE the rename is
+    never retroactively updated - its `template_id`/`test_type` stay
+    frozen."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    await client.post("/api/v1/laboratory/templates/seed-defaults", headers=owner_headers)
+    deps = await _setup_queue_deps(client, owner_headers)
+
+    # First order: created while the seeded template is still named
+    # "Hepatitis A Virus Test (HAV)" but the doctor's free-text item name
+    # is the clinic's real-world mismatched wording ("HAV IgM") - mirrors
+    # the exact live mismatch the audit found.
+    before_lab_id = await _second_order_same_clinic(client, db_session, clinic=clinic, owner_headers=owner_headers, deps=deps, test_name="HAV IgM")
+    before_order = (await client.get(f"/api/v1/laboratory/orders/{before_lab_id}", headers=owner_headers)).json()
+    assert before_order["template"] is None
+    assert before_order["test_type"] == "HAV IgM"
+
+    templates = (await client.get("/api/v1/laboratory/templates", headers=owner_headers)).json()
+    hav = next(t for t in templates if t["test_name"] == "Hepatitis A Virus Test (HAV)")
+    rename = await client.patch(
+        f"/api/v1/laboratory/templates/{hav['id']}", headers=owner_headers,
+        json={"test_name": "HAV IgM"},
+    )
+    assert rename.status_code == 200, rename.text
+    assert rename.json()["test_name"] == "HAV IgM"
+    # The rename must not touch the parameter the categorical fix already
+    # configured - proving `update_template` without a `parameters` key
+    # leaves existing parameter rows (and their ids) completely untouched.
+    assert [p["id"] for p in rename.json()["parameters"]] == [p["id"] for p in hav["parameters"]]
+
+    # Second order, created AFTER the rename, for the exact same item
+    # name, in the SAME clinic - now auto-links.
+    after_lab_id = await _second_order_same_clinic(client, db_session, clinic=clinic, owner_headers=owner_headers, deps=deps, test_name="HAV IgM")
+    after_order = (await client.get(f"/api/v1/laboratory/orders/{after_lab_id}", headers=owner_headers)).json()
+    assert after_order["template"] is not None
+    assert after_order["template"]["id"] == hav["id"]
+
+    # The FIRST order (created before the rename) is never retroactively
+    # relinked - still exactly as it was.
+    refetched_before = (await client.get(f"/api/v1/laboratory/orders/{before_lab_id}", headers=owner_headers)).json()
+    assert refetched_before["template"] is None
+    assert refetched_before["test_type"] == "HAV IgM"
 
 
 # --- Bug fix: Laboratory <-> Reception Queue lifecycle sync. A queue
