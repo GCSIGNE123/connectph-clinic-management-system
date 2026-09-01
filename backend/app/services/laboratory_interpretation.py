@@ -16,6 +16,16 @@ isolation, which is what makes the "thoroughly test this first" ordering
 in the Feature 3 design report possible before wiring it into
 `LaboratoryService.enter_results`.
 
+Qualitative/Categorical result-entry simplification: `Categorical` results
+(e.g. HBsAg Positive/Negative) are interpreted with the exact same
+match-against-`expected_normal_text` rule as `Text` above - opt-in per
+parameter (an Administrator must configure `expected_normal_text`, same as
+Text), never invented. This intentionally reuses the Text branch's rule
+rather than adding a second interpretation engine; the only difference is
+which submitted field holds the value to compare (`categorical_value`
+instead of `text_value`), since a Categorical result is stored in
+`structured_value`, not `text_value`.
+
 Phase 2A (Structured Result Backend Foundation): `critical_low`/
 `critical_high` are additive, keyword-only, default-`None` parameters. No
 existing caller passes them, so every existing call site's behavior is
@@ -45,6 +55,7 @@ def interpret_result(
     expected_normal_text: str | None,
     critical_low: Decimal | None = None,
     critical_high: Decimal | None = None,
+    categorical_value: str | None = None,
 ) -> LaboratoryInterpretation | None:
     """Returns the suggested interpretation, or `None` if it cannot be
     safely computed (missing range/expected value, or missing/invalid
@@ -73,6 +84,17 @@ def interpret_result(
         return (
             LaboratoryInterpretation.NORMAL
             if text_value.strip().lower() == expected_normal_text.strip().lower()
+            else LaboratoryInterpretation.ABNORMAL
+        )
+
+    if result_type == LaboratoryResultType.CATEGORICAL:
+        if expected_normal_text is None or not expected_normal_text.strip():
+            return None
+        if categorical_value is None or not categorical_value.strip():
+            return None
+        return (
+            LaboratoryInterpretation.NORMAL
+            if categorical_value.strip().lower() == expected_normal_text.strip().lower()
             else LaboratoryInterpretation.ABNORMAL
         )
 

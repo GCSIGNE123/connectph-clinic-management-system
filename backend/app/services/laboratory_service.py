@@ -401,10 +401,19 @@ class LaboratoryService:
         deliberate clinician override) is always respected as-is and never
         recalculated/overwritten here. `expected_normal_text` is popped
         off regardless of outcome - it's a transient input only, not a
-        column on `LaboratoryResult` (see schema docstring)."""
+        column on `LaboratoryResult` (see schema docstring).
+
+        Qualitative/Categorical simplification: a Categorical result's
+        value lives in `structured_value` (`{"value": "Positive"}`), not
+        `text_value` - extracted here (never mutating `structured_value`
+        itself) so `interpret_result`'s Categorical branch can compare it
+        against `expected_normal_text` the exact same way the Text branch
+        already compares `text_value`."""
         result = dict(result)
         expected_normal_text = result.pop("expected_normal_text", None)
         if result.get("interpretation") is None:
+            structured_value = result.get("structured_value")
+            categorical_value = structured_value.get("value") if isinstance(structured_value, dict) else None
             result["interpretation"] = interpret_result(
                 result_type=result.get("result_type"),
                 numeric_value=result.get("numeric_value"),
@@ -412,6 +421,7 @@ class LaboratoryService:
                 range_low=result.get("range_low"),
                 range_high=result.get("range_high"),
                 expected_normal_text=expected_normal_text,
+                categorical_value=categorical_value,
             )
         return result
 

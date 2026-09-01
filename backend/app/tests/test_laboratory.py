@@ -2366,6 +2366,97 @@ async def test_phase_4c_no_interpretation_is_invented_for_qualitative_results(
     assert resp.json()["results"][0]["interpretation"] is None
 
 
+# --- Qualitative/Categorical result-entry simplification: HBsAg example ---
+# Same seeded "Hepatitis B Antigen (HBsAg)" Phase 4C template as above, but
+# now configured (via the existing template PATCH endpoint - the same
+# admin-configuration mechanism an Administrator would use through the
+# Template editor/Excel import) with real options + a normal range + an
+# expected-normal value, exactly the target example: Categorical,
+# options=[Positive, Negative], Normal Range=Negative. Proves the backend
+# auto-derives interpretation from `expected_normal_text` for a Categorical
+# result the same way it already does for Text, and that an arbitrary
+# (non-configured) value is still rejected.
+
+async def _hbsag_order_with_options(client: AsyncClient, make_clinic_with_owner, db_session) -> dict:
+    ctx = await _order_for_template(client, make_clinic_with_owner, db_session, "Hepatitis B Antigen (HBsAg)")
+    templates = (await client.get("/api/v1/laboratory/templates", headers=ctx["owner_headers"])).json()
+    hbsag = next(t for t in templates if t["test_name"] == "Hepatitis B Antigen (HBsAg)")
+    result_param_id = hbsag["parameters"][0]["id"]
+    await client.patch(
+        f"/api/v1/laboratory/templates/{hbsag['id']}", headers=ctx["owner_headers"],
+        json={
+            "parameters": [
+                {
+                    "id": result_param_id, "parameter_name": "HBsAg", "result_type": "Categorical",
+                    "options": ["Positive", "Negative"], "normal_range": "Negative", "expected_normal_text": "Negative",
+                }
+            ]
+        },
+    )
+    return ctx
+
+
+async def test_hbsag_positive_result_is_accepted_and_interpreted_as_abnormal(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _hbsag_order_with_options(client, make_clinic_with_owner, db_session)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "HBsAg", "result_type": "Categorical", "structured_value": {"value": "Positive"}}]},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["structured_value"] == {"value": "Positive"}
+    assert result["interpretation"] == "Abnormal"
+
+
+async def test_hbsag_negative_result_is_accepted_and_interpreted_as_normal(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _hbsag_order_with_options(client, make_clinic_with_owner, db_session)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "HBsAg", "result_type": "Categorical", "structured_value": {"value": "Negative"}}]},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["structured_value"] == {"value": "Negative"}
+    assert result["interpretation"] == "Normal"
+
+
+async def test_hbsag_arbitrary_value_is_rejected(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx = await _hbsag_order_with_options(client, make_clinic_with_owner, db_session)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "HBsAg", "result_type": "Categorical", "structured_value": {"value": "Maybe"}}]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "HBsAg" in resp.json()["detail"]
+
+
+async def test_hbsag_explicit_client_interpretation_is_still_respected_as_override(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The backend never overwrites an explicit client-supplied
+    interpretation (same rule already applied to Numeric/Text) - a
+    deliberate clinician override survives even though it disagrees with
+    what auto-derivation would have computed."""
+    ctx = await _hbsag_order_with_options(client, make_clinic_with_owner, db_session)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{ctx['lab_id']}/results", headers=ctx["lab_headers"],
+        json={
+            "results": [
+                {
+                    "parameter_name": "HBsAg", "result_type": "Categorical",
+                    "structured_value": {"value": "Positive"}, "interpretation": "Normal",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["interpretation"] == "Normal"
+
+
 async def test_phase_4c_does_not_affect_cbc_blood_typing_or_urinalysis(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
@@ -3592,3 +3683,141 @@ async def test_phase_6_realistic_end_to_end_clinic_encounter(
     assert {"laboratory.specimen_collected", "laboratory.processing_started", "laboratory.results_entered", "laboratory.results_released"}.issubset(audit_actions)
     for a in audit_rows:
         assert a.clinic_id == clinic_id
+
+
+# --- Laboratory tab/worklist: newest laboratory request first ---
+# `GET /laboratory/orders` (no `visit_id`) is the sole backer of the
+# Laboratory tab/worklist (via `LaboratoryService.list_for_dashboard` ->
+# `LaboratoryRepository.list_for_clinic`). The request/order creation
+# timestamp is `LaboratoryOrder.created_at` (set once at insert, unlike
+# `collected_at`/`completed_at`/`released_at` which only exist once that
+# stage happens) - the same field the worklist's own "Requested" column
+# already displays (`formatDate(order.createdAt)`). Sorted descending, with
+# `id` descending as a stable tie-break for identical timestamps.
+
+async def _walk_in_lab_order(client: AsyncClient, headers: dict, *, branch_id: str, department_id: str, service_id: str) -> dict:
+    """Creates one real, paid, auto-attached LaboratoryOrder via the actual
+    pay-first walk-in workflow (pre-queue -> laboratory-invoice -> full
+    payment -> queue ticket) - same real API path as production, not a
+    direct DB insert. A fresh patient per call avoids the existing "one
+    active queue ticket per patient/department/day" guard rejecting a
+    second ticket for the same patient."""
+    patient = (
+        await client.post(
+            "/api/v1/patients", headers=headers,
+            json={
+                "first_name": "Test", "last_name": f"Patient-{uuid.uuid4().hex[:8]}", "birth_date": "1990-05-15",
+                "gender": "Male", "civil_status": "Single", "mobile_number": f"+6391{uuid.uuid4().int % 10**9:09d}",
+            },
+        )
+    ).json()["patient"]
+
+    visit = (
+        await client.post(
+            "/api/v1/visits/pre-queue", headers=headers,
+            json={"patient_id": patient["id"], "branch_id": branch_id, "department_id": department_id, "service_id": service_id},
+        )
+    ).json()
+    invoice = (await client.post(f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers)).json()
+    if float(invoice["balance_due"]) > 0:
+        pay = await client.post(
+            f"/api/v1/invoices/{invoice['id']}/payments", headers=headers,
+            json={"payments": [{"payment_method": "Cash", "amount": invoice["balance_due"]}]},
+        )
+        assert pay.status_code == 200, pay.text
+    queue_resp = await client.post(
+        "/api/v1/queues", headers=headers,
+        json={
+            "patient_id": patient["id"], "branch_id": branch_id, "department_id": department_id,
+            "service_id": service_id, "priority": "Normal", "visit_id": visit["id"],
+        },
+    )
+    assert queue_resp.status_code in (200, 201), queue_resp.text
+
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit['id']}", headers=headers)).json()
+    return lab_orders[0]
+
+
+async def test_laboratory_worklist_orders_newest_request_first(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    from datetime import datetime, timezone
+
+    from app.models.laboratory_order import LaboratoryOrder
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    branch = (await client.post("/api/v1/branches", headers=headers, json={"name": "Main Branch", "code": "MAIN"})).json()
+    department = (
+        await client.post("/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"})
+    ).json()
+    service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+        )
+    ).json()
+
+    oldest = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+    middle = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+    newest = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+
+    # Force explicit, controlled `created_at` values - real wall-clock
+    # creation order alone would already happen to be ascending here, but
+    # this proves the SORT (not incidental insertion order) is what
+    # determines the response, and sets up the tie-break case below.
+    oldest_row = await db_session.get(LaboratoryOrder, uuid.UUID(oldest["id"]))
+    middle_row = await db_session.get(LaboratoryOrder, uuid.UUID(middle["id"]))
+    newest_row = await db_session.get(LaboratoryOrder, uuid.UUID(newest["id"]))
+    oldest_row.created_at = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    middle_row.created_at = datetime(2026, 1, 2, 10, 0, 0, tzinfo=timezone.utc)
+    newest_row.created_at = datetime(2026, 1, 3, 10, 0, 0, tzinfo=timezone.utc)
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/laboratory/orders", headers=headers)
+    assert resp.status_code == 200, resp.text
+    ids_in_order = [row["id"] for row in resp.json()]
+    ordered_ids = [oldest["id"], middle["id"], newest["id"]]
+    positions = [ids_in_order.index(i) for i in ordered_ids]
+    # Newest request's position is earlier (smaller index) than middle's,
+    # which is earlier than oldest's - i.e. descending by created_at.
+    assert positions[2] < positions[1] < positions[0]
+
+
+async def test_laboratory_worklist_uses_id_descending_as_a_stable_tie_break_for_equal_timestamps(
+    client: AsyncClient, make_clinic_with_owner, db_session: AsyncSession
+) -> None:
+    from datetime import datetime, timezone
+
+    from app.models.laboratory_order import LaboratoryOrder
+
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    branch = (await client.post("/api/v1/branches", headers=headers, json={"name": "Main Branch", "code": "MAIN"})).json()
+    department = (
+        await client.post("/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"})
+    ).json()
+    service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+        )
+    ).json()
+
+    order_a = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+    order_b = await _walk_in_lab_order(client, headers, branch_id=branch["id"], department_id=department["id"], service_id=service["id"])
+
+    # Same timestamp for both - only `id` (descending) can break the tie.
+    same_time = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    row_a = await db_session.get(LaboratoryOrder, uuid.UUID(order_a["id"]))
+    row_b = await db_session.get(LaboratoryOrder, uuid.UUID(order_b["id"]))
+    row_a.created_at = same_time
+    row_b.created_at = same_time
+    await db_session.commit()
+
+    expected_first, expected_second = (
+        (order_a["id"], order_b["id"]) if order_a["id"] > order_b["id"] else (order_b["id"], order_a["id"])
+    )
+
+    resp = await client.get("/api/v1/laboratory/orders", headers=headers)
+    assert resp.status_code == 200, resp.text
+    ids_in_order = [row["id"] for row in resp.json()]
+    assert ids_in_order.index(expected_first) < ids_in_order.index(expected_second)

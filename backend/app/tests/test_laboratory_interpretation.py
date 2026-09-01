@@ -16,6 +16,7 @@ from app.services.laboratory_interpretation import interpret_result
 
 NUMERIC = LaboratoryResultType.NUMERIC
 TEXT = LaboratoryResultType.TEXT
+CATEGORICAL = LaboratoryResultType.CATEGORICAL
 LOW = LaboratoryInterpretation.LOW
 NORMAL = LaboratoryInterpretation.NORMAL
 HIGH = LaboratoryInterpretation.HIGH
@@ -33,6 +34,14 @@ def _text(value, expected="Negative"):
     return interpret_result(
         result_type=TEXT, numeric_value=None, text_value=value,
         range_low=None, range_high=None, expected_normal_text=expected,
+    )
+
+
+def _categorical(value, expected="Negative"):
+    return interpret_result(
+        result_type=CATEGORICAL, numeric_value=None, text_value=None,
+        range_low=None, range_high=None, expected_normal_text=expected,
+        categorical_value=value,
     )
 
 
@@ -93,6 +102,33 @@ class TestQualitativeInterpretation:
 
     def test_blank_text_value_returns_none(self):
         assert _text("   ") is None
+
+
+class TestCategoricalInterpretation:
+    """Qualitative/Categorical result-entry simplification: same
+    match-against-`expected_normal_text` rule as `TestQualitativeInterpretation`
+    above (Text), just reading the selected value from `categorical_value`
+    instead of `text_value` - see HBsAg (Positive/Negative) example."""
+
+    def test_matching_value_is_normal(self):
+        assert _categorical("Negative") == NORMAL
+        assert _categorical("negative") == NORMAL
+        assert _categorical("  Negative  ") == NORMAL
+
+    def test_mismatching_value_is_abnormal(self):
+        assert _categorical("Positive") == ABNORMAL
+
+    def test_no_expected_normal_text_returns_none(self):
+        assert _categorical("Negative", expected=None) is None
+
+    def test_blank_expected_normal_text_returns_none(self):
+        assert _categorical("Negative", expected="   ") is None
+
+    def test_missing_categorical_value_returns_none_even_with_expected_value(self):
+        assert _categorical(None) is None
+
+    def test_blank_categorical_value_returns_none(self):
+        assert _categorical("   ") is None
 
 
 class TestUnknownOrUnsupportedInput:

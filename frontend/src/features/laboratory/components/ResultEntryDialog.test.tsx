@@ -164,10 +164,13 @@ describe("ResultEntryDialog", () => {
 
       // Both parameters are shown - the saved ABO Group value, AND a blank,
       // still-selectable Rh Factor row (previously this second row was
-      // silently missing entirely).
+      // silently missing entirely). Both are configured-options Categorical
+      // parameters, so both render via the simplified layout (heading, not
+      // an editable Parameter input - see the "UI restrictions" describe
+      // block below for that assertion).
       expect(await screen.findByDisplayValue("O")).toBeInTheDocument();
-      const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
-      expect(paramInputs.map((i) => i.value)).toEqual(["ABO Group", "Rh Factor"]);
+      expect(screen.getByText("ABO Group")).toBeInTheDocument();
+      expect(screen.getByText("Rh Factor")).toBeInTheDocument();
       // Rh Factor's own Categorical select is present and still unselected.
       const selects = screen.getAllByRole("combobox").filter((el) => el.tagName === "SELECT") as HTMLSelectElement[];
       const rhSelect = selects.find(
@@ -233,8 +236,13 @@ describe("ResultEntryDialog", () => {
       expect(screen.getByText("Microscopic Examination")).toBeInTheDocument();
 
       // All 5 parameters render in template order, saved value included.
+      // Color/Protein are configured/unconfigured-options Categorical
+      // respectively (Color simplified - heading, not an editable Parameter
+      // input; Protein unconfigured - still the full grid), Specific
+      // Gravity/RBC/Bacteria are Numeric/Text (full grid, unaffected).
+      expect(screen.getByText("Color")).toBeInTheDocument();
       const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
-      expect(paramInputs.map((i) => i.value)).toEqual(["Color", "Specific Gravity", "Protein", "RBC", "Bacteria"]);
+      expect(paramInputs.map((i) => i.value)).toEqual(["Specific Gravity", "Protein", "RBC", "Bacteria"]);
       expect(screen.getByDisplayValue("Straw")).toBeInTheDocument();
     });
   });
@@ -361,7 +369,12 @@ describe("ResultEntryDialog", () => {
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
-      expect(screen.getAllByPlaceholderText("e.g. Hemoglobin").length).toBe(3); // Parameter name inputs, unchanged
+      // ABO Group/Rh Factor are configured-options Categorical (simplified
+      // layout, no editable Parameter input); the added Text "Remarks"
+      // parameter still uses the full grid, unchanged.
+      expect(screen.getAllByPlaceholderText("e.g. Hemoglobin").length).toBe(1);
+      expect(screen.getByText("ABO Group")).toBeInTheDocument();
+      expect(screen.getByText("Rh Factor")).toBeInTheDocument();
       expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0); // the Text row's Textarea still renders
     });
   });
@@ -376,10 +389,15 @@ describe("ResultEntryDialog", () => {
       const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
       expect(headings).toEqual(["Physical Examination", "Chemical Examination", "Microscopic Examination"]);
 
-      // Parameter-name inputs appear in template display_order, not re-sorted.
+      // Parameter-name inputs appear in template display_order, not
+      // re-sorted. Color is a configured-options Categorical parameter, so
+      // it renders via the simplified layout (a heading, not an editable
+      // Parameter input) - the remaining Numeric/unconfigured-Categorical/
+      // Text parameters still use the full grid, unaffected.
+      expect(screen.getByText("Color")).toBeInTheDocument();
       const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
       expect(paramInputs.map((i) => i.value)).toEqual([
-        "Color", "Specific Gravity", "Protein", "RBC", "Bacteria",
+        "Specific Gravity", "Protein", "RBC", "Bacteria",
       ]);
     });
 
@@ -581,8 +599,12 @@ describe("ResultEntryDialog", () => {
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
-      const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
-      expect(paramInputs.map((i) => i.value)).toEqual(["NS1", "IgM", "IgG"]);
+      // All three are configured-options Categorical parameters, so all
+      // three render via the simplified layout (heading, not an editable
+      // Parameter input).
+      expect(screen.getByText("NS1")).toBeInTheDocument();
+      expect(screen.getByText("IgM")).toBeInTheDocument();
+      expect(screen.getByText("IgG")).toBeInTheDocument();
       expect(screen.getAllByRole("option", { name: "Positive" }).length).toBe(3);
     });
   });
@@ -787,6 +809,164 @@ describe("ResultEntryDialog", () => {
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(screen.getByDisplayValue("No organisms seen")).toBeInTheDocument());
+    });
+  });
+
+  describe("Qualitative/Categorical result-entry simplification (HBsAg example)", () => {
+    function hbsagOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
+      return labOrder({
+        testType: "HEPATITIS B ANTIGEN (HBSAG)",
+        templateId: "template-hbsag",
+        template: {
+          id: "template-hbsag", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: "Immunology", specimenType: "Whole Blood",
+          defaultPrice: 0, turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+          parameters: [
+            {
+              id: "p-hbsag", parameterName: "HBsAg", unit: null, normalRange: "Negative", resultType: "Categorical",
+              displayOrder: 0, rangeLow: null, rangeHigh: null, expectedNormalText: "Negative",
+              options: ["Positive", "Negative"],
+            },
+          ],
+        },
+        ...overrides,
+      });
+    }
+
+    it("UI restrictions: Parameter name is a heading, not an editable input", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getByText("HBsAg")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("e.g. Hemoglobin")).not.toBeInTheDocument();
+    });
+
+    it("UI restrictions: no Result Type selector is shown", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.queryByDisplayValue("Categorical")).not.toBeInTheDocument();
+    });
+
+    it("UI restrictions: Units input is hidden entirely when the parameter has no unit", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.queryByText(/^Unit/)).not.toBeInTheDocument();
+      expect(screen.queryByText("Units")).not.toBeInTheDocument();
+    });
+
+    it("UI restrictions: Normal Range is a read-only display, not an editable input", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getByText("Normal Range: Negative")).toBeInTheDocument();
+      expect(screen.queryByDisplayValue("Negative")).not.toBeInTheDocument(); // no editable input holds this value
+    });
+
+    it("UI restrictions: Result is a dropdown containing the template-defined options", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getByRole("option", { name: "Positive" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Negative" })).toBeInTheDocument();
+    });
+
+    it("UI restrictions: Interpretation is not manually selectable (no Interpretation <select>)", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      // The only <select> on this dialog is the Result dropdown itself.
+      const selects = screen.getAllByRole("combobox").filter((el) => el.tagName === "SELECT");
+      expect(selects).toHaveLength(1);
+    });
+
+    it("UI restrictions: Remarks appears exactly once, and the stray Remove control is gone", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getAllByText("Remarks")).toHaveLength(1);
+      expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    });
+
+    it("selecting Positive sets Result=Positive and auto-derives Interpretation=Abnormal", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+      await userEvent.selectOptions(screen.getByRole("combobox"), "Positive");
+
+      expect(screen.getByDisplayValue("Positive")).toBeInTheDocument();
+      expect(screen.getByText("Abnormal")).toBeInTheDocument();
+    });
+
+    it("selecting Negative sets Result=Negative and auto-derives Interpretation=Normal, updating immediately on change", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+      const select = screen.getByRole("combobox");
+      await userEvent.selectOptions(select, "Positive");
+      expect(screen.getByText("Abnormal")).toBeInTheDocument();
+
+      await userEvent.selectOptions(select, "Negative");
+      expect(screen.getByDisplayValue("Negative")).toBeInTheDocument();
+      expect(screen.getByText("✓ Normal")).toBeInTheDocument();
+    });
+
+    it("submits the selected value under the template's own parameter name, with the live-computed interpretation (backend recomputes/verifies from the template regardless - see backend tests)", async () => {
+      const order = hbsagOrder();
+      getOrder.mockResolvedValue(order);
+      enterResults.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+      await userEvent.selectOptions(screen.getByRole("combobox"), "Positive");
+      await userEvent.click(screen.getByRole("button", { name: /save results/i }));
+
+      await waitFor(() => expect(enterResults).toHaveBeenCalled());
+      const [, submitted] = enterResults.mock.calls[enterResults.mock.calls.length - 1] as [string, Array<Record<string, unknown>>];
+      expect(submitted[0].parameterName).toBe("HBsAg");
+      expect(submitted[0].structuredValue).toEqual({ value: "Positive" });
+      expect(submitted[0].interpretation).toBe("Abnormal");
+    });
+
+    it("a saved Positive result reloads with Interpretation shown as Abnormal", async () => {
+      const order = hbsagOrder({
+        results: [
+          {
+            id: "res-hbsag", parameterName: "HBsAg", resultType: "Categorical", numericValue: null, textValue: null,
+            normalRange: "Negative", units: null, interpretation: "Abnormal", remarks: null, rangeLow: null, rangeHigh: null,
+            enteredBy: "user-1", enteredAt: "2026-01-01T00:00:00Z", structuredValue: { value: "Positive" }, site: null,
+          },
+        ],
+      });
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getByDisplayValue("Positive")).toBeInTheDocument());
+      expect(screen.getByText("Abnormal")).toBeInTheDocument();
+    });
+
+    it("an options-less Categorical parameter (production-realistic, no admin configuration yet) keeps the full grid, not the simplified layout", async () => {
+      const order = hbsagOrder({
+        template: {
+          ...hbsagOrder().template!,
+          parameters: [{ ...hbsagOrder().template!.parameters[0], options: null, expectedNormalText: null, normalRange: null }],
+        },
+      });
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getByRole("option", { name: "No options configured" })).toBeInTheDocument();
+      expect(screen.getByDisplayValue("HBsAg")).toBeInTheDocument(); // Parameter input still editable in the fallback grid
     });
   });
 });

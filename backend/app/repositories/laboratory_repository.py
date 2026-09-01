@@ -68,10 +68,27 @@ class LaboratoryRepository:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_for_clinic(self, clinic_id: UUID, *, status: LaboratoryOrderStatus | None = None) -> list[LaboratoryOrder]:
+        """The sole backer of the Laboratory tab/worklist (`GET /laboratory/orders`
+        with no `visit_id`, via `LaboratoryService.list_for_dashboard`) - newest
+        request first. Sorted by `created_at` (when the laboratory REQUEST/order
+        itself was created - set once at order creation and never touched by
+        later collect/process/complete/release transitions, unlike
+        `collected_at`/`completed_at`/`released_at`), descending, with `id`
+        descending as a stable tie-break for same-timestamp rows (two orders
+        created in the same request, or a clock with coarse resolution) so
+        pagination/repeated reads never reorder ties arbitrarily. No existing
+        filter/status meaning changed - `status` (still optional, still an
+        exact match) is applied identically to before this tie-break was
+        added."""
         filters = [LaboratoryOrder.clinic_id == clinic_id, LaboratoryOrder.is_deleted.is_(False)]
         if status is not None:
             filters.append(LaboratoryOrder.status == status)
-        stmt = select(LaboratoryOrder).where(*filters).options(*_order_options()).order_by(LaboratoryOrder.created_at.desc())
+        stmt = (
+            select(LaboratoryOrder)
+            .where(*filters)
+            .options(*_order_options())
+            .order_by(LaboratoryOrder.created_at.desc(), LaboratoryOrder.id.desc())
+        )
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_for_visit(self, visit_id: UUID, clinic_id: UUID) -> list[LaboratoryOrder]:

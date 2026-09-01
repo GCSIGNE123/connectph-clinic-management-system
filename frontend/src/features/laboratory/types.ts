@@ -271,8 +271,13 @@ export function interpretResult(params: {
   rangeLow: number | null | undefined;
   rangeHigh: number | null | undefined;
   expectedNormalText: string | null | undefined;
+  // Qualitative/Categorical simplification: a Categorical result's value
+  // (e.g. "Positive") - mirrors the backend's `categorical_value` param on
+  // `interpret_result()`. Undefined/omitted for every non-Categorical call
+  // site, unchanged.
+  categoricalValue?: string | null;
 }): LaboratoryInterpretation | null {
-  const { resultType, numericValue, textValue, rangeLow, rangeHigh, expectedNormalText } = params;
+  const { resultType, numericValue, textValue, rangeLow, rangeHigh, expectedNormalText, categoricalValue } = params;
 
   if (resultType === "Numeric") {
     if (rangeLow === null || rangeLow === undefined || rangeHigh === null || rangeHigh === undefined) return null;
@@ -286,6 +291,12 @@ export function interpretResult(params: {
     if (!expectedNormalText?.trim()) return null;
     if (!textValue?.trim()) return null;
     return textValue.trim().toLowerCase() === expectedNormalText.trim().toLowerCase() ? "Normal" : "Abnormal";
+  }
+
+  if (resultType === "Categorical") {
+    if (!expectedNormalText?.trim()) return null;
+    if (!categoricalValue?.trim()) return null;
+    return categoricalValue.trim().toLowerCase() === expectedNormalText.trim().toLowerCase() ? "Normal" : "Abnormal";
   }
 
   return null;

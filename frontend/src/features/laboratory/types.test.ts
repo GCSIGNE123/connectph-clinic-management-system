@@ -74,6 +74,13 @@ describe("interpretResult", () => {
     return interpretResult({ resultType: "Text", numericValue: null, textValue: value, rangeLow: null, rangeHigh: null, expectedNormalText: expected });
   }
 
+  function categorical(value: string | null, expected: string | null = "Negative") {
+    return interpretResult({
+      resultType: "Categorical", numericValue: null, textValue: null, rangeLow: null, rangeHigh: null,
+      expectedNormalText: expected, categoricalValue: value,
+    });
+  }
+
   it("returns Low for a value below the range", () => {
     expect(numeric(10)).toBe("Low");
   });
@@ -120,5 +127,25 @@ describe("interpretResult", () => {
 
   it("returns null when the text value is missing", () => {
     expect(text(null)).toBeNull();
+  });
+
+  // Qualitative/Categorical result-entry simplification: same
+  // match-against-expectedNormalText rule as Text above, just reading the
+  // selected value from `categoricalValue` instead of `textValue` - see
+  // `HBsAg` example in ResultEntryDialog.
+  it("HBsAg: returns Normal when the selected result matches Expected Normal Text ('Negative')", () => {
+    expect(categorical("Negative", "Negative")).toBe("Normal");
+  });
+
+  it("HBsAg: returns Abnormal when the selected result does not match Expected Normal Text", () => {
+    expect(categorical("Positive", "Negative")).toBe("Abnormal");
+  });
+
+  it("returns null for a categorical result with no Expected Normal Text configured", () => {
+    expect(categorical("Positive", null)).toBeNull();
+  });
+
+  it("returns null when the categorical value is missing", () => {
+    expect(categorical(null)).toBeNull();
   });
 });

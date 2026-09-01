@@ -68,7 +68,11 @@ function rowFromResult(r: LaboratoryResult, p?: LaboratoryTemplateParameter): Ro
     remarks: r.remarks ?? "",
     rangeLow: r.rangeLow,
     rangeHigh: r.rangeHigh,
-    expectedNormalText: null,
+    // `expectedNormalText` is transient/never persisted on `LaboratoryResult`
+    // itself (see schema docstring) - sourced from the template parameter
+    // here so re-opening an already-answered row can still live-recompute
+    // interpretation if the value is changed (see `updateRow` below).
+    expectedNormalText: p?.expectedNormalText ?? null,
     structuredValue: r.structuredValue,
     site: r.site,
     manualOverride: r.interpretation !== null,
@@ -211,8 +215,12 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
         const next = { ...r, ...patch };
         // Live-recompute the suggestion into the Interpretation dropdown as
         // the lab tech types the value - but never once they've manually
-        // overridden it themselves.
-        if (!next.manualOverride) {
+        // overridden it themselves. Categorical rows are the exception:
+        // the simplified qualitative UI (see render below) has no manual
+        // Interpretation control at all, so `manualOverride` can never
+        // meaningfully apply to them - interpretation always tracks the
+        // selected value live, immediately, per the simplified workflow.
+        if (!next.manualOverride || next.resultType === "Categorical") {
           next.interpretation = interpretResult({
             resultType: next.resultType,
             numericValue: next.numericValue,
@@ -220,6 +228,7 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
             rangeLow: next.rangeLow,
             rangeHigh: next.rangeHigh,
             expectedNormalText: next.expectedNormalText,
+            categoricalValue: (next.structuredValue?.value as string | undefined) ?? null,
           });
         }
         return next;
@@ -295,6 +304,64 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
               )}
               {group.rows.map(({ row, index }) => {
                 const categoricalConfigured = Boolean(row.options && row.options.length > 0);
+                // Qualitative/Categorical result-entry simplification: a
+                // template-predefined Categorical parameter with configured
+                // Options (e.g. HBsAg Positive/Negative) is a DATA ENTRY
+                // screen, not a test-configuration screen - the MedTech only
+                // picks the result; parameter name/type/unit/normal range are
+                // already known from the template and interpretation is
+                // derived automatically (see `updateRow` above), never
+                // manually chosen. This branch never fires for Numeric/Text/
+                // Titer/Microscopy rows, or for a Categorical row with no
+                // configured options - those keep the exact existing full
+                // grid below, unchanged.
+                if (row.resultType === "Categorical" && categoricalConfigured) {
+                  return (
+                    <div key={index} className="space-y-3 rounded-md border border-border p-3">
+                      <p className="text-sm font-semibold text-foreground">{row.parameterName}</p>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Result</label>
+                        <Select
+                          value={(row.structuredValue?.value as string | undefined) ?? ""}
+                          onChange={(e) => updateRow(index, { structuredValue: e.target.value ? { value: e.target.value } : null })}
+                        >
+                          <option value="">Select...</option>
+                          {(row.options ?? []).map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      {row.units ? <p className="text-sm text-muted-foreground">Unit: {row.units}</p> : null}
+                      {row.normalRange ? (
+                        <p className="text-sm text-muted-foreground">Normal Range: {row.normalRange}</p>
+                      ) : null}
+                      <div className="text-sm text-muted-foreground">
+                        Interpretation: <InterpretationBadge value={row.interpretation} />
+                      </div>
+                      {row.requiresSite && (
+                        // Same generic per-entry specimen-site mechanism as
+                        // the full grid below (e.g. KOH Mount) - preserved
+                        // here too so a Categorical+requiresSite parameter
+                        // doesn't lose this existing behavior just because
+                        // it also qualifies for the simplified layout.
+                        <div>
+                          <label className="text-xs text-muted-foreground">Site</label>
+                          <Input
+                            value={row.site ?? ""}
+                            onChange={(e) => updateRow(index, { site: e.target.value || null })}
+                            placeholder="e.g. Skin, Vaginal, Nail"
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-xs text-muted-foreground">Remarks</label>
+                        <Input value={row.remarks ?? ""} onChange={(e) => updateRow(index, { remarks: e.target.value })} />
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <div key={index} className="grid grid-cols-12 gap-2 rounded-md border border-border p-3">
                     <div className="col-span-12 sm:col-span-3">
