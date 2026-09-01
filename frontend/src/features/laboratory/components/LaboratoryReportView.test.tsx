@@ -1109,7 +1109,7 @@ describe("LaboratoryReportView", () => {
         />
       );
       await waitFor(() => expect(mockFetchBlob).toHaveBeenCalledWith("/laboratory/orders/lab-1/med-tech-signature/file"));
-      const img = await screen.findByAltText("Med Technician in Charge signature");
+      const img = await screen.findByAltText("Med Technologist in Charge signature");
       const name = screen.getByText("Maria Cruz");
       const column = screen.getByTestId("med-tech-signatory");
       const position = (node: Element) => Array.from(column.querySelectorAll("*")).indexOf(node);
@@ -1138,7 +1138,7 @@ describe("LaboratoryReportView", () => {
         <LaboratoryReportView order={order({ medTechNameSnapshot: "Maria Cruz", medTechSignatureSnapshotUrl: null })} />
       );
       expect(mockFetchBlob).not.toHaveBeenCalled();
-      expect(screen.queryByAltText("Med Technician in Charge signature")).not.toBeInTheDocument();
+      expect(screen.queryByAltText("Med Technologist in Charge signature")).not.toBeInTheDocument();
       expect(screen.getByText("Maria Cruz")).toBeInTheDocument();
     });
 

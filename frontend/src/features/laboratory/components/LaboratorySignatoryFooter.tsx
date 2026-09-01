@@ -22,7 +22,7 @@ export function LaboratorySignatoryFooter({ order }: { order: LaboratoryOrder })
   return (
     <div className="mt-4 grid grid-cols-2 gap-6 text-[10px]">
       <SignatoryColumn
-        label="Med Technician in Charge"
+        label="Med Technologist in Charge"
         name={order.medTechNameSnapshot}
         roleLabel="Medical Technologist"
         licenseLabel="RMT No."
