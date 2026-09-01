@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReportRows, groupReportRowsBySection, reportResultValue } from "./report";
+import { buildReportRows, groupReportRowsBySection, isQualitativeCategoricalRow, reportResultValue } from "./report";
 import type { LaboratoryOrder, LaboratoryResult, LaboratoryTemplateParameter } from "@/features/laboratory/types";
 
 function result(overrides: Partial<LaboratoryResult> = {}): LaboratoryResult {
@@ -36,7 +36,7 @@ function order(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
 describe("buildReportRows", () => {
   it("#1: a template with no sections produces rows with section=null, no section invented", () => {
     const rows = buildReportRows(order());
-    expect(rows).toEqual([{ parameterName: "Hemoglobin", section: null, results: [result()] }]);
+    expect(rows).toEqual([{ parameterName: "Hemoglobin", section: null, results: [result()], options: null }]);
   });
 
   it("#2: rows follow template display order, not result array order", () => {
@@ -76,7 +76,20 @@ describe("buildReportRows", () => {
   it("an untemplated order lists results as-is with no section", () => {
     const o = order({ template: null, templateId: null });
     const rows = buildReportRows(o);
-    expect(rows).toEqual([{ parameterName: "Hemoglobin", section: null, results: [result()] }]);
+    expect(rows).toEqual([{ parameterName: "Hemoglobin", section: null, results: [result()], options: null }]);
+  });
+
+  it("a templated row carries its parameter's configured options (needed to decide the qualitative matrix layout)", () => {
+    const o = order({
+      template: {
+        id: "t", testName: "HBsAg", testCategory: null, specimenType: null, defaultPrice: 0,
+        turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+        parameters: [param({ parameterName: "HBsAg", resultType: "Categorical", options: ["Positive", "Negative"] })],
+      },
+      results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Positive" } })],
+    });
+    const rows = buildReportRows(o);
+    expect(rows[0].options).toEqual(["Positive", "Negative"]);
   });
 
   it("#11: multiple site-specific results for the same parameter name stay independent, not collapsed", () => {
@@ -141,5 +154,39 @@ describe("reportResultValue", () => {
 
   it("returns null (not a fabricated placeholder) when the value is genuinely absent", () => {
     expect(reportResultValue(result({ resultType: "Numeric", numericValue: null }))).toBeNull();
+  });
+});
+
+describe("isQualitativeCategoricalRow", () => {
+  it("a Categorical row with configured options qualifies for the matrix layout", () => {
+    const row = {
+      parameterName: "NS1", section: null,
+      results: [result({ resultType: "Categorical", structuredValue: { value: "Negative" } })],
+      options: ["Positive", "Negative"],
+    };
+    expect(isQualitativeCategoricalRow(row)).toBe(true);
+  });
+
+  it("a Categorical row with NO configured options does not qualify (existing full-grid layout)", () => {
+    const row = {
+      parameterName: "Protein", section: null,
+      results: [result({ resultType: "Categorical", structuredValue: { value: "Negative" } })],
+      options: null,
+    };
+    expect(isQualitativeCategoricalRow(row)).toBe(false);
+  });
+
+  it("a Numeric row never qualifies, regardless of options", () => {
+    const row = {
+      parameterName: "Hemoglobin", section: null,
+      results: [result({ resultType: "Numeric", numericValue: 14 })],
+      options: null,
+    };
+    expect(isQualitativeCategoricalRow(row)).toBe(false);
+  });
+
+  it("a row with zero results does not qualify", () => {
+    const row = { parameterName: "NS1", section: null, results: [], options: ["Positive", "Negative"] };
+    expect(isQualitativeCategoricalRow(row)).toBe(false);
   });
 });

@@ -683,6 +683,215 @@ describe("LaboratoryReportView", () => {
     });
   });
 
+  // --- Qualitative Positive/Negative MATRIX layout (client sample: one row
+  // per test, one column per Categorical parameter - "TEST | NS1 | IgM |
+  // IgG", never Unit/Normal Values/Flag/Interpretation for this layout).
+  // Selected purely by `isQualitativeCategoricalRow` (resultType +
+  // configured `options`), never by test name - every test below uses a
+  // different, fictional parameter set to prove that. ---
+  describe("Laboratory Report print redesign - qualitative Positive/Negative MATRIX layout", () => {
+    function categoricalParam(name: string) {
+      return param({ parameterName: name, resultType: "Categorical", options: ["Positive", "Negative"] });
+    }
+    function categoricalResult(name: string, value: string) {
+      return result({ parameterName: name, resultType: "Categorical", structuredValue: { value }, interpretation: value === "Positive" ? "Abnormal" : "Normal", normalRange: "Negative", units: null });
+    }
+
+    it("A: a 3-parameter test (Dengue-style) renders one TEST column plus one column per parameter, with matching results", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "DENGUE RAPID TEST (DRT)",
+            template: {
+              id: "t-drt", testName: "DENGUE RAPID TEST (DRT)", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("NS1"), categoricalParam("IgM"), categoricalParam("IgG")],
+            },
+            results: [
+              categoricalResult("NS1", "Negative"),
+              categoricalResult("IgM", "Negative"),
+              categoricalResult("IgG", "Negative"),
+            ],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "NS1", "IgM", "IgG"]);
+      // Appears twice - the header's "Test" info row, and the matrix's own TEST cell.
+      expect(screen.getAllByText("DENGUE RAPID TEST (DRT)")).toHaveLength(2);
+      const negatives = screen.getAllByText("Negative");
+      expect(negatives).toHaveLength(3);
+      // No Unit/Normal Values/Flag/Interpretation columns for this layout.
+      expect(screen.queryByRole("columnheader", { name: "Unit" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Normal Values" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+    });
+
+    it("B: a 2-parameter test (Typhoid-style) renders IgM/IgG columns with Positive results", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "S TYPHI TYPHOID",
+            template: {
+              id: "t-typhoid", testName: "S TYPHI TYPHOID", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("IgM"), categoricalParam("IgG")],
+            },
+            results: [categoricalResult("IgM", "Positive"), categoricalResult("IgG", "Positive")],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "IgM", "IgG"]);
+      expect(screen.getAllByText("S TYPHI TYPHOID")).toHaveLength(2);
+      expect(screen.getAllByText("Positive")).toHaveLength(2);
+      expect(screen.queryByRole("columnheader", { name: "Unit" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Normal Values" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+    });
+
+    it("C: a single-parameter test (HBsAg-style) uses the parameter name itself as the column heading, not a generic 'Result'", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "HEPATITIS B ANTIGEN (HBSAG)",
+            template: {
+              id: "t-hbsag", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("HBsAg")],
+            },
+            results: [categoricalResult("HBsAg", "Positive")],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "HBsAg"]);
+      expect(screen.queryByText("Result")).not.toBeInTheDocument();
+      // "HEPATITIS B ANTIGEN (HBSAG)" legitimately appears twice - once in
+      // the header's "Test" info row, once as the matrix's own TEST cell.
+      expect(screen.getAllByText("HEPATITIS B ANTIGEN (HBSAG)")).toHaveLength(2);
+      expect(screen.getByText("Positive")).toBeInTheDocument();
+    });
+
+    it("D: a 4-parameter test is fully dynamic - not assuming exactly 2 or 3 columns", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "Fictional 4-Analyte Panel",
+            template: {
+              id: "t-four", testName: "Fictional 4-Analyte Panel", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("A"), categoricalParam("B"), categoricalParam("C"), categoricalParam("D")],
+            },
+            results: [
+              categoricalResult("A", "Negative"), categoricalResult("B", "Positive"),
+              categoricalResult("C", "Negative"), categoricalResult("D", "Positive"),
+            ],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "A", "B", "C", "D"]);
+    });
+
+    it("E: Numeric reports are completely unaffected by the matrix layout - Unit/Normal Values/Flag still render", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ results: [result({ units: "g/dL", normalRange: "12.0-16.0", interpretation: "High" })] })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(screen.getByText("g/dL")).toBeInTheDocument();
+      expect(screen.getByText("12.0-16.0")).toBeInTheDocument();
+      expect(screen.getByText("H")).toBeInTheDocument();
+    });
+
+    it("F: an unconfigured Categorical result (no options) keeps the existing full-grid layout, never the matrix", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "Urinalysis",
+            template: {
+              id: "t-ua2", testName: "Urinalysis", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [param({ parameterName: "Protein", resultType: "Categorical" })],
+            },
+            results: [result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Negative" } })],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(screen.getByText("Protein")).toBeInTheDocument();
+    });
+
+    it("G: interpretation remains available on the underlying result even though the matrix never prints it", () => {
+      const drtResult = categoricalResult("NS1", "Positive");
+      expect(drtResult.interpretation).toBe("Abnormal");
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: {
+              id: "t-drt2", testName: "Dengue NS1", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("NS1")],
+            },
+            results: [drtResult],
+          })}
+        />
+      );
+      // The matrix never renders the word "Abnormal" or a flag character,
+      // even though the underlying data object above still carries it.
+      expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+    });
+
+    it("H: the MedTech and Pathologist signature blocks still render alongside a qualitative matrix report", () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+        <LaboratoryReportView
+          order={order({
+            medTechNameSnapshot: "Aijilie Mosquite",
+            pathologistNameSnapshot: "Dr. Santos",
+            template: {
+              id: "t-hbsag2", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("HBsAg")],
+            },
+            results: [categoricalResult("HBsAg", "Positive")],
+          })}
+        />
+        </QueryClientProvider>
+      );
+      expect(screen.getByTestId("med-tech-signatory")).toBeInTheDocument();
+      expect(screen.getByTestId("pathologist-signatory")).toBeInTheDocument();
+      expect(screen.getByText("Aijilie Mosquite")).toBeInTheDocument();
+      expect(screen.getByText("Dr. Santos")).toBeInTheDocument();
+    });
+
+    it("also prints the 'refer to your doctor' note only for a qualitative matrix report, not for a purely quantitative one", () => {
+      const { rerender } = render(
+        <LaboratoryReportView
+          order={order({
+            template: {
+              id: "t-hbsag3", testName: "HEPATITIS B ANTIGEN (HBSAG)", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [categoricalParam("HBsAg")],
+            },
+            results: [categoricalResult("HBsAg", "Positive")],
+          })}
+        />
+      );
+      expect(screen.getByText("Please refer to your doctor for interpretation of the results.")).toBeInTheDocument();
+
+      rerender(<LaboratoryReportView order={order({ results: [result()] })} />);
+      expect(screen.queryByText("Please refer to your doctor for interpretation of the results.")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Laboratory Report print redesign, round 5 (clinic contact info in header)", () => {
     it("1: the clinic address appears in the header when configured", () => {
       render(<LaboratoryReportView order={order({ clinicAddress: "123 Main Street, Ormoc City, Leyte" })} />);

@@ -1,7 +1,13 @@
 import { FlaskConical } from "lucide-react";
 import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
 import { LaboratorySignatoryFooter } from "@/features/laboratory/components/LaboratorySignatoryFooter";
-import { buildReportRows, groupReportRowsBySection, reportResultValue } from "@/features/laboratory/lib/report";
+import {
+  buildReportRows,
+  groupReportRowsBySection,
+  isQualitativeCategoricalRow,
+  reportResultValue,
+  type LaboratoryReportRow,
+} from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/api-url";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
@@ -38,7 +44,20 @@ const COLUMN_WIDTHS = { test: "30%", result: "14%", unit: "13%", normalValues: "
  * still the exact same five columns/data sources, just laid out to use
  * the Letter page the way the clinic's own Word-based report already did. */
 export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
-  const groups = groupReportRowsBySection(buildReportRows(order));
+  // Qualitative Positive/Negative matrix layout (per-clinic sample: one row
+  // per TEST, one column per Categorical parameter - "TEST | NS1 | IgM |
+  // IgG" for Dengue Rapid Test, "TEST | HBsAg" for a single-parameter test)
+  // vs. the existing five-column quantitative layout - decided PER ROW via
+  // `isQualitativeCategoricalRow` (options + resultType, never a test-name
+  // check), so a template that genuinely mixes both kinds of parameters
+  // still prints each kind through its own correct layout. In every
+  // template actually seeded/configured in this codebase a test is
+  // entirely one kind or the other, so in practice exactly one of the two
+  // tables below renders.
+  const allRows = buildReportRows(order);
+  const categoricalRows = allRows.filter(isQualitativeCategoricalRow);
+  const standardRows = allRows.filter((row) => !isQualitativeCategoricalRow(row));
+  const groups = groupReportRowsBySection(standardRows);
   // Round 5: clinic contact line - bullet-joins only the fields that are
   // actually configured (never a fake placeholder, never a dangling "•"
   // for a missing field), sourced entirely from the existing clinic
@@ -148,7 +167,12 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
             </table>
           </div>
         ))}
-        {groups.length === 0 ? <p className="py-2 text-muted-foreground">No results entered yet.</p> : null}
+        {categoricalRows.length > 0 ? (
+          <QualitativeResultMatrix testLabel={order.testType} rows={categoricalRows} />
+        ) : null}
+        {groups.length === 0 && categoricalRows.length === 0 ? (
+          <p className="py-2 text-muted-foreground">No results entered yet.</p>
+        ) : null}
       </div>
 
       <div className="report-notes mt-3 rounded-sm border border-border px-2 py-1.5 text-[9px] text-muted-foreground sm:text-[10px]">
@@ -156,6 +180,13 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
         <ul className="list-disc space-y-0.5 pl-4">
           <li>This report is system-generated.</li>
           <li>Reference ranges may vary based on age, sex, and clinical condition.</li>
+          {/* Client sample's "OTHERS: Please refer to your doctor for
+              interpretation of the results." - added as one more bullet in
+              this ALREADY-EXISTING note box (reused, not duplicated as a
+              separate "OTHERS" block) and only for a report that actually
+              contains a qualitative Positive/Negative matrix - a purely
+              quantitative report keeps exactly its prior two bullets. */}
+          {categoricalRows.length > 0 ? <li>Please refer to your doctor for interpretation of the results.</li> : null}
         </ul>
       </div>
 
@@ -167,6 +198,55 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           never repeated per page/section. */}
       <LaboratorySignatoryFooter order={order} />
     </div>
+  );
+}
+
+/** Qualitative Positive/Negative matrix - one row (the test itself), one
+ * column per Categorical parameter, parameter names as the column
+ * headings ("TEST | NS1 | IgM | IgG" for a 3-parameter test, "TEST | HBsAg"
+ * for a single-parameter one) - entirely dynamic on `rows.length`, never
+ * assuming 1/2/3 parameters. Deliberately omits Unit/Normal Values/Flag/
+ * Interpretation: none of those are meaningful for a bare Positive/
+ * Negative result, matching the clinic's own paper-report sample. The
+ * underlying `interpretation` value is untouched in the data (still
+ * computed and stored exactly as before) - this component simply never
+ * reads it. A `requiresSite` parameter (multiple results sharing one
+ * parameter name) is not a real-world Positive/Negative case in this
+ * codebase's own templates, so only the first result is shown per column;
+ * documented here rather than silently dropped. */
+function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null | undefined; rows: LaboratoryReportRow[] }) {
+  const testColumnWidth = 30;
+  const resultColumnWidth = rows.length > 0 ? (100 - testColumnWidth) / rows.length : 0;
+
+  return (
+    <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: `${testColumnWidth}%` }} />
+        {rows.map((row) => (
+          <col key={row.parameterName} style={{ width: `${resultColumnWidth}%` }} />
+        ))}
+      </colgroup>
+      <thead>
+        <tr className="report-table-head bg-slate-800 text-white">
+          <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+          {rows.map((row) => (
+            <th key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
+              {row.parameterName}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="report-row border-b border-border/60 last:border-0">
+          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? "-"}</td>
+          {rows.map((row) => (
+            <td key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
+              {reportResultValue(row.results[0]) ?? <span className="text-muted-foreground">-</span>}
+            </td>
+          ))}
+        </tr>
+      </tbody>
+    </table>
   );
 }
 

@@ -14,6 +14,12 @@ export interface LaboratoryReportRow {
   parameterName: string;
   section: string | null;
   results: LaboratoryResult[];
+  // The matching template parameter's configured Categorical choice list -
+  // only ever populated for a templated order (an untemplated result has no
+  // parameter definition to read this from). Carried here purely so the
+  // report can decide compact-vs-full layout per row without re-fetching
+  // the template - see `isQualitativeCategoricalRow` below.
+  options?: string[] | null;
 }
 
 export function buildReportRows(order: LaboratoryOrder): LaboratoryReportRow[] {
@@ -34,18 +40,43 @@ export function buildReportRows(order: LaboratoryOrder): LaboratoryReportRow[] {
         parameterName: parameter.parameterName,
         section: parameter.section ?? null,
         results: resultsByName.get(parameter.parameterName.trim().toLowerCase()) ?? [],
+        options: parameter.options ?? null,
       }))
       .filter((row) => row.results.length > 0);
   }
 
   // Untemplated order (test_type matched no active template): no template
   // means no defined order/section to respect - list results exactly as
-  // stored, one row each, no section grouping invented.
+  // stored, one row each, no section grouping invented. `options` is
+  // unknown here (no parameter definition available), so these rows never
+  // qualify for the compact categorical layout - they keep the existing
+  // full rendering, same as before this change.
   return order.results.map((result) => ({
     parameterName: result.parameterName,
     section: null,
     results: [result],
+    options: null,
   }));
+}
+
+/** Qualitative Positive/Negative (or any configured-options) Categorical
+ * report layout signal - deliberately the EXACT SAME gate
+ * `ResultEntryDialog`'s simplified data-entry UI already uses
+ * (`resultType === "Categorical" && options.length > 0`), not a new rule
+ * and not a test-name check. A Categorical parameter with no configured
+ * options (e.g. Urinalysis's Color/Protein, still awaiting Administrator
+ * configuration) does NOT qualify - it keeps the existing full-grid
+ * report layout, since there is nothing indicating it's a simple
+ * qualitative result until an Administrator configures it, matching the
+ * result-entry side's own "never invent a constraint that wasn't
+ * configured" rule. Every result on the row must agree (a `requiresSite`
+ * row's multiple per-site results all share the same parameter/options). */
+export function isQualitativeCategoricalRow(row: LaboratoryReportRow): boolean {
+  return (
+    Boolean(row.options && row.options.length > 0) &&
+    row.results.length > 0 &&
+    row.results.every((r) => r.resultType === "Categorical")
+  );
 }
 
 /** Contiguous grouping by `section` - identical convention to
