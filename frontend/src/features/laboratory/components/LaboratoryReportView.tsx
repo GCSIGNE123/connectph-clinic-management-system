@@ -95,7 +95,14 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
       <div className="grid min-w-0 grid-cols-2 gap-x-4 border-y-2 border-slate-800 py-1.5">
         <div>
           <InfoRow label="Patient Name" value={order.patientName} />
-          <InfoRow label="Test" value={order.testType} />
+          {/* The Test field is omitted from the header for a qualitative
+              matrix report - the matrix itself already shows the parent
+              test name as its first cell/row label (client reference:
+              "DENGUE RAPID TEST | Negative | Positive | Negative"), so
+              repeating it here would be the same redundancy this decision
+              is meant to remove. A standard (non-matrix) report keeps this
+              field exactly as before. */}
+          {categoricalRows.length === 0 ? <InfoRow label="Test" value={order.testType} /> : null}
           <InfoRow label="Visit #" value={order.visitNumber} />
           <InfoRow label="Requesting Doctor" value={order.doctorName} />
         </div>
@@ -168,7 +175,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           </div>
         ))}
         {categoricalRows.length > 0 ? (
-          <QualitativeResultMatrix rows={categoricalRows} />
+          <QualitativeResultMatrix testLabel={order.testType} rows={categoricalRows} />
         ) : null}
         {groups.length === 0 && categoricalRows.length === 0 ? (
           <p className="py-2 text-muted-foreground">No results entered yet.</p>
@@ -201,36 +208,41 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   );
 }
 
-/** Qualitative Positive/Negative matrix - one column per Categorical
- * parameter, parameter names as the column headings ("NS1 | IgM | IgG" for
- * a 3-parameter test, just "HBsAg" for a single-parameter one), one row of
- * results directly beneath - entirely dynamic on `rows.length`, never
- * assuming 1/2/3 parameters. No "Test"/parent-test-name column: the
- * report header's own "Test: <name>" InfoRow already carries that
- * information, so repeating it as this table's first column would be
- * redundant (per-clinic feedback) - the matrix exists purely to show
- * "which parameter -> which result" for the one test already named above
- * it. Deliberately omits Unit/Normal Values/Flag/Interpretation: none of
- * those are meaningful for a bare Positive/Negative result, matching the
- * clinic's own paper-report sample. The underlying `interpretation` value
- * is untouched in the data (still computed and stored exactly as before) -
+/** Qualitative Positive/Negative matrix - client reference format: the
+ * parent test name as the first cell/row label ("DENGUE RAPID TEST"),
+ * then one column per Categorical parameter, parameter names as the
+ * column headings ("NS1 | IgM | IgG" for a 3-parameter test, just
+ * "HBsAg" for a single-parameter one) with results directly beneath -
+ * entirely dynamic on `rows.length`, never assuming 1/2/3 parameters.
+ * The parent test name lives ONLY here (not repeated in the report
+ * header's InfoRow block - see the `categoricalRows.length === 0` guard
+ * around that "Test" row above) - the client's own serology reference
+ * shows the parent test name inside the table itself, so this is the
+ * one place it belongs for a qualitative report. Deliberately omits
+ * Unit/Normal Values/Flag/Interpretation: none of those are meaningful
+ * for a bare Positive/Negative result, matching the clinic's own
+ * paper-report sample. The underlying `interpretation` value is
+ * untouched in the data (still computed and stored exactly as before) -
  * this component simply never reads it. A `requiresSite` parameter
  * (multiple results sharing one parameter name) is not a real-world
  * Positive/Negative case in this codebase's own templates, so only the
  * first result is shown per column; documented here rather than silently
  * dropped. */
-function QualitativeResultMatrix({ rows }: { rows: LaboratoryReportRow[] }) {
-  const resultColumnWidth = rows.length > 0 ? 100 / rows.length : 0;
+function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null | undefined; rows: LaboratoryReportRow[] }) {
+  const testColumnWidth = 30;
+  const resultColumnWidth = rows.length > 0 ? (100 - testColumnWidth) / rows.length : 0;
 
   return (
     <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
       <colgroup>
+        <col style={{ width: `${testColumnWidth}%` }} />
         {rows.map((row) => (
           <col key={row.parameterName} style={{ width: `${resultColumnWidth}%` }} />
         ))}
       </colgroup>
       <thead>
         <tr className="report-table-head bg-slate-800 text-white">
+          <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
           {rows.map((row) => (
             <th key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
               {row.parameterName}
@@ -240,6 +252,7 @@ function QualitativeResultMatrix({ rows }: { rows: LaboratoryReportRow[] }) {
       </thead>
       <tbody>
         <tr className="report-row border-b border-border/60 last:border-0">
+          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? "-"}</td>
           {rows.map((row) => (
             <td key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
               {reportResultValue(row.results[0]) ?? <span className="text-muted-foreground">-</span>}
