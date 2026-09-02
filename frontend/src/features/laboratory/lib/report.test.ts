@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAgeSexLine,
   buildCategoryHeading,
   buildReportRows,
   groupReportRowsBySection,
@@ -24,7 +25,7 @@ function param(overrides: Partial<LaboratoryTemplateParameter> = {}): Laboratory
 function order(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-1", visitId: "visit-1", visitNumber: "VIS-1",
-    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: null, doctorName: null,
+    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: null, doctorName: null,
     templateId: "template-1",
     template: {
       id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0,
@@ -254,5 +255,38 @@ describe("buildCategoryHeading", () => {
     expect(buildCategoryHeading("Hematology", "")).toBe("HEMATOLOGY TEST");
     expect(buildCategoryHeading("Hematology", "   ")).toBe("HEMATOLOGY TEST");
     expect(buildCategoryHeading("Hematology", null)).toBe("HEMATOLOGY TEST");
+  });
+});
+
+describe("buildAgeSexLine", () => {
+  it("formats a Male patient with a known age as '22 yrs / M'", () => {
+    expect(buildAgeSexLine(22, "Male")).toBe("22 yrs / M");
+  });
+
+  it("formats a Female patient with a known age as '35 yrs / F'", () => {
+    expect(buildAgeSexLine(35, "Female")).toBe("35 yrs / F");
+  });
+
+  it("maps an Other sex value to 'O'", () => {
+    expect(buildAgeSexLine(40, "Other")).toBe("40 yrs / O");
+  });
+
+  it("renders '- / M' when age is missing but sex is known", () => {
+    expect(buildAgeSexLine(null, "Male")).toBe("- / M");
+    expect(buildAgeSexLine(undefined, "Male")).toBe("- / M");
+  });
+
+  it("renders '22 yrs / -' when sex is missing but age is known", () => {
+    expect(buildAgeSexLine(22, null)).toBe("22 yrs / -");
+    expect(buildAgeSexLine(22, undefined)).toBe("22 yrs / -");
+  });
+
+  it("collapses to a single '-' when both age and sex are missing - never '- / -'", () => {
+    expect(buildAgeSexLine(null, null)).toBe("-");
+    expect(buildAgeSexLine(undefined, undefined)).toBe("-");
+  });
+
+  it("age 0 (a newborn) is a real value, not treated as missing", () => {
+    expect(buildAgeSexLine(0, "Female")).toBe("0 yrs / F");
   });
 });

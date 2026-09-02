@@ -85,6 +85,13 @@ export interface LaboratoryOrder {
   queueNumber: string | null;
   patientId: string;
   patientName: string | null;
+  // Client requirement (report-header Age/Sex): computed fresh by the
+  // backend on every read from the patient's existing birth date/gender -
+  // see `LaboratoryOrderRead.patient_age`/`patient_sex`'s own doc comment.
+  // `patientSex` is the raw backend value ("Male"/"Female"/"Other") - see
+  // `buildAgeSexLine` in report.ts for the compact "M"/"F" display mapping.
+  patientAge: number | null;
+  patientSex: string | null;
   doctorId: string | null;
   doctorName: string | null;
   templateId: string | null;

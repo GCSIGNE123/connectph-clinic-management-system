@@ -21,7 +21,7 @@ function labOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-20260101-000001", visitId: "visit-1", visitNumber: "VIS-1",
     queueNumber: "L003",
-    patientId: "patient-1", patientName: "Juana Dela Cruz", doctorId: "doctor-1", doctorName: "Jose Rizal",
+    patientId: "patient-1", patientName: "Juana Dela Cruz", patientAge: null, patientSex: null, doctorId: "doctor-1", doctorName: "Jose Rizal",
     templateId: null, template: null, testType: "CBC", priority: "Routine", status: "Requested",
     scheduledDate: null, collectedAt: null, collectedBy: null, processingStartedAt: null,
     completedAt: null, releasedAt: null, releasedBy: null, invoiceItemId: null,
@@ -116,8 +116,8 @@ describe("LaboratoryWorklistTable", () => {
       renderWithClient(
         <LaboratoryWorklistTable
           orders={[
-            labOrder({ id: "lab-1", patientName: "Patient Row One", status: "Released" }),
-            labOrder({ id: "lab-2", patientName: "Patient Row Two", status: "Released" }),
+            labOrder({ id: "lab-1", patientName: "Patient Row One", patientAge: null, patientSex: null, status: "Released" }),
+            labOrder({ id: "lab-2", patientName: "Patient Row Two", patientAge: null, patientSex: null, status: "Released" }),
           ]}
         />
       );
@@ -133,8 +133,8 @@ describe("LaboratoryWorklistTable", () => {
       renderWithClient(
         <LaboratoryWorklistTable
           orders={[
-            labOrder({ id: "lab-1", patientName: "Requested Patient", status: "Requested" }),
-            labOrder({ id: "lab-2", patientName: "Processing Patient", status: "Processing" }),
+            labOrder({ id: "lab-1", patientName: "Requested Patient", patientAge: null, patientSex: null, status: "Requested" }),
+            labOrder({ id: "lab-2", patientName: "Processing Patient", patientAge: null, patientSex: null, status: "Processing" }),
           ]}
         />
       );

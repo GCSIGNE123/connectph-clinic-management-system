@@ -60,6 +60,8 @@ function toOrder(raw: any): LaboratoryOrder {
     queueNumber: raw.queue_number ?? null,
     patientId: raw.patient_id,
     patientName: raw.patient_name ?? null,
+    patientAge: raw.patient_age ?? null,
+    patientSex: raw.patient_sex ?? null,
     doctorId: raw.doctor_id ?? null,
     doctorName: raw.doctor_name ?? null,
     templateId: raw.template_id ?? null,

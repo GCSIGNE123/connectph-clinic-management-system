@@ -192,6 +192,16 @@ class LaboratoryOrderRead(BaseModel):
     queue_number: str | None = None
     patient_id: UUID
     patient_name: str | None = None
+    # Client requirement (report-header Age/Sex): computed fresh on every
+    # read from the patient's existing `birth_date`/`gender` - the exact
+    # same "as of today, no snapshot" convention already established by
+    # `MedicalCertificateDetail.patient_age`/`patient_sex` - never a stored
+    # column, never fabricated (None with no linked patient). `patient_sex`
+    # is the raw `Gender` enum value ("Male"/"Female"/"Other"), matching
+    # `patient_name`'s own "populated for every response, not GET-by-id-only"
+    # convention - the frontend owns the compact "M"/"F" display mapping.
+    patient_age: int | None = None
+    patient_sex: str | None = None
     doctor_id: UUID | None = None
     doctor_name: str | None = None
     template_id: UUID | None = None

@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaboratoryReportView } from "./LaboratoryReportView";
 import type { LaboratoryOrder, LaboratoryResult, LaboratoryTemplateParameter } from "@/features/laboratory/types";
+import { formatDateTime } from "@/lib/utils";
 
 URL.createObjectURL = vi.fn(() => "blob:mock-url");
 URL.revokeObjectURL = vi.fn();
@@ -32,7 +33,7 @@ function param(overrides: Partial<LaboratoryTemplateParameter> = {}): Laboratory
 function order(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-1", visitId: "visit-1", visitNumber: "VIS-1",
-    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: "doc-1", doctorName: "Jose Rizal",
+    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: "doc-1", doctorName: "Jose Rizal",
     templateId: "template-1",
     template: {
       id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0,
@@ -77,11 +78,11 @@ describe("LaboratoryReportView", () => {
   // for a walk-in/direct-to-laboratory patient with no Requesting
   // Doctor). ---
   describe("Header rearrangement (client feedback)", () => {
-    it("renders the two info columns in the exact requested order: Patient Name/Requesting Doctor/Visit #/Order No., then Status/Collected/Completed/Released", () => {
+    it("renders the two info columns in the exact requested order: Patient Name/Requesting Doctor/Visit #/Order No., then Age / Sex/Collected/Completed/Released", () => {
       render(
         <LaboratoryReportView
           order={order({
-            patientName: "Paul Test", doctorName: "Dr. Santos", visitNumber: "VIS-1", orderNumber: "ORD-1",
+            patientName: "Paul Test", patientAge: null, patientSex: null, doctorName: "Dr. Santos", visitNumber: "VIS-1", orderNumber: "ORD-1",
             status: "Released", collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z",
           })}
         />
@@ -96,7 +97,11 @@ describe("LaboratoryReportView", () => {
       // regardless.
       const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
       const labels = Array.from(headerBlock.querySelectorAll("div > div > span:first-child")).map((el) => el.textContent);
-      expect(labels).toEqual(["Patient Name", "Requesting Doctor", "Visit #", "Order No.", "Status", "Collected", "Completed", "Released"]);
+      // Client requirement (remove Status row): "Status" is gone from the
+      // right column entirely now - the order's own `status` field is no
+      // longer rendered anywhere in the header (see the dedicated
+      // describe block below for the full set of removal assertions).
+      expect(labels).toEqual(["Patient Name", "Requesting Doctor", "Visit #", "Order No.", "Age / Sex", "Collected", "Completed", "Released"]);
     });
 
     it("does not render a Test row/label in the header at all, for a standard report", () => {
@@ -120,17 +125,17 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("ORD-20260901-000007")).toBeInTheDocument();
     });
 
-    it("Status/Collected/Completed/Released remain in the right column, unaffected by the reorder", () => {
+    it("Collected/Completed/Released remain in the right column, unaffected by the reorder - Status is gone (see the dedicated describe block below)", () => {
       render(
         <LaboratoryReportView
           order={order({ status: "Released", collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z" })}
         />
       );
-      expect(screen.getByText("Status")).toBeInTheDocument();
-      // "Released" is both the label of the timestamp row AND the
-      // Status field's own value here - deliberately checked via
-      // getAllByText (exactly 2: the label, plus the Status value).
-      expect(screen.getAllByText("Released")).toHaveLength(2);
+      expect(screen.queryByText("Status")).not.toBeInTheDocument();
+      // "Released" is now only ever the DATE/TIME row's own label - the
+      // old second occurrence (the Status field's value) is gone along
+      // with the row itself.
+      expect(screen.getAllByText("Released")).toHaveLength(1);
       expect(screen.getByText("Collected")).toBeInTheDocument();
       expect(screen.getByText("Completed")).toBeInTheDocument();
     });
@@ -1974,7 +1979,7 @@ describe("LaboratoryReportView - overall category heading", () => {
     );
     expect(screen.queryByText("Test :")).not.toBeInTheDocument();
     expect(screen.getByText("Patient Name")).toBeInTheDocument();
-    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("Collected")).toBeInTheDocument();
   });
 });
 
@@ -2126,5 +2131,130 @@ describe("LaboratoryReportView - signatory footer page layout", () => {
     expect(screen.queryByTestId("med-tech-signatory")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pathologist-signatory")).not.toBeInTheDocument();
     expect(screen.queryByTestId("countersigning-med-tech-signatory")).not.toBeInTheDocument();
+  });
+});
+
+// --- Client requirement: report-header "Age / Sex" row, above Status in
+// the right column - see buildAgeSexLine's own doc comment in report.ts
+// for the missing-data formatting rules this delegates to. ---
+describe("LaboratoryReportView - Age / Sex header row", () => {
+  it("a patient with a known age and Male sex renders 'Age / Sex : 22 yrs / M'", () => {
+    render(<LaboratoryReportView order={order({ patientAge: 22, patientSex: "Male" })} />);
+    expect(screen.getByText("Age / Sex")).toBeInTheDocument();
+    expect(screen.getByText("22 yrs / M")).toBeInTheDocument();
+  });
+
+  it("a patient with a known age and Female sex renders 'Age / Sex : 35 yrs / F'", () => {
+    render(<LaboratoryReportView order={order({ patientAge: 35, patientSex: "Female" })} />);
+    expect(screen.getByText("35 yrs / F")).toBeInTheDocument();
+  });
+
+  it("missing age with a known sex renders '- / M', never fabricating an age", () => {
+    render(<LaboratoryReportView order={order({ patientAge: null, patientSex: "Male" })} />);
+    expect(screen.getByText("- / M")).toBeInTheDocument();
+  });
+
+  it("known age with missing sex renders '22 yrs / -', never fabricating a sex", () => {
+    render(<LaboratoryReportView order={order({ patientAge: 22, patientSex: null })} />);
+    expect(screen.getByText("22 yrs / -")).toBeInTheDocument();
+  });
+
+  it("both age and sex missing collapses to a single '-', matching the header's other missing-value convention", () => {
+    render(<LaboratoryReportView order={order({ patientAge: null, patientSex: null })} />);
+    const ageSexRow = screen.getByText("Age / Sex").closest("div") as HTMLDivElement;
+    expect(ageSexRow).toHaveTextContent("-");
+    expect(ageSexRow).not.toHaveTextContent("- / -");
+  });
+
+  it("Age / Sex renders as the FIRST row of the right column, with every other header row unaffected and no Status row", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          patientAge: 22, patientSex: "Male",
+          status: "Released", collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z",
+        })}
+      />
+    );
+    const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
+    const labels = Array.from(headerBlock.querySelectorAll("div > div > span:first-child")).map((el) => el.textContent);
+    // Client requirement (remove Status row): the right column is now
+    // exactly Age / Sex, Collected, Completed, Released - Status is gone.
+    expect(labels).toEqual(["Patient Name", "Requesting Doctor", "Visit #", "Order No.", "Age / Sex", "Collected", "Completed", "Released"]);
+    // Every other right-column row keeps its own exact prior value.
+    expect(screen.getByText("Collected")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("Released")).toHaveLength(1); // only the DATE/TIME row's own label now
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
+  });
+});
+
+// --- Client requirement: remove the "Status : Released" row from the
+// Laboratory Report header entirely - the report already carries the
+// outcome via the "Released" DATE/TIME row (a completely different field,
+// kept unchanged). ---
+describe("LaboratoryReportView - Status row removed", () => {
+  it("'Status' never renders anywhere in the header, for any order status", () => {
+    // Deliberately does NOT also assert the raw status VALUE is absent -
+    // several status values ("Collected", "Completed", "Released") are
+    // legitimately identical to this header's own unrelated DATE/TIME row
+    // LABELS, which must keep rendering. The requirement is specifically
+    // that the "Status" LABEL/row is gone, for every possible order
+    // status - checked here.
+    for (const status of ["Requested", "Collected", "Processing", "Completed", "Released", "Cancelled"] as const) {
+      const { unmount } = render(<LaboratoryReportView order={order({ status })} />);
+      expect(screen.queryByText("Status")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("the 'Released' DATE/TIME row still renders correctly - only the word-status row is gone", () => {
+    render(<LaboratoryReportView order={order({ status: "Released", releasedAt: "2026-01-01T10:00:00Z" })} />);
+    expect(screen.getByText("Released")).toBeInTheDocument();
+    const releasedRow = screen.getByText("Released").closest("div") as HTMLDivElement;
+    expect(releasedRow).toHaveTextContent(formatDateTime("2026-01-01T10:00:00Z"));
+  });
+
+  it("Age / Sex is the first row of the right column, immediately followed by Collected/Completed/Released - exactly 4 right-column rows", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          patientAge: 22, patientSex: "Male",
+          collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z",
+        })}
+      />
+    );
+    const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
+    const rightColumn = headerBlock.lastElementChild as HTMLElement;
+    const labels = Array.from(rightColumn.querySelectorAll("div > span:first-child")).map((el) => el.textContent);
+    expect(labels).toEqual(["Age / Sex", "Collected", "Completed", "Released"]);
+  });
+
+  it("the left column (Patient Name/Requesting Doctor/Visit #/Order No.) is completely unaffected by removing Status", () => {
+    render(
+      <LaboratoryReportView
+        order={order({ patientName: "Mike Test", doctorName: "Dr. Santos", visitNumber: "VIS-1", orderNumber: "ORD-1" })}
+      />
+    );
+    const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
+    const leftColumn = headerBlock.firstElementChild as HTMLElement;
+    const labels = Array.from(leftColumn.querySelectorAll("div > span:first-child")).map((el) => el.textContent);
+    expect(labels).toEqual(["Patient Name", "Requesting Doctor", "Visit #", "Order No."]);
+  });
+
+  it("existing category heading and results content are unaffected by the Status row removal", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "t-status-removal", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param()],
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("HEMATOLOGY TEST")).toBeInTheDocument();
+    expect(screen.getByText("Hemoglobin")).toBeInTheDocument();
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
   });
 });

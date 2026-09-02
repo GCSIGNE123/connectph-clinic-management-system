@@ -16,7 +16,7 @@ vi.mock("@/features/laboratory/api/laboratory-api", () => ({
 function labOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-1", visitId: "visit-1", visitNumber: "VIS-1",
-    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: null, doctorName: null,
+    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: null, doctorName: null,
     templateId: null, template: null, testType: "CBC", priority: null, status: "Completed",
     scheduledDate: null, collectedAt: null, collectedBy: null, processingStartedAt: null, completedAt: null,
     releasedAt: null, releasedBy: null, invoiceItemId: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",

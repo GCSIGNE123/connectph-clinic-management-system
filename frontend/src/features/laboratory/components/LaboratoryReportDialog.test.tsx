@@ -13,7 +13,7 @@ vi.mock("@/features/laboratory/hooks/use-laboratory", () => ({
 function labOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-1", visitId: "visit-1", visitNumber: "VIS-1",
-    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: null, doctorName: null,
+    queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: null, doctorName: null,
     templateId: null, template: null, testType: "CBC", priority: null, status: "Completed",
     scheduledDate: null, collectedAt: null, collectedBy: null, processingStartedAt: null, completedAt: null,
     releasedAt: null, releasedBy: null, invoiceItemId: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
@@ -104,6 +104,34 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
     // print portal - see the duplicate-2-page-print bug fix below), so the
     // category heading must appear exactly twice too - once per copy.
     expect(screen.getAllByText("HEMATOLOGY TEST")).toHaveLength(2);
+  });
+
+  it("Age / Sex header row: renders in BOTH the on-screen preview and the print portal copy when the patient's age/sex are known", async () => {
+    useLaboratoryOrder.mockReturnValue({ data: labOrder({ patientAge: 22, patientSex: "Male" }) });
+    renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+    // Same "renders twice by design" convention as the category heading
+    // test above - once for the on-screen preview, once for the print
+    // portal copy.
+    expect(screen.getAllByText("Age / Sex")).toHaveLength(2);
+    expect(screen.getAllByText("22 yrs / M")).toHaveLength(2);
+  });
+
+  // Client requirement: remove the "Status : Released" row from the
+  // header entirely - the "Released" DATE/TIME row (a different field)
+  // stays. Checked in both the on-screen preview and the print portal
+  // copy, same "renders twice by design" convention as above.
+  it("Status header row: does NOT render in either the on-screen preview or the print portal copy, while the Released DATE/TIME row still does", async () => {
+    useLaboratoryOrder.mockReturnValue({ data: labOrder({ status: "Released", releasedAt: "2026-01-01T10:00:00Z" }) });
+    renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
+    // "Released" now appears exactly twice total - once per copy of the
+    // DATE/TIME row's own label - never a third/fourth occurrence from a
+    // Status value that no longer exists.
+    expect(screen.getAllByText("Released")).toHaveLength(2);
   });
 
   it("round 2: forces print color-adjust so the navy table-header band actually prints (not dropped to save ink)", async () => {
@@ -356,7 +384,7 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
 
     it("clicking Print sets document.title to '<Patient_Name>-<last 4 Order # digits>' (extensionless) for the duration of the print job", async () => {
       useLaboratoryOrder.mockReturnValue({
-        data: labOrder({ patientName: "Paul Test", orderNumber: "ORD-20260901-000007" }),
+        data: labOrder({ patientName: "Paul Test", patientAge: null, patientSex: null, orderNumber: "ORD-20260901-000007" }),
       });
       let titleDuringPrint: string | null = null;
       vi.spyOn(window, "print").mockImplementation(() => {
@@ -373,7 +401,7 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
 
     it("a second order (different patient/order number) produces its own distinct filename - not hardcoded", async () => {
       useLaboratoryOrder.mockReturnValue({
-        data: labOrder({ patientName: "Richard Test", orderNumber: "ORD-20260901-000002" }),
+        data: labOrder({ patientName: "Richard Test", patientAge: null, patientSex: null, orderNumber: "ORD-20260901-000002" }),
       });
       let titleDuringPrint: string | null = null;
       vi.spyOn(window, "print").mockImplementation(() => {
@@ -390,7 +418,7 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
     it("never uses Visit # or Queue # in the filename, even when they differ from the patient/order values", async () => {
       useLaboratoryOrder.mockReturnValue({
         data: labOrder({
-          patientName: "Paul Test", orderNumber: "ORD-20260901-000007",
+          patientName: "Paul Test", patientAge: null, patientSex: null, orderNumber: "ORD-20260901-000007",
           visitNumber: "VIS-99999999-999999", queueNumber: "L999",
         }),
       });
@@ -411,7 +439,7 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
 
     it("does not change the Order # actually displayed on the report", async () => {
       useLaboratoryOrder.mockReturnValue({
-        data: labOrder({ patientName: "Paul Test", orderNumber: "ORD-20260901-000007" }),
+        data: labOrder({ patientName: "Paul Test", patientAge: null, patientSex: null, orderNumber: "ORD-20260901-000007" }),
       });
       renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
       await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));

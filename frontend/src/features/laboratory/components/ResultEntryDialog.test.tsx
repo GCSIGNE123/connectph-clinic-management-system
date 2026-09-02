@@ -22,7 +22,7 @@ function labOrder(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
   return {
     id: "lab-1", orderId: "order-1", orderNumber: "ORD-20260101-000001", visitId: "visit-1", visitNumber: "VIS-1",
     queueNumber: "A001",
-    patientId: "patient-1", patientName: "Juan Dela Cruz", doctorId: "doctor-1", doctorName: "Jose Rizal",
+    patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: "doctor-1", doctorName: "Jose Rizal",
     templateId: "template-1",
     template: {
       id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0,

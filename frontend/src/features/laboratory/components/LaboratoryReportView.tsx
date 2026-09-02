@@ -2,6 +2,7 @@ import { FlaskConical } from "lucide-react";
 import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
 import { LaboratorySignatoryFooter } from "@/features/laboratory/components/LaboratorySignatoryFooter";
 import {
+  buildAgeSexLine,
   buildCategoryHeading,
   buildReportRows,
   groupReportRowsBySection,
@@ -78,6 +79,13 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   // cell/row label) - a standard report has no equivalent adjacent
   // duplicate to guard against.
   const categoryHeading = buildCategoryHeading(order.template?.testCategory, categoricalRows.length > 0 ? order.testType : null);
+  // Client requirement: report-header "Age / Sex" row (e.g. "22 yrs / M"),
+  // above Status in the right column - see `buildAgeSexLine`'s own doc
+  // comment for the missing-data/formatting rules. Sourced entirely from
+  // the already-fetched `order.patientAge`/`patientSex` (computed by the
+  // backend from the patient's existing birth date/gender - no new field,
+  // no client-side date math).
+  const ageSexLine = buildAgeSexLine(order.patientAge, order.patientSex);
 
   return (
     // Layout-only change: this root becomes a flex COLUMN so the signatory
@@ -127,9 +135,21 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           Visit # is deliberately kept (a Visit represents the clinic
           encounter and exists even for a walk-in/direct-to-laboratory
           patient); Requesting Doctor legitimately reads "-" for one.
-          Right column (Status/Collected/Completed/Released) is
-          unchanged - Order No. simply moved out of it into the left
-          column's fourth row. */}
+          Right column is Age / Sex / Collected / Completed / Released, in
+          that order - Order No. simply moved out of it into the left
+          column's fourth row.
+
+          Client requirement (Age/Sex): a first row in this right column -
+          see `buildAgeSexLine`'s own doc comment.
+
+          Client requirement (remove Status row): the "Status : Released"
+          row is gone entirely now - the report already carries the
+          order's outcome via the "Released" DATE/TIME row immediately
+          below (kept, unchanged) and the client considered the separate
+          word-status label redundant with it. This removes only the
+          `order.status` InfoRow - `order.releasedAt`'s own "Released"
+          row (a timestamp, not a status word) is a completely different
+          field/row and stays exactly as it was. */}
       <div className="grid min-w-0 grid-cols-2 gap-x-4 border-y-2 border-slate-800 py-1.5">
         <div>
           <InfoRow label="Patient Name" value={order.patientName} />
@@ -138,7 +158,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           <InfoRow label="Order No." value={order.orderNumber} />
         </div>
         <div>
-          <InfoRow label="Status" value={order.status} />
+          <InfoRow label="Age / Sex" value={ageSexLine} />
           <InfoRow label="Collected" value={order.collectedAt ? formatDateTime(order.collectedAt) : null} />
           <InfoRow label="Completed" value={order.completedAt ? formatDateTime(order.completedAt) : null} />
           <InfoRow label="Released" value={order.releasedAt ? formatDateTime(order.releasedAt) : null} />

@@ -136,6 +136,26 @@ def _full_name(entity) -> str | None:
     return " ".join(p for p in parts if p)
 
 
+# Client requirement: an Age/Sex row in the Laboratory Report header. Reuses
+# the EXACT same "age as of today, from the patient's existing birth_date"
+# convention `MedicalCertificateService._to_detail` already established for
+# `MedicalCertificateDetail.patient_age`/`patient_sex` (see that module's
+# own `_age_years`/`base.patient_sex = patient.gender.value` lines) - no new
+# database column, no snapshot, computed fresh on every read exactly like
+# that existing feature. Duplicated here (rather than imported) matching
+# this codebase's own existing precedent: `LaboratoryService._age_years`
+# (used for age-specific reference-range resolution) and
+# `medical_certificate_service._age_years` are themselves two independent,
+# byte-for-byte-identical copies of this same four-line calculation - a
+# third small module-local copy is consistent with that established
+# pattern, not a new one.
+def _patient_age_years(birth_date: date, *, as_of: date) -> int:
+    years = as_of.year - birth_date.year
+    if (as_of.month, as_of.day) < (birth_date.month, birth_date.day):
+        years -= 1
+    return years
+
+
 def attachment_to_read(attachment: LaboratoryAttachment) -> LaboratoryAttachmentRead:
     """Feature 4: builds the API-facing `file_url` as a path into
     `GET /laboratory/orders/{id}/attachments/{id}/file` (see
@@ -173,6 +193,14 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         queue_number=lab_order.visit.queue.queue_number if lab_order.visit and lab_order.visit.queue else None,
         patient_id=lab_order.patient_id,
         patient_name=_full_name(lab_order.patient),
+        # Client requirement: report-header Age/Sex - see `_patient_age_years`'s
+        # own doc comment for the "as of today, no snapshot" convention this
+        # follows. `lab_order.patient` is the same already-loaded relationship
+        # `patient_name` above reads - no extra query. Never fabricated: both
+        # stay None when there's no linked patient at all (matching every
+        # other patient-derived field on this schema).
+        patient_age=_patient_age_years(lab_order.patient.birth_date, as_of=date.today()) if lab_order.patient else None,
+        patient_sex=lab_order.patient.gender.value if lab_order.patient and lab_order.patient.gender else None,
         doctor_id=lab_order.doctor_id,
         doctor_name=_full_name(lab_order.doctor),
         template_id=lab_order.template_id,

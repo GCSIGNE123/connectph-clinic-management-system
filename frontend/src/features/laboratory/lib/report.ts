@@ -163,3 +163,33 @@ export function buildCategoryHeading(
 
   return heading;
 }
+
+/** Compact letter the report header displays for the backend's raw
+ * `Gender` enum value ("Male"/"Female"/"Other") - the application's own
+ * existing patient-sex values (see `PatientGender` in
+ * `features/patients/types.ts`), never a new value invented for this
+ * report. Falls through to the value itself for anything unrecognized
+ * (defensive only - every value this app actually stores is listed here)
+ * rather than silently dropping it. */
+const SEX_LETTER: Record<string, string> = { Male: "M", Female: "F", Other: "O" };
+
+/** Client requirement: the report header's "Age / Sex" row, e.g.
+ * "22 yrs / M". `age` is the backend's already-computed
+ * `LaboratoryOrderRead.patient_age` (see that field's own doc comment for
+ * the "age as of today, from the patient's existing birth_date" convention
+ * it follows - the same one `MedicalCertificateDetail.patient_age` already
+ * established) - this function does no date math of its own, purely
+ * formatting. `sex` is `patient_sex`, mapped through `SEX_LETTER` above.
+ *
+ * Missing-data handling (never fabricates either half): a present value
+ * always renders normally; a missing one renders as "-" (this module's
+ * existing convention - see `InfoRow`'s own `value ?? "-"` fallback) UNLESS
+ * BOTH are missing, in which case the whole row collapses to a single "-"
+ * rather than the redundant "- / -". */
+export function buildAgeSexLine(age: number | null | undefined, sex: string | null | undefined): string {
+  const ageText = typeof age === "number" && Number.isFinite(age) ? `${age} yrs` : null;
+  const sexText = sex ? (SEX_LETTER[sex] ?? sex) : null;
+
+  if (!ageText && !sexText) return "-";
+  return `${ageText ?? "-"} / ${sexText ?? "-"}`;
+}
