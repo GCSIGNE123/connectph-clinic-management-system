@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaboratoryReportView } from "./LaboratoryReportView";
 import type { LaboratoryOrder, LaboratoryResult, LaboratoryTemplateParameter } from "@/features/laboratory/types";
@@ -579,9 +579,9 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("H").className).toMatch(/text-(destructive|primary)/);
     });
 
-    it("6: the 'L' character carries the red/destructive color class", () => {
+    it("6: the 'L' character carries the blue/primary color class (Round 8 correction - see the round 8 describe block below)", () => {
       render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
-      expect(screen.getByText("L").className).toContain("text-destructive");
+      expect(screen.getByText("L").className).toContain("text-primary");
     });
 
     it("7: a Normal row's Flag cell contains no flag text at all", () => {
@@ -1528,7 +1528,31 @@ describe("LaboratoryReportView", () => {
       expect(block).toHaveTextContent("Diego Silang");
       expect(block).toHaveTextContent("RMT No. 654321");
       expect(block).toHaveTextContent("Medical Technologist");
-      expect(block).toHaveTextContent("Countersign");
+    });
+
+    // Round 2 (client feedback - matching the already-removed "MED
+    // TECHNOLOGIST IN CHARGE" / "PATHOLOGIST" role headings on the other
+    // two columns): the "MEDICAL TECHNOLOGIST / COUNTERSIGN" heading above
+    // this block's signature line is redundant and now removed too - the
+    // signature line, name, RMT No., and role line beneath it remain.
+    it("does NOT render a 'MEDICAL TECHNOLOGIST / COUNTERSIGN' heading above the signature line", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            countersigningMedTechNameSnapshot: "Diego Silang", countersigningMedTechLicenseSnapshot: "654321",
+          })}
+        />
+      );
+      const block = screen.getByTestId("countersigning-med-tech-signatory");
+      expect(block).not.toHaveTextContent("Countersign");
+      // The role label "Medical Technologist" still legitimately appears
+      // once WITHIN THIS BLOCK, as the role line beneath the name - just
+      // never paired with "Countersign" as a heading above the signature
+      // line. (Not asserted page-wide: the Med Tech In Charge column above
+      // also legitimately renders its own "Medical Technologist" role
+      // label - see the round 6 tests above.)
+      expect(within(block).getAllByText("Medical Technologist", { exact: true })).toHaveLength(1);
     });
 
     it("the Countersigning MedTech NEVER renders a signature image and NEVER fetches one - no signature_url field exists to even read", () => {
@@ -1608,17 +1632,22 @@ describe("LaboratoryReportView", () => {
     });
   });
 
-  describe("Laboratory Report print redesign, round 7 (flag colors: L red, H blue)", () => {
-    it("1: L renders red (text-destructive)", () => {
-      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
-      expect(screen.getByText("L").className).toContain("text-destructive");
-      expect(screen.getByText("L").className).not.toContain("text-primary");
+  // Round 8 (client-corrected flag colors): the clinic's own convention is
+  // H = RED, L = BLUE - the reverse of Round 7's original mapping (which
+  // had L red / H blue). Only `FLAG_COLOR_CLASS` in InterpretationBadge.tsx
+  // changed; the flag-calculation logic (which character prints at all) is
+  // untouched and re-verified unchanged by test 7 below.
+  describe("Laboratory Report print redesign, round 8 (flag colors corrected: H red, L blue)", () => {
+    it("1: H renders red (text-destructive)", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
+      expect(screen.getByText("H").className).toContain("text-destructive");
+      expect(screen.getByText("H").className).not.toContain("text-primary");
     });
 
-    it("2: H renders blue (text-primary), not red", () => {
-      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "High" })] })} />);
-      expect(screen.getByText("H").className).toContain("text-primary");
-      expect(screen.getByText("H").className).not.toContain("text-destructive");
+    it("2: L renders blue (text-primary), not red", () => {
+      render(<LaboratoryReportView order={order({ results: [result({ interpretation: "Low" })] })} />);
+      expect(screen.getByText("L").className).toContain("text-primary");
+      expect(screen.getByText("L").className).not.toContain("text-destructive");
     });
 
     it("3: a normal flag remains blank - no color, no text", () => {
@@ -1785,5 +1814,166 @@ describe("LaboratoryReportView", () => {
       expect(table.className).toContain("w-full");
       expect(table.className).toContain("max-w-full");
     });
+  });
+});
+
+// --- Overall category heading ("HEMATOLOGY TEST", "SEROLOGY TEST", ...)
+// between the patient/order info block and the results content - sourced
+// from `order.template.testCategory` via `buildCategoryHeading` (see that
+// function's own doc comment in report.ts). Distinct from and layered
+// above the per-parameter `section` subheadings tested above. ---
+describe("LaboratoryReportView - overall category heading", () => {
+  it("a CBC report with testCategory 'Hematology' renders 'HEMATOLOGY TEST' between the header and the results", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "template-1", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param()],
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("HEMATOLOGY TEST")).toBeInTheDocument();
+  });
+
+  it("another existing category (Blood Chemistry) renders 'BLOOD CHEMISTRY TEST'", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "t-bc", testName: "Fasting Blood Sugar", testCategory: "Blood Chemistry", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param()],
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("BLOOD CHEMISTRY TEST")).toBeInTheDocument();
+  });
+
+  it("no category heading renders when the template has no testCategory configured (matches every existing fixture in this file)", () => {
+    render(<LaboratoryReportView order={order()} />);
+    expect(screen.queryByText(/TEST$/)).not.toBeInTheDocument();
+  });
+
+  it("the category heading renders even when every parameter's section is empty (no subsection headings configured)", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "template-1", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param({ section: null })],
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("HEMATOLOGY TEST")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+  });
+
+  it("existing parameter-level section headings still render alongside the new overall category heading, correctly nested", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          testType: "Urinalysis",
+          template: {
+            id: "t-ua", testName: "Urinalysis", testCategory: "Clinical Microscopy", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [
+              param({ parameterName: "Color", resultType: "Text", section: "Physical Examination" }),
+              param({ parameterName: "Protein", resultType: "Categorical", section: "Chemical Examination" }),
+            ],
+          },
+          results: [
+            result({ parameterName: "Color", resultType: "Text", textValue: "Straw" }),
+            result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Negative" } }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText("CLINICAL MICROSCOPY TEST")).toBeInTheDocument();
+    const headers = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(headers).toEqual(["Physical Examination", "Chemical Examination"]);
+  });
+
+  it("a categorical/matrix report (Dengue-style) gets the appropriate category heading above the matrix, distinct from the matrix's own parent-test label", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          testType: "DENGUE RAPID TEST (DRT)",
+          template: {
+            id: "t-drt-cat", testName: "DENGUE RAPID TEST (DRT)", testCategory: "Serology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [
+              param({ parameterName: "NS1", resultType: "Categorical", options: ["Positive", "Negative"] }),
+              param({ parameterName: "IgM", resultType: "Categorical", options: ["Positive", "Negative"] }),
+            ],
+          },
+          results: [
+            result({ parameterName: "NS1", resultType: "Categorical", structuredValue: { value: "Negative" } }),
+            result({ parameterName: "IgM", resultType: "Categorical", structuredValue: { value: "Negative" } }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText("SEROLOGY TEST")).toBeInTheDocument();
+    expect(screen.getByText("DENGUE RAPID TEST (DRT)")).toBeInTheDocument();
+  });
+
+  it("does not produce a duplicate heading when the computed category heading would exactly repeat the matrix's own parent-test label", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          testType: "Serology Test",
+          template: {
+            id: "t-serology-dup", testName: "Serology Test", testCategory: "Serology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param({ parameterName: "Marker", resultType: "Categorical", options: ["Positive", "Negative"] })],
+          },
+          results: [result({ parameterName: "Marker", resultType: "Categorical", structuredValue: { value: "Negative" } })],
+        })}
+      />
+    );
+    // "Serology Test" appears exactly once - as the matrix's own parent-test
+    // cell (`order.testType`, rendered verbatim, not uppercased in the DOM
+    // text content even though CSS visually uppercases it) - the computed
+    // "SEROLOGY TEST" heading is suppressed rather than duplicating it.
+    expect(screen.getAllByText(/^serology test$/i)).toHaveLength(1);
+  });
+
+  it("never renders a doubled 'TEST TEST' even when the configured category already ends in the word Test", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "t-double", testName: "CBC", testCategory: "Hematology Test", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param()],
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("HEMATOLOGY TEST")).toBeInTheDocument();
+    expect(screen.queryByText("HEMATOLOGY TEST TEST")).not.toBeInTheDocument();
+  });
+
+  it("the header info block still has no 'Test' row when a category heading is present", () => {
+    render(
+      <LaboratoryReportView
+        order={order({
+          template: {
+            id: "template-1", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param()],
+          },
+        })}
+      />
+    );
+    expect(screen.queryByText("Test :")).not.toBeInTheDocument();
+    expect(screen.getByText("Patient Name")).toBeInTheDocument();
+    expect(screen.getByText("Status")).toBeInTheDocument();
   });
 });

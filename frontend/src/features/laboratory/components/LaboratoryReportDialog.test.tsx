@@ -80,6 +80,32 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
     expect(screen.getByRole("button", { name: /^print$/i })).toBeInTheDocument();
   });
 
+  it("overall category heading: renders in BOTH the on-screen preview and the print portal copy when the template has a testCategory configured", async () => {
+    useLaboratoryOrder.mockReturnValue({
+      data: labOrder({
+        template: {
+          id: "t-cbc", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
+          turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+          parameters: [{ parameterName: "Hemoglobin", resultType: "Numeric", displayOrder: 0 }],
+        },
+        results: [
+          {
+            id: "res-1", parameterName: "Hemoglobin", resultType: "Numeric", numericValue: 14, textValue: null,
+            normalRange: null, units: null, interpretation: null, remarks: null, rangeLow: null, rangeHigh: null,
+            enteredBy: "user-1", enteredAt: "2026-01-01T00:00:00Z", structuredValue: null, site: null,
+          },
+        ],
+      }),
+    });
+    renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+    // The report legitimately renders twice by design (on-screen preview +
+    // print portal - see the duplicate-2-page-print bug fix below), so the
+    // category heading must appear exactly twice too - once per copy.
+    expect(screen.getAllByText("HEMATOLOGY TEST")).toHaveLength(2);
+  });
+
   it("round 2: forces print color-adjust so the navy table-header band actually prints (not dropped to save ink)", async () => {
     useLaboratoryOrder.mockReturnValue({ data: labOrder() });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);

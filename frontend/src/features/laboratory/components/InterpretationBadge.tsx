@@ -52,20 +52,19 @@ const FLAG_BY_INTERPRETATION: Partial<Record<LaboratoryInterpretation, "L" | "H"
   Abnormal: "A",
 };
 
-/** Round 7 (flag colors): L (below range) reads as an urgent/low-value
- * signal - red/`text-destructive`, the same token already used everywhere
- * else in this app for "needs attention". H (above range) is deliberately
- * NOT red - a single "everything abnormal is red" color would make L and H
- * visually indistinguishable at a glance, so H uses the existing blue
- * `text-primary` token (info/high-value semantic) instead. Only the flag
- * character itself carries color - see `LaboratoryReportView.tsx`'s Flag
- * `<td>`, which wraps nothing else in this span. A (categorical abnormal)
- * reuses the same urgent `text-destructive` token as L - a Positive
- * qualitative result is a "needs attention" signal, not an informational
- * one like H. */
+/** Round 8 (client-corrected flag colors): the clinic's own convention is
+ * H (above range) = RED, L (below range) = BLUE - the reverse of this
+ * component's original Round 7 mapping, which had L/`text-destructive` and
+ * H/`text-primary` swapped relative to that convention. H now uses the red
+ * `text-destructive` token; L uses the blue `text-primary` token. Only the
+ * flag character itself carries color - see `LaboratoryReportView.tsx`'s
+ * Flag `<td>`, which wraps nothing else in this span. A (categorical
+ * abnormal) is unchanged/unaffected by this correction - still the urgent
+ * `text-destructive` (red) token, since a Positive qualitative result is a
+ * "needs attention" signal like H, not like L. */
 const FLAG_COLOR_CLASS: Record<"L" | "H" | "A", string> = {
-  L: "text-destructive",
-  H: "text-primary",
+  L: "text-primary",
+  H: "text-destructive",
   A: "text-destructive",
 };
 

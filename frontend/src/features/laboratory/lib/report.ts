@@ -117,3 +117,49 @@ export function reportResultValue(result: LaboratoryResult): string | null {
       return result.textValue ?? null;
   }
 }
+
+/** Client requirement: an overall category heading ("HEMATOLOGY TEST",
+ * "SEROLOGY TEST", "BLOOD CHEMISTRY TEST", ...) between the patient/order
+ * info block and the results content, for EVERY report - standard and
+ * qualitative/matrix alike - even when no individual parameter has a
+ * `section` configured. Sourced entirely from the template's own already-
+ * existing `testCategory` field (Admin-configured on the Laboratory
+ * Templates page, e.g. "Hematology") - no new field, no migration, and
+ * never derived from `test_type`/`testName` (which is the specific test,
+ * not its category). Distinct from and layered ABOVE
+ * `groupReportRowsBySection`'s per-parameter subsection headings (e.g.
+ * "Physical Examination") - this is the one overall heading for the whole
+ * report; those remain untouched, nested beneath it.
+ *
+ * Returns null (never fabricates a placeholder) when there is nothing to
+ * base a heading on - an untemplated order, or a template with no
+ * `testCategory` configured - matching this module's "never invent a
+ * constraint/label that wasn't configured" convention throughout.
+ *
+ * Normalizes "<category> TEST" without ever doubling an already-present
+ * "TEST" suffix (e.g. a category literally configured as "Hematology
+ * Test" still renders "HEMATOLOGY TEST", not "HEMATOLOGY TEST TEST").
+ *
+ * `adjacentLabel` is an optional de-duplication guard for the qualitative
+ * matrix layout, which already prints the parent test name as its own
+ * first cell/row label directly below this heading (see
+ * `QualitativeResultMatrix`) - if the computed heading would be an exact
+ * (case-insensitive) repeat of that adjacent label, this returns null
+ * rather than printing the same text twice in a row. Callers building a
+ * standard (non-matrix) report simply omit this argument - there is no
+ * equivalent adjacent-duplicate risk there. */
+export function buildCategoryHeading(
+  testCategory: string | null | undefined,
+  adjacentLabel?: string | null
+): string | null {
+  const trimmedCategory = (testCategory ?? "").trim();
+  if (!trimmedCategory) return null;
+
+  const upperCategory = trimmedCategory.toUpperCase();
+  const heading = upperCategory.endsWith("TEST") ? upperCategory : `${upperCategory} TEST`;
+
+  const trimmedAdjacent = (adjacentLabel ?? "").trim().toUpperCase();
+  if (trimmedAdjacent && heading === trimmedAdjacent) return null;
+
+  return heading;
+}

@@ -89,16 +89,20 @@ export function LaboratorySignatoryFooter({ order }: { order: LaboratoryOrder })
  * incapable of ever requesting or displaying one, which is the strongest
  * way to satisfy "no e-signature image, ever, for this role." The blank
  * horizontal line above the name is the physical line the countersigner
- * signs by hand - never an image, per the client's explicit layout. */
+ * signs by hand - never an image, per the client's explicit layout.
+ *
+ * Client feedback (round 2 - matching the other two columns' already-
+ * removed role headings): the "MEDICAL TECHNOLOGIST / COUNTERSIGN" heading
+ * above this block's signature line is redundant - the name/license/role
+ * line beneath it already identifies the signatory, exactly the same
+ * rationale that removed the "MED TECHNOLOGIST IN CHARGE" / "PATHOLOGIST"
+ * headings from `SignatoryColumn` above. Removed here too, for consistency
+ * with those two columns - only the heading `<p>` is gone; the blank
+ * signature line and the name/RMT No./role block beneath it are untouched. */
 function ManualCountersignBlock({ name, licenseNumber }: { name: string; licenseNumber?: string | null }) {
   return (
     <div className="mt-6 flex justify-center text-[10px]">
       <div data-testid="countersigning-med-tech-signatory" className="text-center">
-        <p className="mb-1 font-semibold uppercase tracking-wide text-slate-700">
-          Medical Technologist
-          <br />
-          Countersign
-        </p>
         {/* Blank space reserved for the handwritten signature - matches
             the same visual convention as the e-signed columns above
             (image area, then line), just with nothing to ever render in

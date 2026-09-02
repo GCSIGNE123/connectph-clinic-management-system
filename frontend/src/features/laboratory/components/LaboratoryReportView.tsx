@@ -2,6 +2,7 @@ import { FlaskConical } from "lucide-react";
 import { FlagText } from "@/features/laboratory/components/InterpretationBadge";
 import { LaboratorySignatoryFooter } from "@/features/laboratory/components/LaboratorySignatoryFooter";
 import {
+  buildCategoryHeading,
   buildReportRows,
   groupReportRowsBySection,
   isQualitativeCategoricalRow,
@@ -69,6 +70,14 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   // `FlaskConical` icon when no logo is configured, exactly preserving the
   // prior text-only header rather than leaving a blank gap.
   const logoUrl = resolveMediaUrl(order.clinicLogoUrl);
+  // Client requirement: an overall category heading ("HEMATOLOGY TEST",
+  // "SEROLOGY TEST", ...) between the header and the results content -
+  // see `buildCategoryHeading`'s own doc comment for the full rationale.
+  // The de-dup guard only applies when the matrix layout is what's about
+  // to render (it already prints the parent test name as its own first
+  // cell/row label) - a standard report has no equivalent adjacent
+  // duplicate to guard against.
+  const categoryHeading = buildCategoryHeading(order.template?.testCategory, categoricalRows.length > 0 ? order.testType : null);
 
   return (
     <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
@@ -121,6 +130,21 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           <InfoRow label="Released" value={order.releasedAt ? formatDateTime(order.releasedAt) : null} />
         </div>
       </div>
+
+      {/* Client requirement: the overall category heading sits here -
+          below the patient/order info block, above the results content
+          (standard table or qualitative matrix, whichever renders) - and
+          is centered, distinguishing it from the per-parameter subsection
+          headings below (e.g. "Physical Examination"), which stay
+          left-aligned with their own border-bottom rule. Omitted entirely
+          (not a blank centered line) when the template has no
+          `testCategory` configured, or for an untemplated order - never a
+          fabricated label. */}
+      {categoryHeading ? (
+        <p className="mt-1.5 text-center text-[10px] font-bold uppercase tracking-wide text-slate-800 sm:text-[11px]">
+          {categoryHeading}
+        </p>
+      ) : null}
 
       <div className="mt-2 space-y-2.5">
         {groups.map((group, groupIndex) => (

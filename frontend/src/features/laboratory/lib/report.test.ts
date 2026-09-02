@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildReportRows, groupReportRowsBySection, isQualitativeCategoricalRow, reportResultValue } from "./report";
+import {
+  buildCategoryHeading,
+  buildReportRows,
+  groupReportRowsBySection,
+  isQualitativeCategoricalRow,
+  reportResultValue,
+} from "./report";
 import type { LaboratoryOrder, LaboratoryResult, LaboratoryTemplateParameter } from "@/features/laboratory/types";
 
 function result(overrides: Partial<LaboratoryResult> = {}): LaboratoryResult {
@@ -207,5 +213,46 @@ describe("isQualitativeCategoricalRow", () => {
   it("a row with zero results does not qualify", () => {
     const row = { parameterName: "NS1", section: null, results: [], options: ["Positive", "Negative"] };
     expect(isQualitativeCategoricalRow(row)).toBe(false);
+  });
+});
+
+describe("buildCategoryHeading", () => {
+  it("renders the Hematology category as HEMATOLOGY TEST", () => {
+    expect(buildCategoryHeading("Hematology")).toBe("HEMATOLOGY TEST");
+  });
+
+  it("renders a multi-word category (Blood Chemistry) as BLOOD CHEMISTRY TEST", () => {
+    expect(buildCategoryHeading("Blood Chemistry")).toBe("BLOOD CHEMISTRY TEST");
+  });
+
+  it("renders Serology as SEROLOGY TEST", () => {
+    expect(buildCategoryHeading("Serology")).toBe("SEROLOGY TEST");
+  });
+
+  it("does not double an already-present TEST suffix", () => {
+    expect(buildCategoryHeading("Hematology Test")).toBe("HEMATOLOGY TEST");
+    expect(buildCategoryHeading("HEMATOLOGY TEST")).toBe("HEMATOLOGY TEST");
+  });
+
+  it("returns null for a null, undefined, empty, or whitespace-only category", () => {
+    expect(buildCategoryHeading(null)).toBeNull();
+    expect(buildCategoryHeading(undefined)).toBeNull();
+    expect(buildCategoryHeading("")).toBeNull();
+    expect(buildCategoryHeading("   ")).toBeNull();
+  });
+
+  it("suppresses the heading when it would exactly repeat the adjacent matrix label", () => {
+    expect(buildCategoryHeading("Serology", "SEROLOGY TEST")).toBeNull();
+    expect(buildCategoryHeading("Serology", "Serology Test")).toBeNull();
+  });
+
+  it("still renders the heading when the adjacent label does not match", () => {
+    expect(buildCategoryHeading("Serology", "Dengue Rapid Test")).toBe("SEROLOGY TEST");
+  });
+
+  it("ignores an empty/whitespace adjacent label and renders normally", () => {
+    expect(buildCategoryHeading("Hematology", "")).toBe("HEMATOLOGY TEST");
+    expect(buildCategoryHeading("Hematology", "   ")).toBe("HEMATOLOGY TEST");
+    expect(buildCategoryHeading("Hematology", null)).toBe("HEMATOLOGY TEST");
   });
 });
