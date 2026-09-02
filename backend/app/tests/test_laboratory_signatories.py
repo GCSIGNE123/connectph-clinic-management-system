@@ -154,13 +154,21 @@ async def test_4b_receptionist_cannot_configure_a_med_tech_signature(client: Asy
 # --- 5/6/7/8. Release captures Med Tech + Pathologist, both reprint-able ---
 
 
-async def test_5_6_7_8_release_snapshots_med_tech_and_pathologist_and_reprint_uses_them(
+async def test_5_6_7_8_release_snapshots_pathologist_and_reprint_uses_it_med_tech_signature_never_captured(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
+    """Client requirement change: a laboratory report's Med Tech In Charge
+    no longer gets an e-signature AT ALL, on any new release - both
+    MedTechs on a report sign the printed page by hand now (see
+    `release_results()`'s explicit `med_tech_signature_snapshot_url=None`).
+    This test deliberately configures a real signature on the releasing
+    Laboratory user's account FIRST, to prove release still never captures
+    it - `User.signature_url` is not read for this purpose anymore. The
+    Pathologist side is completely unchanged (still e-signed)."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    clinic_id = ctx["clinic"].id
 
-    # Configure the Med Tech's (the releasing Laboratory user's) signature.
+    # Configure the Med Tech's (the releasing Laboratory user's) signature
+    # - release must still ignore it entirely.
     await client.post("/api/v1/auth/me/signature", headers=ctx["lab_headers"], files=_png_file(content=PNG_BYTES))
 
     pathologist = await _create_pathologist(client, ctx["owner_headers"])
@@ -170,50 +178,99 @@ async def test_5_6_7_8_release_snapshots_med_tech_and_pathologist_and_reprint_us
     assert released.status_code == 200, released.text
     body = released.json()
 
-    # #5: Med Tech in Charge is the releasing Laboratory user.
+    # #5: Med Tech in Charge is the releasing Laboratory user - name is
+    # still captured, but NEVER a signature snapshot, even though one was
+    # configured on the account moments before release.
     assert body["released_by"] is not None
     assert body["med_tech_name_snapshot"]
-    assert body["med_tech_signature_snapshot_url"]
+    assert body["med_tech_signature_snapshot_url"] is None
 
-    # #6: selected Pathologist persisted.
+    # #6: selected Pathologist persisted - completely unchanged behavior.
     assert body["pathologist_id"] == pathologist["id"]
     assert body["pathologist_name_snapshot"] == "Dr. Maria Santos"
     assert body["pathologist_signature_snapshot_url"]
 
-    # #7/#8: reprint (a fresh GET) uses the stored snapshot, and the actual
-    # signature files are fetchable and correct.
+    # #7/#8: reprint (a fresh GET) uses the stored snapshot - still null
+    # for the Med Tech, still populated for the Pathologist - and the
+    # Pathologist's signature file is still fetchable/correct. The Med
+    # Tech signature file endpoint now correctly 404s (nothing was ever
+    # captured to serve).
     reprint = await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])
-    assert reprint.json()["med_tech_signature_snapshot_url"] == body["med_tech_signature_snapshot_url"]
+    assert reprint.json()["med_tech_signature_snapshot_url"] is None
     assert reprint.json()["pathologist_signature_snapshot_url"] == body["pathologist_signature_snapshot_url"]
 
     med_tech_file = await client.get(f"/api/v1/laboratory/orders/{lab_id}/med-tech-signature/file", headers=ctx["owner_headers"])
-    assert med_tech_file.status_code == 200
-    assert med_tech_file.content == PNG_BYTES
+    assert med_tech_file.status_code == 404
 
     pathologist_file = await client.get(f"/api/v1/laboratory/orders/{lab_id}/pathologist-signature/file", headers=ctx["owner_headers"])
     assert pathologist_file.status_code == 200
     assert pathologist_file.content == PNG_BYTES_2
 
 
-# --- 9/10/11. Historical immutability ---
-
-
-async def test_9_changing_med_techs_current_signature_does_not_change_old_report(
+async def test_5b_med_tech_signature_is_never_captured_regardless_of_when_the_account_signature_changes(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
+    """Broader than test_9 used to be (pre-requirement-change, that test
+    proved an already-captured snapshot survives a LATER account change) -
+    now there is never anything to capture in the first place, whether the
+    account's signature is set before release, after release, or both."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
     await client.post("/api/v1/auth/me/signature", headers=ctx["lab_headers"], files=_png_file(content=PNG_BYTES))
     released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
-    original_snapshot = released.json()["med_tech_signature_snapshot_url"]
-    assert original_snapshot
+    assert released.json()["med_tech_signature_snapshot_url"] is None
 
-    # Replace the Med Tech's CURRENT signature after release.
+    # Changing the account's signature AFTER release changes nothing either
+    # - there was never a snapshot column value tied to it post-release.
     await client.post("/api/v1/auth/me/signature", headers=ctx["lab_headers"], files=_png_file(content=PNG_BYTES_2))
+    reprint = await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])
+    assert reprint.json()["med_tech_signature_snapshot_url"] is None
+    file_resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/med-tech-signature/file", headers=ctx["owner_headers"])
+    assert file_resp.status_code == 404
+
+
+async def test_5c_a_historical_med_tech_signature_snapshot_from_before_this_change_still_serves_unchanged(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Historical-compatibility guarantee: an order released BEFORE this
+    requirement change already has a real `med_tech_signature_snapshot_url`
+    value in the database. Nothing in this change touches that column or
+    that data - simulated here by writing directly to the row (the live
+    release API can no longer produce such a row going forward, which is
+    exactly the point), then proving GET/file-serving still work exactly
+    as they did before."""
+    from app.models.laboratory_order import LaboratoryOrder
+
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    assert released.json()["med_tech_signature_snapshot_url"] is None
+
+    # Simulate a pre-existing historical row by writing the snapshot
+    # column directly (bypassing the API, which never sets this anymore).
+    from app.core.doctor_signature_storage import USER_SIGNATURES_UPLOAD_ROOT
+
+    signature_dir = USER_SIGNATURES_UPLOAD_ROOT / str(ctx["clinic"].id) / str(released.json()["released_by"])
+    signature_dir.mkdir(parents=True, exist_ok=True)
+    (signature_dir / "historical-sig.png").write_bytes(PNG_BYTES)
+
+    lab_order_row = await db_session.get(LaboratoryOrder, lab_id)
+    lab_order_row.med_tech_signature_snapshot_url = "historical-sig.png"
+    await db_session.commit()
 
     reprint = await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])
-    assert reprint.json()["med_tech_signature_snapshot_url"] == original_snapshot
+    assert reprint.json()["med_tech_signature_snapshot_url"] == "historical-sig.png"
     file_resp = await client.get(f"/api/v1/laboratory/orders/{lab_id}/med-tech-signature/file", headers=ctx["owner_headers"])
-    assert file_resp.content == PNG_BYTES  # still the OLD signature, not PNG_BYTES_2
+    assert file_resp.status_code == 200
+    assert file_resp.content == PNG_BYTES
+
+
+# --- 9/10/11. Historical immutability ---
+
+
+# test_9 (originally: "changing the Med Tech's current signature does not
+# change an old report") is superseded by test_5b/test_5c above - a new
+# release never captures a Med Tech signature at all anymore (nothing for
+# a later account change to threaten), and test_5c covers the historical-
+# row case a pre-change report actually needs protected.
 
 
 async def test_10_changing_pathologists_current_signature_does_not_change_old_report(
@@ -295,11 +352,11 @@ async def test_12b_inactive_pathologist_selection_rejected(client: AsyncClient, 
 async def test_13_missing_med_tech_signature_does_not_block_release_or_fabricate_one(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
-    """No Med Tech signature configured at release time - existing release
-    behavior is preserved (release still succeeds), and the snapshot is
-    simply left null rather than fabricated. See the Round 6 implementation
-    report, section F, for why this was the chosen behavior over blocking
-    release."""
+    """A Med Tech signature is never captured on release at all now
+    (client requirement change - see test_5_6_7_8's updated docstring),
+    so this is unconditionally true regardless of whether one was
+    configured on the account - release still succeeds, and the snapshot
+    is simply always null rather than fabricated."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
     released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
     assert released.status_code == 200, released.text
@@ -392,3 +449,234 @@ async def test_17_18_released_result_remains_printable_and_existing_lifecycle_in
     # in play.
     re_release = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
     assert re_release.status_code == 400
+
+
+# --- Countersigning Med Technologist (client requirement: a second,
+# MANUALLY-signing MedTech, distinct from the Med Tech In Charge - see
+# migration 0043). Selected from eligible Laboratory-role Users at release
+# time; snapshotted (name + license only, deliberately NO signature field)
+# the same "capture once, never re-resolve" way as every other signatory
+# on this table. ---
+
+
+async def _second_lab_user(client: AsyncClient, db_session, *, clinic_id, first_name: str, last_name: str, license_number: str | None = None):
+    """A SECOND Laboratory-role user in the same clinic (distinct from the
+    one `_setup_with_lab_order`/`_release_ready_order` already creates as
+    the releasing Med Tech In Charge) - the countersigning MedTech."""
+    email, user = await _make_role_login(db_session, clinic_id=clinic_id, role_name="Laboratory")
+    user.first_name = first_name
+    user.last_name = last_name
+    user.license_number = license_number
+    await db_session.commit()
+    await db_session.refresh(user)
+    token = await _login(client, email, "TestPass123!")
+    return {"Authorization": f"Bearer {token}"}, user
+
+
+async def test_c1_release_snapshots_the_selected_countersigning_med_tech_name_and_license_no_signature_field(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    _countersigner_headers, countersigner = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Aijilie", last_name="Mosquite", license_number="123456"
+    )
+
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(countersigner.id)},
+    )
+    assert released.status_code == 200, released.text
+    body = released.json()
+
+    assert body["countersigning_med_tech_id"] == str(countersigner.id)
+    assert body["countersigning_med_tech_name_snapshot"] == "Aijilie Mosquite"
+    assert body["countersigning_med_tech_license_snapshot"] == "123456"
+    # No signature field exists for this role at all - not even a null one
+    # that could someday be populated; the key itself is absent from the
+    # schema/response.
+    assert "countersigning_med_tech_signature_snapshot_url" not in body
+
+
+async def test_c2_missing_countersigning_med_tech_selection_does_not_block_release_or_fabricate_one(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    assert released.status_code == 200, released.text
+    assert released.json()["countersigning_med_tech_id"] is None
+    assert released.json()["countersigning_med_tech_name_snapshot"] is None
+    assert released.json()["countersigning_med_tech_license_snapshot"] is None
+
+
+async def test_c3_cross_clinic_countersigning_med_tech_selection_rejected(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    other_clinic, _other_owner, _other_headers = await _owner_headers(client, make_clinic_with_owner)
+    _foreign_headers, foreign_med_tech = await _second_lab_user(
+        client, db_session, clinic_id=other_clinic.id, first_name="Foreign", last_name="MedTech"
+    )
+
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(foreign_med_tech.id)},
+    )
+    assert resp.status_code == 404
+
+
+async def test_c3b_nonexistent_countersigning_med_tech_id_rejected(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Security review follow-up: distinct from test_c3 (a real user in
+    ANOTHER clinic) - a UUID that matches no user row at all, anywhere,
+    must also be rejected. The backend never trusts the id it's handed;
+    it re-validates existence + clinic + role + active status in one
+    query at release time, never relying on GET /laboratory/med-techs'
+    own filtering for this protection."""
+    import uuid as _uuid
+
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(_uuid.uuid4())},
+    )
+    assert resp.status_code == 404
+
+
+async def test_c4_non_medtech_roles_cannot_be_selected_as_countersigner(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Authorization requirement: only eligible Laboratory-role Users can
+    be selected as the countersigning MedTech - a Doctor, Receptionist, or
+    Owner in the SAME clinic must be rejected exactly like a not-found
+    user, reusing the existing role definition rather than a new one."""
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    doc_me = (await client.get("/api/v1/auth/me", headers=ctx["doc_headers"])).json()
+    recep_me = (await client.get("/api/v1/auth/me", headers=ctx["recep_headers"])).json()
+    owner_me = (await client.get("/api/v1/auth/me", headers=ctx["owner_headers"])).json()
+
+    for non_medtech_id in (doc_me["id"], recep_me["id"], owner_me["id"]):
+        resp = await client.post(
+            f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+            json={"countersigning_med_tech_id": non_medtech_id},
+        )
+        assert resp.status_code == 404, f"role check should reject {non_medtech_id}"
+
+
+async def test_c5_inactive_countersigning_med_tech_selection_rejected(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    _countersigner_headers, countersigner = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Inactive", last_name="MedTech"
+    )
+    countersigner.is_active = False
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(countersigner.id)},
+    )
+    assert resp.status_code == 400
+
+
+async def test_c6_countersigning_med_tech_historical_snapshot_survives_a_later_rename(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Same historical-immutability guarantee as the Pathologist/Med Tech
+    In Charge - a later rename of the countersigner's own account must
+    never alter an already-released report."""
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    countersigner_headers, countersigner = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Original", last_name="Name", license_number="111111"
+    )
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(countersigner.id)},
+    )
+    assert released.json()["countersigning_med_tech_name_snapshot"] == "Original Name"
+
+    # Rename the countersigner's own account after release.
+    await client.patch(
+        f"/api/v1/users/{countersigner.id}", headers=ctx["owner_headers"],
+        json={"first_name": "Renamed", "last_name": "Person"},
+    )
+
+    reprint = await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])
+    assert reprint.json()["countersigning_med_tech_name_snapshot"] == "Original Name"
+    assert reprint.json()["countersigning_med_tech_license_snapshot"] == "111111"
+
+
+async def test_c7_missing_countersigning_med_tech_license_is_handled_safely(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    _countersigner_headers, countersigner = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="No", last_name="License", license_number=None
+    )
+
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(countersigner.id)},
+    )
+    assert released.status_code == 200, released.text
+    assert released.json()["countersigning_med_tech_name_snapshot"] == "No License"
+    assert released.json()["countersigning_med_tech_license_snapshot"] is None
+
+
+# --- GET /laboratory/med-techs: the eligible-countersigner list ---
+
+
+async def test_med_techs_endpoint_lists_only_active_laboratory_role_users_in_clinic(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx, _lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    _second_headers, second_med_tech = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Aijilie", last_name="Mosquite", license_number="123456"
+    )
+    _inactive_headers, inactive_med_tech = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Inactive", last_name="MedTech"
+    )
+    inactive_med_tech.is_active = False
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/laboratory/med-techs", headers=ctx["owner_headers"])
+    assert resp.status_code == 200, resp.text
+    ids = {row["id"] for row in resp.json()}
+    names = {row["full_name"] for row in resp.json()}
+    assert str(second_med_tech.id) in ids
+    assert "Aijilie Mosquite" in names
+    # Inactive MedTech excluded.
+    assert str(inactive_med_tech.id) not in ids
+    # License number is exposed; no signature field exists on this schema
+    # at all.
+    matched = next(row for row in resp.json() if row["id"] == str(second_med_tech.id))
+    assert matched["license_number"] == "123456"
+    assert "signature_url" not in matched
+
+
+async def test_med_techs_endpoint_excludes_non_laboratory_roles_and_other_clinics(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx, _lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    other_clinic, _other_owner, _other_headers = await _owner_headers(client, make_clinic_with_owner)
+    _foreign_headers, foreign_med_tech = await _second_lab_user(
+        client, db_session, clinic_id=other_clinic.id, first_name="Foreign", last_name="MedTech"
+    )
+
+    resp = await client.get("/api/v1/laboratory/med-techs", headers=ctx["owner_headers"])
+    assert resp.status_code == 200, resp.text
+    ids = {row["id"] for row in resp.json()}
+    doc_me = (await client.get("/api/v1/auth/me", headers=ctx["doc_headers"])).json()
+    recep_me = (await client.get("/api/v1/auth/me", headers=ctx["recep_headers"])).json()
+
+    assert doc_me["id"] not in ids
+    assert recep_me["id"] not in ids
+    assert str(foreign_med_tech.id) not in ids
+
+
+async def test_med_techs_endpoint_requires_lab_manage_role(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Same `require_lab_manage_role` gate release itself uses (Owner/
+    Administrator/Laboratory) - a Doctor or Receptionist cannot list
+    eligible countersigners, matching the existing role/authorization
+    rules rather than introducing a new definition."""
+    ctx, _lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+
+    doc_resp = await client.get("/api/v1/laboratory/med-techs", headers=ctx["doc_headers"])
+    assert doc_resp.status_code == 403
+
+    recep_resp = await client.get("/api/v1/laboratory/med-techs", headers=ctx["recep_headers"])
+    assert recep_resp.status_code == 403
+
+    lab_resp = await client.get("/api/v1/laboratory/med-techs", headers=ctx["lab_headers"])
+    assert lab_resp.status_code == 200

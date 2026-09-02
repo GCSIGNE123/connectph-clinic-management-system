@@ -67,6 +67,75 @@ describe("LaboratoryReportView", () => {
     expect(screen.getByText("12.0-16.0")).toBeInTheDocument();
   });
 
+  // --- Client feedback: header rearrangement. The Test row is removed
+  // from the header entirely (for every report type - see the matrix
+  // describe block below for that side); the two info columns are now
+  // Patient Name/Requesting Doctor/Visit #/Order No. (left) and
+  // Status/Collected/Completed/Released (right), in that exact order -
+  // Order No. moved out of the right column into the left column's
+  // fourth row. Visit # is explicitly still present (a Visit exists even
+  // for a walk-in/direct-to-laboratory patient with no Requesting
+  // Doctor). ---
+  describe("Header rearrangement (client feedback)", () => {
+    it("renders the two info columns in the exact requested order: Patient Name/Requesting Doctor/Visit #/Order No., then Status/Collected/Completed/Released", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            patientName: "Paul Test", doctorName: "Dr. Santos", visitNumber: "VIS-1", orderNumber: "ORD-1",
+            status: "Released", collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z",
+          })}
+        />
+      );
+      // Every InfoRow label span, in DOM order - proves the exact
+      // requested arrangement, not just that each field exists somewhere.
+      // Scoped to `.border-y-2.border-slate-800` specifically (the
+      // header info block's own class combo) rather than the more
+      // generic `.grid.grid-cols-2`, which `LaboratorySignatoryFooter`'s
+      // signatory row also happens to use - not relevant here since
+      // these fixtures never set a signatory snapshot, but kept precise
+      // regardless.
+      const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
+      const labels = Array.from(headerBlock.querySelectorAll("div > div > span:first-child")).map((el) => el.textContent);
+      expect(labels).toEqual(["Patient Name", "Requesting Doctor", "Visit #", "Order No.", "Status", "Collected", "Completed", "Released"]);
+    });
+
+    it("does not render a Test row/label in the header at all, for a standard report", () => {
+      render(<LaboratoryReportView order={order({ testType: "CBC" })} />);
+      const headerBlock = document.querySelector("#laboratory-report-body .border-y-2.border-slate-800") as HTMLElement;
+      expect(headerBlock).not.toHaveTextContent("Test");
+    });
+
+    it("Visit # is never removed - it still renders even when Requesting Doctor is '-' (a direct-to-laboratory walk-in patient)", () => {
+      render(<LaboratoryReportView order={order({ doctorName: null, visitNumber: "VIS-20260901-000009" })} />);
+      expect(screen.getByText("Visit #")).toBeInTheDocument();
+      expect(screen.getByText("VIS-20260901-000009")).toBeInTheDocument();
+      expect(screen.getByText("Requesting Doctor")).toBeInTheDocument();
+      const doctorRow = screen.getByText("Requesting Doctor").closest("div") as HTMLDivElement;
+      expect(doctorRow).toHaveTextContent("-");
+    });
+
+    it("Order No. still renders its real value, just repositioned into the left column", () => {
+      render(<LaboratoryReportView order={order({ orderNumber: "ORD-20260901-000007" })} />);
+      expect(screen.getByText("Order No.")).toBeInTheDocument();
+      expect(screen.getByText("ORD-20260901-000007")).toBeInTheDocument();
+    });
+
+    it("Status/Collected/Completed/Released remain in the right column, unaffected by the reorder", () => {
+      render(
+        <LaboratoryReportView
+          order={order({ status: "Released", collectedAt: "2026-01-01T08:00:00Z", completedAt: "2026-01-01T09:00:00Z", releasedAt: "2026-01-01T10:00:00Z" })}
+        />
+      );
+      expect(screen.getByText("Status")).toBeInTheDocument();
+      // "Released" is both the label of the timestamp row AND the
+      // Status field's own value here - deliberately checked via
+      // getAllByText (exactly 2: the label, plus the Status value).
+      expect(screen.getAllByText("Released")).toHaveLength(2);
+      expect(screen.getByText("Collected")).toBeInTheDocument();
+      expect(screen.getByText("Completed")).toBeInTheDocument();
+    });
+  });
+
   it("#13: Blood Typing (Categorical) renders structuredValue.value", () => {
     render(
       <LaboratoryReportView
@@ -777,9 +846,12 @@ describe("LaboratoryReportView", () => {
   // the parent test name as the matrix's own first cell/row label - "TEST
   // | NS1 | IgM | IgG" / "DENGUE RAPID TEST | Negative | Positive |
   // Negative" - never Unit/Normal Values/Flag/Interpretation for this
-  // layout. The report header's "Test: <name>" InfoRow is hidden for a
-  // matrix report specifically to avoid showing the parent test name
-  // twice - it stays exactly as before for every standard report.
+  // layout. The report header's "Test: <name>" InfoRow was originally
+  // hidden only for a matrix report (to avoid showing the parent test
+  // name twice); the client later decided it's redundant on EVERY report
+  // type (the result table/matrix already identifies the test) and
+  // removed it from the header unconditionally - see test "I" below for
+  // the standard-report side of that.
   // Selected purely by `isQualitativeCategoricalRow` (resultType +
   // configured `options`), never by test name - every test below uses a
   // different, fictional parameter set to prove that. ---
@@ -902,17 +974,23 @@ describe("LaboratoryReportView", () => {
       expect(screen.getAllByText("Fictional 4-Analyte Panel")).toHaveLength(1);
     });
 
-    it("I: a standard (non-matrix) report still renders the header's Test field exactly as before", () => {
+    it("I: a standard (non-matrix) report's header no longer renders a Test field either (client feedback: removed for every report type)", () => {
       render(
         <LaboratoryReportView
           order={order({ testType: "CBC", results: [result({ units: "g/dL", numericValue: 14 })] })}
         />
       );
-      // "Test" appears twice for a standard report - the header's own
-      // InfoRow label, plus the unrelated five-column table's "Test"
-      // column heading - both already existed before this change.
-      expect(screen.getAllByText("Test")).toHaveLength(2);
-      expect(screen.getByText("CBC")).toBeInTheDocument();
+      // "Test" appears exactly once for a standard report now - only the
+      // unrelated five-column table's own "Test" column heading. The
+      // header's own InfoRow label used to also render "Test" (making
+      // this 2), but the client removed it from the header entirely, for
+      // every report type, not just a matrix one - the test TYPE string
+      // itself ("CBC") no longer appears anywhere in a standard report
+      // (it's only ever shown via the result table's own parameter rows,
+      // which don't include the raw test type).
+      expect(screen.getAllByText("Test")).toHaveLength(1);
+      expect(screen.queryByText("CBC")).not.toBeInTheDocument();
+      expect(screen.getByText("Hemoglobin")).toBeInTheDocument();
     });
 
     it("E: Numeric reports are completely unaffected by the matrix layout - Unit/Normal Values/Flag still render", () => {
@@ -1401,6 +1479,132 @@ describe("LaboratoryReportView", () => {
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
       expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
       expect(screen.getByText("L")).toBeInTheDocument();
+    });
+  });
+
+  // --- Client requirement change: NEITHER MedTech gets an e-signature on
+  // a NEW report anymore - both the Med Tech In Charge and a new,
+  // separately-selected Countersigning MedTech sign the printed page by
+  // hand. Only the Pathologist keeps an e-signature (unchanged, see round
+  // 6 above). The primary Med Tech In Charge column needed ZERO frontend
+  // changes for this - `medTechSignatureSnapshotUrl` is simply always
+  // `null` for a new release now (a backend-only change), and round 6's
+  // existing test "9" already proves a `null` signature URL renders a
+  // blank line with no fetch/image - that historical behavior is exactly
+  // what a "manual signature" now needs. Round 6's test "6" (a NON-null
+  // signature URL still fetches/renders) also remains unchanged and
+  // MUST keep passing - that's the historical-compatibility guarantee
+  // for an order released before this change. ---
+  describe("Laboratory Report print redesign, round 8 (both MedTechs manual-signature-only; new Countersigning MedTech block)", () => {
+    function renderWithClient(ui: React.ReactElement) {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+    }
+
+    it("regression: a NEW-style Med Tech In Charge (no signature URL at all) still renders name + RMT No. + role, with no signature image and no fetch", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({ medTechNameSnapshot: "Aijilie Mosquite", medTechLicenseSnapshot: "123456", medTechSignatureSnapshotUrl: null })}
+        />
+      );
+      expect(mockFetchBlob).not.toHaveBeenCalled();
+      expect(screen.queryByAltText("Med Technologist in Charge signature")).not.toBeInTheDocument();
+      expect(screen.getByText("Aijilie Mosquite")).toBeInTheDocument();
+      expect(screen.getByText("RMT No. 123456")).toBeInTheDocument();
+      expect(screen.getByTestId("med-tech-signatory")).toHaveTextContent("Medical Technologist");
+    });
+
+    it("the Countersigning MedTech block renders name, RMT No., and role", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            countersigningMedTechNameSnapshot: "Diego Silang", countersigningMedTechLicenseSnapshot: "654321",
+          })}
+        />
+      );
+      const block = screen.getByTestId("countersigning-med-tech-signatory");
+      expect(block).toHaveTextContent("Diego Silang");
+      expect(block).toHaveTextContent("RMT No. 654321");
+      expect(block).toHaveTextContent("Medical Technologist");
+      expect(block).toHaveTextContent("Countersign");
+    });
+
+    it("the Countersigning MedTech NEVER renders a signature image and NEVER fetches one - no signature_url field exists to even read", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView order={order({ countersigningMedTechNameSnapshot: "Diego Silang", countersigningMedTechLicenseSnapshot: "654321" })} />
+      );
+      const block = screen.getByTestId("countersigning-med-tech-signatory");
+      expect(block.querySelector("img")).not.toBeInTheDocument();
+      expect(mockFetchBlob).not.toHaveBeenCalled();
+    });
+
+    it("the Countersigning MedTech renders a blank manual-signature line (a plain border, no image, above the name)", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView order={order({ countersigningMedTechNameSnapshot: "Diego Silang" })} />
+      );
+      const block = screen.getByTestId("countersigning-med-tech-signatory");
+      const nameEl = screen.getByText("Diego Silang");
+      const lineEl = nameEl.closest(".border-t") as HTMLElement;
+      expect(lineEl).not.toBeNull();
+      expect(block.contains(lineEl)).toBe(true);
+      expect(lineEl.querySelector("img")).not.toBeInTheDocument();
+    });
+
+    it("a Countersigning MedTech with no license number configured omits the 'RMT No.' line entirely - name/role still render, never a blank 'RMT No.'", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView order={order({ countersigningMedTechNameSnapshot: "Diego Silang", countersigningMedTechLicenseSnapshot: null })} />
+      );
+      const block = screen.getByTestId("countersigning-med-tech-signatory");
+      expect(block).toHaveTextContent("Diego Silang");
+      expect(block).toHaveTextContent("Medical Technologist");
+      expect(block).not.toHaveTextContent("RMT No.");
+    });
+
+    it("no Countersigning MedTech selected at release renders no countersign block at all - never fabricated", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(<LaboratoryReportView order={order({ medTechNameSnapshot: "Maria Cruz" })} />);
+      expect(screen.queryByTestId("countersigning-med-tech-signatory")).not.toBeInTheDocument();
+    });
+
+    it("the countersign block renders below/separate from the existing Med Tech In Charge / Pathologist two-column row - never a third column in that row", () => {
+      mockFetchBlob.mockReset();
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            medTechNameSnapshot: "Maria Cruz", pathologistNameSnapshot: "Dr. Santos",
+            countersigningMedTechNameSnapshot: "Diego Silang",
+          })}
+        />
+      );
+      const twoColumnRow = screen.getByTestId("med-tech-signatory").parentElement as HTMLElement;
+      // The existing row is still exactly two columns.
+      expect(twoColumnRow.children).toHaveLength(2);
+      expect(twoColumnRow.contains(screen.getByTestId("pathologist-signatory"))).toBe(true);
+      // The countersign block is a sibling AFTER that row, not nested
+      // inside it as a third column.
+      const countersignBlock = screen.getByTestId("countersigning-med-tech-signatory");
+      expect(twoColumnRow.contains(countersignBlock)).toBe(false);
+    });
+
+    it("Pathologist e-signature behavior remains completely unchanged alongside the new Countersigning MedTech block", async () => {
+      mockFetchBlob.mockReset().mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+      renderWithClient(
+        <LaboratoryReportView
+          order={order({
+            pathologistNameSnapshot: "Dr. Santos", pathologistLicenseSnapshot: "PRC-1",
+            pathologistSignatureSnapshotUrl: "sig-path.png",
+            countersigningMedTechNameSnapshot: "Diego Silang",
+          })}
+        />
+      );
+      await waitFor(() => expect(mockFetchBlob).toHaveBeenCalledWith("/laboratory/orders/lab-1/pathologist-signature/file"));
+      expect(await screen.findByAltText("Pathologist signature")).toBeInTheDocument();
+      expect(screen.getByText("Lic. No. PRC-1")).toBeInTheDocument();
     });
   });
 

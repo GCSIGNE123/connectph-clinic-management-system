@@ -33,6 +33,7 @@ from app.models.laboratory_attachment import LaboratoryAttachmentType
 from app.models.user import User
 from app.schemas.laboratory import (
     LaboratoryAttachmentRead,
+    LaboratoryMedTechRead,
     LaboratoryOrderRead,
     LaboratoryReferenceRangeCreate,
     LaboratoryReferenceRangeRead,
@@ -90,6 +91,26 @@ async def list_orders(
     if visit_id is not None:
         return await service.list_for_visit(visit_id, clinic_id=clinic_id)
     return await service.list_for_dashboard(clinic_id=clinic_id, date_from=date_from, date_to=date_to)
+
+
+@router.get("/med-techs", response_model=list[LaboratoryMedTechRead])
+async def list_eligible_med_techs(
+    clinic_id: UUID = Depends(require_clinic_context),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_lab_manage_role),
+) -> list[LaboratoryMedTechRead]:
+    """Every active Laboratory-role User in this clinic - the pool
+    `ReleaseResultsDialog`'s countersigning-MedTech selector draws from.
+    Gated by `require_lab_manage_role` (the same Owner/Administrator/
+    Laboratory check release itself uses) rather than the Owner/
+    Administrator-only `/users` endpoint, since a Laboratory-role user
+    releasing their own results must be able to see this list too.
+    Deliberately excludes `signature_url` from the response
+    (`LaboratoryMedTechRead` has no such field) - this list exists purely
+    to pick a name + license for a MANUAL countersignature, never an
+    e-signature."""
+    users = await LaboratoryService(db).list_eligible_med_techs(clinic_id=clinic_id)
+    return [LaboratoryMedTechRead(id=u.id, full_name=u.full_name, license_number=u.license_number) for u in users]
 
 
 @router.get("/orders/{laboratory_order_id}", response_model=LaboratoryOrderRead)
@@ -209,6 +230,7 @@ async def release_results(
     return await LaboratoryService(db).release_results(
         laboratory_order_id, clinic_id=clinic_id, actor_id=current_user.id,
         pathologist_id=payload.pathologist_id if payload else None,
+        countersigning_med_tech_id=payload.countersigning_med_tech_id if payload else None,
     )
 
 

@@ -114,10 +114,44 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     )
     med_tech_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     med_tech_license_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Client requirement change: laboratory reports no longer carry a
+    # Med Tech In Charge e-signature AT ALL - both MedTechs on a report
+    # (this one and the countersigner below) manually sign the printed
+    # page. `release_results()` now explicitly writes `None` here for
+    # EVERY new release (never reads `User.signature_url` for this
+    # purpose again) - the column itself is intentionally NOT dropped/
+    # migrated away, because an order released BEFORE this change still
+    # has a real value here and must keep printing that historical
+    # signature unchanged on reprint (see the implementation report's
+    # historical-compatibility section). `LaboratorySignatoryFooter`
+    # already renders a blank line whenever this is null - no frontend
+    # change was needed to produce the required "blank manual signature
+    # line" for new reports.
     med_tech_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     pathologist_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pathologist_license_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
     pathologist_signature_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # --- Countersigning Med Technologist (client requirement: a second,
+    # MANUALLY-signing MedTech, distinct from the Med Tech In Charge above)
+    # ---
+    # Selected from the clinic's own Laboratory-role Users at release time
+    # (see `LaboratoryService.release_results` / `GET /laboratory/
+    # med-techs`), snapshotted the same "capture once, never re-resolve"
+    # way as the Pathologist/Med Tech In Charge above - a later rename or
+    # license change on that user's account must never alter an
+    # already-released report. Deliberately has NO
+    # `countersigning_med_tech_signature_snapshot_url` column and never
+    # will - this person always signs the printed page by hand, so there
+    # is nothing to snapshot for it. `countersigning_med_tech_id` is kept
+    # for traceability only (same "UI convenience, never re-joined for
+    # report rendering" convention as `pathologist_id` above) - report
+    # rendering only ever reads the two snapshot columns.
+    countersigning_med_tech_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    countersigning_med_tech_name_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    countersigning_med_tech_license_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     invoice_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoice_items.id", ondelete="SET NULL"), nullable=True
@@ -129,6 +163,7 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     doctor: Mapped["Doctor"] = relationship()
     template: Mapped["LaboratoryTemplate"] = relationship()
     pathologist: Mapped["Pathologist | None"] = relationship()
+    countersigning_med_tech: Mapped["User | None"] = relationship(foreign_keys=[countersigning_med_tech_id])
     results: Mapped[list["LaboratoryResult"]] = relationship(back_populates="laboratory_order", cascade="all, delete-orphan")
     attachments: Mapped[list["LaboratoryAttachment"]] = relationship(back_populates="laboratory_order", cascade="all, delete-orphan")
 

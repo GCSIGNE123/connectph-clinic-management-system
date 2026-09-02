@@ -92,22 +92,29 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
         </div>
       </div>
 
+      {/* Client feedback (header rearrange): the Test field is removed
+          from the header entirely now, for EVERY report type - it was
+          previously kept for a standard (non-matrix) report and only
+          omitted for a qualitative matrix report (whose matrix already
+          shows the parent test name as its own first cell/row label), but
+          the client decided the report's own content/section heading
+          below already identifies the test either way, so the header
+          field is redundant in both cases. Left column is now Patient
+          Name / Requesting Doctor / Visit # / Order No., in that order -
+          Visit # is deliberately kept (a Visit represents the clinic
+          encounter and exists even for a walk-in/direct-to-laboratory
+          patient); Requesting Doctor legitimately reads "-" for one.
+          Right column (Status/Collected/Completed/Released) is
+          unchanged - Order No. simply moved out of it into the left
+          column's fourth row. */}
       <div className="grid min-w-0 grid-cols-2 gap-x-4 border-y-2 border-slate-800 py-1.5">
         <div>
           <InfoRow label="Patient Name" value={order.patientName} />
-          {/* The Test field is omitted from the header for a qualitative
-              matrix report - the matrix itself already shows the parent
-              test name as its first cell/row label (client reference:
-              "DENGUE RAPID TEST | Negative | Positive | Negative"), so
-              repeating it here would be the same redundancy this decision
-              is meant to remove. A standard (non-matrix) report keeps this
-              field exactly as before. */}
-          {categoricalRows.length === 0 ? <InfoRow label="Test" value={order.testType} /> : null}
-          <InfoRow label="Visit #" value={order.visitNumber} />
           <InfoRow label="Requesting Doctor" value={order.doctorName} />
+          <InfoRow label="Visit #" value={order.visitNumber} />
+          <InfoRow label="Order No." value={order.orderNumber} />
         </div>
         <div>
-          <InfoRow label="Order No." value={order.orderNumber} />
           <InfoRow label="Status" value={order.status} />
           <InfoRow label="Collected" value={order.collectedAt ? formatDateTime(order.collectedAt) : null} />
           <InfoRow label="Completed" value={order.completedAt ? formatDateTime(order.completedAt) : null} />

@@ -250,10 +250,28 @@ class LaboratoryOrderRead(BaseModel):
     pathologist_id: UUID | None = None
     med_tech_name_snapshot: str | None = None
     med_tech_license_snapshot: str | None = None
+    # Client requirement change: the Med Tech In Charge no longer gets an
+    # e-signature on a NEW report - `release_results()` now explicitly
+    # writes `None` here for every new release. Left on the schema/model
+    # unchanged (not dropped) purely for historical compatibility: an
+    # order released before this change still has a real value here and
+    # must keep printing it unchanged on reprint.
     med_tech_signature_snapshot_url: str | None = None
     pathologist_name_snapshot: str | None = None
     pathologist_license_snapshot: str | None = None
     pathologist_signature_snapshot_url: str | None = None
+    # Countersigning Med Technologist (client requirement: a second,
+    # MANUALLY-signing MedTech, distinct from the Med Tech In Charge
+    # above) - captured the same "snapshot once at release" way as every
+    # other signatory field on this order. Deliberately no
+    # `countersigning_med_tech_signature_snapshot_url` field - this person
+    # always signs the printed page by hand. `countersigning_med_tech_id`
+    # is exposed for UI convenience only, same convention as
+    # `pathologist_id` above - report rendering only ever uses the two
+    # snapshot fields below it.
+    countersigning_med_tech_id: UUID | None = None
+    countersigning_med_tech_name_snapshot: str | None = None
+    countersigning_med_tech_license_snapshot: str | None = None
     invoice_item_id: UUID | None = None
     created_at: datetime
     results: list[LaboratoryResultRead] = Field(default_factory=list)
@@ -261,16 +279,32 @@ class LaboratoryOrderRead(BaseModel):
 
 
 class LaboratoryReleaseRequest(BaseModel):
-    """Body for `POST /laboratory/orders/{id}/release`. Pathologist
-    selection happens HERE (release time), never at print time - see
-    `LaboratoryService.release_results`. Deliberately optional: omitting it
-    preserves the pre-existing release behavior (a lab order could always
-    be released with no pathologist concept at all before this feature)
-    rather than introducing a new hard requirement that could block an
-    otherwise-legitimate release. See the Round 6 implementation report,
-    section F, for the explicit decision this reflects."""
+    """Body for `POST /laboratory/orders/{id}/release`. Pathologist and
+    countersigning-MedTech selection both happen HERE (release time),
+    never at print time - see `LaboratoryService.release_results`. Both
+    deliberately optional: omitting either preserves the pre-existing
+    release behavior (a lab order could always be released with no
+    pathologist/countersigner concept at all before these features) rather
+    than introducing a new hard requirement that could block an otherwise-
+    legitimate release. See the Round 6 implementation report, section F,
+    for the explicit decision this reflects (Pathologist); the
+    countersigning MedTech follows the identical reasoning."""
 
     pathologist_id: UUID | None = None
+    countersigning_med_tech_id: UUID | None = None
+
+
+class LaboratoryMedTechRead(BaseModel):
+    """One eligible Med Technologist a Laboratory-role user can select as
+    the countersigning MedTech at release time - `GET /laboratory/
+    med-techs`. Deliberately excludes `signature_url`/any e-signature
+    field: this list is used ONLY to pick a name + license number for a
+    person who will manually sign the printed page, never to resolve or
+    display an e-signature."""
+
+    id: UUID
+    full_name: str
+    license_number: str | None = None
 
 
 class LaboratoryDashboardStats(BaseModel):

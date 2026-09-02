@@ -3,6 +3,7 @@ import type {
   LaboratoryAttachment,
   LaboratoryAttachmentType,
   LaboratoryDashboardStats,
+  LaboratoryMedTech,
   LaboratoryOrder,
   LaboratoryResult,
   LaboratoryResultInput,
@@ -89,7 +90,18 @@ function toOrder(raw: any): LaboratoryOrder {
     pathologistNameSnapshot: raw.pathologist_name_snapshot ?? null,
     pathologistLicenseSnapshot: raw.pathologist_license_snapshot ?? null,
     pathologistSignatureSnapshotUrl: raw.pathologist_signature_snapshot_url ?? null,
+    countersigningMedTechId: raw.countersigning_med_tech_id ?? null,
+    countersigningMedTechNameSnapshot: raw.countersigning_med_tech_name_snapshot ?? null,
+    countersigningMedTechLicenseSnapshot: raw.countersigning_med_tech_license_snapshot ?? null,
     updatedAt: raw.updated_at,
+  };
+}
+
+function toMedTech(raw: any): LaboratoryMedTech {
+  return {
+    id: raw.id,
+    fullName: raw.full_name,
+    licenseNumber: raw.license_number ?? null,
   };
 }
 
@@ -258,9 +270,23 @@ export const laboratoryApi = {
 
   // Round 6: Pathologist selection happens HERE, at release time - never
   // at print time. Omitting `pathologistId` preserves the pre-existing
-  // release behavior (no pathologist concept at all).
-  releaseResults: (id: string, pathologistId?: string | null) =>
-    apiClient.post<any>(`/laboratory/orders/${id}/release`, pathologistId ? { pathologist_id: pathologistId } : {}).then(toOrder),
+  // release behavior (no pathologist concept at all). Countersigning
+  // MedTech selection follows the identical pattern (both optional,
+  // independent of each other).
+  releaseResults: (id: string, pathologistId?: string | null, countersigningMedTechId?: string | null) =>
+    apiClient
+      .post<any>(`/laboratory/orders/${id}/release`, {
+        ...(pathologistId ? { pathologist_id: pathologistId } : {}),
+        ...(countersigningMedTechId ? { countersigning_med_tech_id: countersigningMedTechId } : {}),
+      })
+      .then(toOrder),
+
+  // Client requirement: the countersigning-MedTech selector at release
+  // time draws from this list - active Laboratory-role Users only (same
+  // role gate `require_lab_manage_role` uses), never Pathologists/
+  // Doctors/Receptionists/other roles. No signature field is returned.
+  listMedTechs: (): Promise<LaboratoryMedTech[]> =>
+    apiClient.get<any[]>("/laboratory/med-techs").then((rows) => rows.map(toMedTech)),
 
   getMedTechSignatureBlob: (id: string): Promise<Blob> => apiFetchBlob(`/laboratory/orders/${id}/med-tech-signature/file`),
   getPathologistSignatureBlob: (id: string): Promise<Blob> => apiFetchBlob(`/laboratory/orders/${id}/pathologist-signature/file`),

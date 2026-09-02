@@ -135,13 +135,26 @@ export function useReleaseResults() {
   const { toast } = useToast();
   const invalidateAll = useInvalidateAllLabViews();
   return useMutation({
-    mutationFn: ({ id, pathologistId }: { id: string; pathologistId?: string | null }) =>
-      laboratoryApi.releaseResults(id, pathologistId),
+    mutationFn: ({ id, pathologistId, countersigningMedTechId }: { id: string; pathologistId?: string | null; countersigningMedTechId?: string | null }) =>
+      laboratoryApi.releaseResults(id, pathologistId, countersigningMedTechId),
     onSuccess: (order) => {
       invalidateAll(order);
       toast({ title: "Results released", variant: "success" });
     },
     onError: (error) => toast({ title: "Could not release results", description: errorMessage(error), variant: "error" }),
+  });
+}
+
+/** Client requirement: the countersigning-MedTech selector in
+ * `ReleaseResultsDialog` draws from this list - active Laboratory-role
+ * Users only (same role/authorization the backend endpoint enforces), no
+ * signature field. Only fetched while the dialog is actually open, same
+ * `usePathologists(true, { enabled: open })` convention. */
+export function useEligibleMedTechs(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["laboratory", "med-techs"],
+    queryFn: () => laboratoryApi.listMedTechs(),
+    enabled: options.enabled ?? true,
   });
 }
 

@@ -129,15 +129,40 @@ export interface LaboratoryOrder {
   pathologistId?: string | null;
   medTechNameSnapshot?: string | null;
   medTechLicenseSnapshot?: string | null;
+  // Client requirement change: the Med Tech In Charge no longer gets an
+  // e-signature on a NEW report - `release_results()` now always stores
+  // `null` here going forward. Left as-is (not removed) purely for
+  // historical compatibility: an order released before this change still
+  // has a real value here and keeps printing it unchanged on reprint.
   medTechSignatureSnapshotUrl?: string | null;
   pathologistNameSnapshot?: string | null;
   pathologistLicenseSnapshot?: string | null;
   pathologistSignatureSnapshotUrl?: string | null;
+  // Countersigning Med Technologist (client requirement: a second,
+  // MANUALLY-signing MedTech, distinct from the Med Tech In Charge
+  // above) - captured the same "snapshot once at release" way as every
+  // other signatory field. Deliberately no
+  // `countersigningMedTechSignatureSnapshotUrl` field - this person
+  // always signs the printed page by hand.
+  countersigningMedTechId?: string | null;
+  countersigningMedTechNameSnapshot?: string | null;
+  countersigningMedTechLicenseSnapshot?: string | null;
   // Phase 4I: optimistic-concurrency token - `ResultEntryDialog` echoes
   // this back as `expectedUpdatedAt` on save (see `enterResults` below),
   // so a save based on a stale snapshot (someone else saved first) is
   // rejected (409) instead of silently overwriting their changes.
   updatedAt: string;
+}
+
+/** One eligible Med Technologist the Release Results dialog's
+ * countersigning-MedTech selector can choose from (`GET /laboratory/
+ * med-techs`) - deliberately has no signature/e-signature field. This
+ * list exists purely to pick a name + license number for a person who
+ * will manually sign the printed page. */
+export interface LaboratoryMedTech {
+  id: string;
+  fullName: string;
+  licenseNumber: string | null;
 }
 
 export interface LaboratoryDashboardStats {

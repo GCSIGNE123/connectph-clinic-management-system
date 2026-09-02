@@ -40,6 +40,7 @@ from app.models.order import Order, OrderCategory, OrderStatus
 from app.models.pathologist import Pathologist
 from app.models.patient import Patient
 from app.models.queue import QUEUE_STATUS_TRANSITIONS, QueueStatus
+from app.models.role import Role, RoleName
 from app.models.user import User
 from app.models.visit import VisitTimelineEventType
 from app.repositories.clinical_orders_repository import ClinicalOrdersRepository
@@ -193,6 +194,9 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
         pathologist_name_snapshot=lab_order.pathologist_name_snapshot,
         pathologist_license_snapshot=lab_order.pathologist_license_snapshot,
         pathologist_signature_snapshot_url=lab_order.pathologist_signature_snapshot_url,
+        countersigning_med_tech_id=lab_order.countersigning_med_tech_id,
+        countersigning_med_tech_name_snapshot=lab_order.countersigning_med_tech_name_snapshot,
+        countersigning_med_tech_license_snapshot=lab_order.countersigning_med_tech_license_snapshot,
         invoice_item_id=lab_order.invoice_item_id,
         created_at=lab_order.created_at,
         updated_at=lab_order.updated_at,
@@ -367,6 +371,25 @@ class LaboratoryService:
     async def dashboard_stats(self, *, clinic_id: UUID) -> dict:
         today = datetime.now(UTC).date()
         return await self.repo.dashboard_counts(clinic_id, today=today)
+
+    async def list_eligible_med_techs(self, *, clinic_id: UUID) -> list[User]:
+        """Every active Laboratory-role User in this clinic - the pool
+        `ReleaseResultsDialog`'s countersigning-MedTech selector draws
+        from. Reuses the exact same role definition (`RoleName.LABORATORY`)
+        and clinic/active/not-deleted filters `LAB_MANAGE_ROLES`/
+        `require_lab_manage_role` already gate release itself with - no
+        second definition of "who counts as a MedTech" is introduced.
+        Ordered by name for a stable, predictable selector list."""
+        result = await self.session.execute(
+            select(User)
+            .join(Role, User.role_id == Role.id)
+            .where(
+                User.clinic_id == clinic_id, User.is_active.is_(True), User.is_deleted.is_(False),
+                Role.name == RoleName.LABORATORY.value,
+            )
+            .order_by(User.first_name, User.last_name)
+        )
+        return list(result.scalars().all())
 
     async def list_for_visit(self, visit_id: UUID, *, clinic_id: UUID) -> list[LaboratoryOrderRead]:
         rows = await self.repo.list_for_visit(visit_id, clinic_id)
@@ -558,19 +581,27 @@ class LaboratoryService:
         )
 
     async def release_results(
-        self, laboratory_order_id: UUID, *, clinic_id: UUID, actor_id: UUID, pathologist_id: UUID | None = None
+        self,
+        laboratory_order_id: UUID,
+        *,
+        clinic_id: UUID,
+        actor_id: UUID,
+        pathologist_id: UUID | None = None,
+        countersigning_med_tech_id: UUID | None = None,
     ) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
         self._transition(lab_order, LaboratoryOrderStatus.RELEASED)
         now = datetime.now(UTC)
 
         # Round 6 (Laboratory Report Signatories): capture the Med Tech In
-        # Charge + Pathologist identity/signature snapshot HERE, at the one
-        # moment this order transitions to Released - never re-resolved on
+        # Charge + Pathologist identity snapshot HERE, at the one moment
+        # this order transitions to Released - never re-resolved on
         # reprint (see the model docstring on `laboratory_order.py`). The
         # releasing user (already gated to LAB_MANAGE_ROLES = Owner/
         # Administrator/Laboratory at the API layer) IS the Med Tech In
-        # Charge; no separate selector exists or is needed.
+        # Charge; no separate selector exists or is needed for who they
+        # are - only for whether their e-signature shows (it never does
+        # anymore, see below).
         med_tech = await self.session.get(User, actor_id)
         pathologist_fields: dict = {
             "pathologist_id": None, "pathologist_name_snapshot": None,
@@ -591,12 +622,47 @@ class LaboratoryService:
                 "pathologist_signature_snapshot_url": pathologist.signature_url,
             }
 
+        # Client requirement change: a laboratory report's Med Tech In
+        # Charge signs the PRINTED PAGE BY HAND now - no e-signature, on
+        # any new release. `User.signature_url` is deliberately never read
+        # here anymore. The column itself stays untouched for orders
+        # already released before this change (see the model docstring).
+        countersigning_fields: dict = {
+            "countersigning_med_tech_id": None, "countersigning_med_tech_name_snapshot": None,
+            "countersigning_med_tech_license_snapshot": None,
+        }
+        if countersigning_med_tech_id is not None:
+            countersigner = await self.session.execute(
+                select(User)
+                .join(Role, User.role_id == Role.id)
+                .where(
+                    User.id == countersigning_med_tech_id, User.clinic_id == clinic_id,
+                    User.is_deleted.is_(False), Role.name == RoleName.LABORATORY.value,
+                )
+            )
+            countersigner = countersigner.scalar_one_or_none()
+            if countersigner is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Countersigning Med Technologist not found")
+            if not countersigner.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected countersigning Med Technologist is not active")
+            countersigning_fields = {
+                "countersigning_med_tech_id": countersigner.id,
+                "countersigning_med_tech_name_snapshot": countersigner.full_name,
+                "countersigning_med_tech_license_snapshot": countersigner.license_number,
+                # Deliberately no signature field - this person always
+                # signs the printed page by hand, never an e-signature.
+            }
+
         await self.repo.update_laboratory_order(
             lab_order, status=LaboratoryOrderStatus.RELEASED, released_at=now, released_by=actor_id,
             med_tech_name_snapshot=med_tech.full_name if med_tech else None,
             med_tech_license_snapshot=med_tech.license_number if med_tech else None,
-            med_tech_signature_snapshot_url=med_tech.signature_url if med_tech else None,
+            # Client requirement change: never snapshot a Med Tech In
+            # Charge e-signature on a new release - see the model
+            # docstring for why this column isn't dropped.
+            med_tech_signature_snapshot_url=None,
             **pathologist_fields,
+            **countersigning_fields,
         )
         await self._sync_order_status(lab_order, clinic_id=clinic_id)
         await self.visit_repo.add_timeline_event(
