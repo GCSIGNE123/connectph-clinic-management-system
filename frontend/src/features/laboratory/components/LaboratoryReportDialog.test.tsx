@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaboratoryReportDialog } from "./LaboratoryReportDialog";
@@ -265,6 +265,83 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
       expect(printCss).toMatch(/#laboratory-report-print-root \.report-row\s*\{[^}]*break-inside:\s*avoid/);
       expect(printCss).toMatch(/#laboratory-report-print-root \.section-heading\s*\{[^}]*break-after:\s*avoid/);
       expect(printCss).toMatch(/#laboratory-report-print-root[^{]*\{[^}]*print-color-adjust:\s*exact/);
+    });
+  });
+
+  // --- Client request: default "Save as PDF" filename of
+  // "<Patient_Name>-<last 4 Order # digits>.pdf" - built from the exact
+  // same already-fetched order the report renders (never Visit #/Queue #),
+  // wired through to `PrintableDocumentDialog`'s `printFilename` prop (see
+  // that component's own tests for the underlying document.title
+  // mechanism). ---
+  describe("Default PDF filename", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("clicking Print sets document.title to '<Patient_Name>-<last 4 Order # digits>' (extensionless) for the duration of the print job", async () => {
+      useLaboratoryOrder.mockReturnValue({
+        data: labOrder({ patientName: "Paul Test", orderNumber: "ORD-20260901-000007" }),
+      });
+      let titleDuringPrint: string | null = null;
+      vi.spyOn(window, "print").mockImplementation(() => {
+        titleDuringPrint = document.title;
+      });
+
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      screen.getByRole("button", { name: /^print$/i }).click();
+      expect(window.print).toHaveBeenCalledTimes(1);
+      expect(titleDuringPrint).toBe("Paul_Test-0007");
+    });
+
+    it("a second order (different patient/order number) produces its own distinct filename - not hardcoded", async () => {
+      useLaboratoryOrder.mockReturnValue({
+        data: labOrder({ patientName: "Richard Test", orderNumber: "ORD-20260901-000002" }),
+      });
+      let titleDuringPrint: string | null = null;
+      vi.spyOn(window, "print").mockImplementation(() => {
+        titleDuringPrint = document.title;
+      });
+
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      screen.getByRole("button", { name: /^print$/i }).click();
+      expect(titleDuringPrint).toBe("Richard_Test-0002");
+    });
+
+    it("never uses Visit # or Queue # in the filename, even when they differ from the patient/order values", async () => {
+      useLaboratoryOrder.mockReturnValue({
+        data: labOrder({
+          patientName: "Paul Test", orderNumber: "ORD-20260901-000007",
+          visitNumber: "VIS-99999999-999999", queueNumber: "L999",
+        }),
+      });
+      let titleDuringPrint: string | null = null;
+      vi.spyOn(window, "print").mockImplementation(() => {
+        titleDuringPrint = document.title;
+      });
+
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      screen.getByRole("button", { name: /^print$/i }).click();
+      expect(titleDuringPrint).toBe("Paul_Test-0007");
+      expect(titleDuringPrint).not.toContain("99999999");
+      expect(titleDuringPrint).not.toContain("999");
+      expect(titleDuringPrint).not.toContain("L999");
+    });
+
+    it("does not change the Order # actually displayed on the report", async () => {
+      useLaboratoryOrder.mockReturnValue({
+        data: labOrder({ patientName: "Paul Test", orderNumber: "ORD-20260901-000007" }),
+      });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      expect(screen.getAllByText("ORD-20260901-000007").length).toBeGreaterThan(0);
     });
   });
 });

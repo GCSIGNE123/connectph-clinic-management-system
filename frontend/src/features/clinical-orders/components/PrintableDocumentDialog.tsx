@@ -40,6 +40,7 @@ export function PrintableDocumentDialog({
   title,
   printableId,
   defaultPaperSize,
+  printFilename,
   children,
 }: {
   open: boolean;
@@ -52,6 +53,26 @@ export function PrintableDocumentDialog({
    * still never writes back to the stored preference on its own. Omit to
    * keep the existing behavior (starts at the stored default). */
   defaultPaperSize?: PaperSize;
+  /** Default filename a browser's "Save as PDF" destination suggests when
+   * this document is printed (e.g. "Paul_Test-0007"). Optional - omitted
+   * for every existing caller (Receipt, Queue Slip, Prescription, Referral,
+   * Lab Request) that doesn't opt in, leaving their behavior byte-for-byte
+   * unchanged.
+   *
+   * There is no dedicated browser API for this - `window.print()` has no
+   * filename parameter, and a page cannot write to the OS's native "Save
+   * As" dialog beyond what the browser itself offers. The one real,
+   * widely-used lever: Chromium/Firefox's print-to-PDF destination derives
+   * its suggested filename from `document.title` at the moment printing
+   * starts. This temporarily swaps `document.title` to `printFilename` for
+   * the duration of the print job (restored via the `afterprint` event,
+   * which fires whether the user actually saved, printed, or cancelled -
+   * so the tab's real title is never left wrong afterwards) rather than
+   * changing it permanently or introducing a PDF-generation library. A
+   * trailing ".pdf" is stripped if present, since the browser appends its
+   * own extension - passing the extension through unchanged would suggest
+   * "name.pdf.pdf". */
+  printFilename?: string;
   children: React.ReactNode;
 }) {
   const { preferences, setPaperSize } = usePrintPreferences();
@@ -62,6 +83,21 @@ export function PrintableDocumentDialog({
   const [paperSizeOverride, setPaperSizeOverride] = useState<PaperSize | null>(defaultPaperSize ?? null);
   const paperSize = paperSizeOverride ?? preferences.paperSize;
   const previewDims = PAPER_SIZE_PREVIEW_PX[paperSize];
+
+  const handlePrint = () => {
+    if (!printFilename) {
+      window.print();
+      return;
+    }
+    const previousTitle = document.title;
+    document.title = printFilename.replace(/\.pdf$/i, "");
+    const restoreTitle = () => {
+      document.title = previousTitle;
+      window.removeEventListener("afterprint", restoreTitle);
+    };
+    window.addEventListener("afterprint", restoreTitle);
+    window.print();
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -120,7 +156,7 @@ export function PrintableDocumentDialog({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button type="button" onClick={() => window.print()}>
+          <Button type="button" onClick={handlePrint}>
             Print
           </Button>
         </DialogFooter>

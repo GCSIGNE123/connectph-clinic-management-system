@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
 import { LaboratoryReportView } from "@/features/laboratory/components/LaboratoryReportView";
 import { useLaboratoryOrder } from "@/features/laboratory/hooks/use-laboratory";
+import { buildLaboratoryReportFilename } from "@/features/laboratory/lib/report-filename";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
 /** Bug fix (duplicate 2-page print/PDF output): a print-only copy of the
@@ -97,6 +98,14 @@ export function LaboratoryReportDialog({
         // width for the five-column result table - not the clinic-wide
         // default (A4). Still overridable via the paper-size selector.
         defaultPaperSize="Letter"
+        // Client request: default "Save as PDF" filename of
+        // "<Patient_Name>-<last 4 Order # digits>.pdf" - read from the
+        // exact same already-fetched order the report body itself renders
+        // (never Visit #/Queue #, never a separate fetch); undefined while
+        // the order hasn't loaded yet, which PrintableDocumentDialog
+        // treats identically to omitting the prop (falls back to
+        // document.title, unchanged from before this feature).
+        printFilename={order ? buildLaboratoryReportFilename(order.patientName, order.orderNumber) : undefined}
       >
         {order ? <LaboratoryReportView order={order} /> : null}
       </PrintableDocumentDialog>
