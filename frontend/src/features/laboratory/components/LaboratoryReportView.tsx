@@ -80,7 +80,21 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   const categoryHeading = buildCategoryHeading(order.template?.testCategory, categoricalRows.length > 0 ? order.testType : null);
 
   return (
-    <div id="laboratory-report-body" className="w-full text-[11px] leading-tight sm:text-xs">
+    // Layout-only change: this root becomes a flex COLUMN so the signatory
+    // footer below (`mt-auto`) can be pushed toward the bottom of the page
+    // instead of sitting immediately after Notes. `flex-1` only takes
+    // effect when an ancestor is itself `display:flex` (the on-screen
+    // print-preview box and the print portal root both are now, scoped via
+    // `LaboratoryReportDialog`'s own CSS - see its doc comments) - stretching
+    // this root to that ancestor's full (at-least-one-page) height, which is
+    // what gives `mt-auto` room to push into. Rendered anywhere else
+    // (bare unit tests, any other embed with no flex ancestor), `flex-1`
+    // is simply inert and this behaves exactly as before: the footer sits
+    // right after Notes with no gap, since there's no extra height for
+    // `mt-auto` to consume. No fixed/forced height anywhere - a report
+    // whose content genuinely exceeds one page still grows naturally and
+    // paginates, it just doesn't create a page for the footer alone.
+    <div id="laboratory-report-body" className="flex w-full flex-1 flex-col text-[11px] leading-tight sm:text-xs">
       <div className="flex items-center justify-center gap-2 pb-1 pt-0.5 text-center">
         {logoUrl ? (
           // Round 7 follow-up: enlarged from h-8 (32px) to h-12/h-14
@@ -230,10 +244,9 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
 
       {/* Round 6 (Laboratory Report Signatories): Med Tech In Charge (left)
           + Pathologist (right), captured once at release - see
-          `LaboratorySignatoryFooter`'s own docstring. Placed at the very
-          end of the report, after the result table and notes, per the
-          clinical-document convention the feature spec called for -
-          never repeated per page/section.
+          `LaboratorySignatoryFooter`'s own docstring. Always the LAST
+          thing in the report - after the result table and notes - never
+          repeated per page/section.
 
           Client feedback (round 2): the "MED TECHNOLOGIST IN CHARGE" /
           "PATHOLOGIST" role headings above each signature are redundant on
@@ -242,8 +255,22 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
           report (a now-removed `showHeading` prop this call site set
           `false` for); `LaboratorySignatoryFooter` itself no longer ever
           renders the heading, for standard and matrix reports alike - one
-          call site, no report-type-specific opt-in/out. */}
-      <LaboratorySignatoryFooter order={order} />
+          call site, no report-type-specific opt-in/out.
+
+          Round 9 (true page footer): `mt-auto` is the entire mechanism -
+          in the flex column this root now is, it consumes all leftover
+          height above itself, pushing the footer down toward the bottom of
+          the page for a short report while never overlapping the results/
+          notes above (flexbox only ever gives it space that's actually
+          free) and never forcing a page just for itself (a report that
+          already fills/exceeds one page leaves no leftover height, so the
+          footer simply follows immediately after Notes, exactly like
+          before this change). `LaboratorySignatoryFooter` itself is
+          completely unmodified - this is a wrapper `<div>` around the same
+          call, not a change to the footer's own markup or logic. */}
+      <div className="mt-auto">
+        <LaboratorySignatoryFooter order={order} />
+      </div>
     </div>
   );
 }

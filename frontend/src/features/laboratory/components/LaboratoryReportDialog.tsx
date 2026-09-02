@@ -138,6 +138,24 @@ export function LaboratoryReportDialog({
         #laboratory-report-print-root {
           display: none;
         }
+        /* Round 9 (true page footer, on-screen preview): scoped to this
+           printableId only (unique to the Laboratory Report - every other
+           document type this shared PrintableDocumentDialog renders uses
+           its own id, e.g. "prescription-printable"), so this never
+           touches Prescription/Referral/Lab Request/Medical Certificate's
+           own preview boxes. Turns the shared preview box into a flex
+           column so LaboratoryReportView's own root (a flex child with
+           flex-1) can stretch to the box's full (at-least-one-page)
+           height, giving the signatory footer's margin-top:auto real
+           leftover space to push into. The box's existing inline
+           width/min-height and overflow-auto (from PrintableDocumentDialog)
+           are untouched - this only adds display:flex +
+           flex-direction:column, which doesn't change the box's own
+           sizing, only how its single child is laid out inside it. */
+        #laboratory-report-printable {
+          display: flex;
+          flex-direction: column;
+        }
         @media print {
           /* The on-screen preview's printable element must never ALSO
              render during print - only the portaled copy above does now.
@@ -158,9 +176,31 @@ export function LaboratoryReportDialog({
           body > *:not(#laboratory-report-print-root) {
             display: none !important;
           }
+          /* Round 9 (true page footer, print/PDF): display:flex +
+             flex-direction:column (rather than plain block) lets
+             LaboratoryReportView's root - a flex child with flex-1 -
+             stretch to fill this box, exactly like the on-screen preview
+             above, so the signatory footer's margin-top:auto has real
+             leftover height to push into here too. min-height: 100vh is
+             what supplies that height in the printed/PDF output: in print
+             media, Chromium (the engine this codebase's own print/PDF
+             testing already targets - see the doc comment above this
+             component) resolves viewport units against the @page box set
+             by PrintableDocumentDialog's own "@page { size: ...; margin:
+             12mm; }" rule, so 100vh here means one page's printable height
+             for whichever paper size is selected - not a fixed pixel
+             value. This is a MINIMUM, not a fixed height: a report whose
+             content genuinely exceeds one page still grows taller than
+             100vh and paginates normally onto a second physical page (the
+             browser's own pagination, untouched) - this rule never forces
+             an extra page for a report that already fits, and never
+             clips/hides overflow content (no max-height, no
+             overflow:hidden anywhere here). */
           #laboratory-report-print-root {
-            display: block !important;
+            display: flex !important;
+            flex-direction: column;
             width: 100%;
+            min-height: 100vh;
           }
           /* The shared PrintableDocumentDialog's own print CSS sets
              "body * { visibility: hidden }" and only re-declares

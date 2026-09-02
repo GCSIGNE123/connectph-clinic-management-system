@@ -251,7 +251,56 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
 
       const printCss = printCssText();
       expect(printCss).toMatch(/body\s*>\s*\*:not\(#laboratory-report-print-root\)\s*\{[^}]*display:\s*none\s*!important/);
-      expect(printCss).toMatch(/#laboratory-report-print-root\s*\{[^}]*display:\s*block\s*!important/);
+      // Round 9 (true page footer): the portal's own display rule changed
+      // from a plain "block" to "flex" (+ flex-direction: column) so the
+      // signatory footer's margin-top:auto has a flex context to push
+      // against - it's still forced `!important` and still the only thing
+      // left in flow to paginate, unchanged from the original fix this
+      // test documents.
+      expect(printCss).toMatch(/#laboratory-report-print-root\s*\{[^}]*display:\s*flex\s*!important/);
+      expect(printCss).toMatch(/#laboratory-report-print-root\s*\{[^}]*flex-direction:\s*column/);
+    });
+
+    // --- Round 9 (true page footer): the signatory footer must render at
+    // the bottom of the physical printed/PDF page, not immediately after
+    // Notes - see LaboratoryReportView's own "flex-1" root and the
+    // margin-top:auto footer wrapper. This only works print-side because
+    // the portal supplies a page-height flex context for that to push
+    // against. jsdom doesn't compute real layout, so these tests verify
+    // the CSS rule itself is present and scoped correctly. ---
+    it("the print portal gets a min-height of 100vh - a page-height flex context for the signatory footer's margin-top:auto to push against", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const printCss = printCssText();
+      expect(printCss).toMatch(/#laboratory-report-print-root\s*\{[^}]*min-height:\s*100vh/);
+    });
+
+    it("this min-height is a MINIMUM only (not a fixed height) - it never caps or clips a report whose content genuinely exceeds one page", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const printCss = printCssText();
+      // Deliberately excludes "min-" so this doesn't false-positive on the
+      // very "min-height: 100vh" rule this feature relies on - only a
+      // plain fixed "height:" or a "max-height"/"overflow:hidden" would
+      // actually cap/clip content, and none of those are present.
+      expect(printCss).not.toMatch(/#laboratory-report-print-root\s*\{[^}]*(?<!min-)height:\s*100vh/);
+      expect(printCss).not.toMatch(/#laboratory-report-print-root\s*\{[^}]*max-height/);
+      expect(printCss).not.toMatch(/#laboratory-report-print-root\s*\{[^}]*overflow:\s*hidden/);
+    });
+
+    it("the on-screen print-preview box is scoped to a flex column too (matching the print portal), so the footer previews bottom-aligned before printing - scoped only to this printableId, never a shared rule other printable documents inherit", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const css = printCssText();
+      // Note: NOT inside @media print - this is the on-screen rule.
+      expect(css).toMatch(/#laboratory-report-printable\s*\{[^}]*display:\s*flex/);
+      expect(css).toMatch(/#laboratory-report-printable\s*\{[^}]*flex-direction:\s*column/);
     });
 
     it("the portal is invisible on screen (display: none outside @media print) - it never appears in the normal UI", async () => {

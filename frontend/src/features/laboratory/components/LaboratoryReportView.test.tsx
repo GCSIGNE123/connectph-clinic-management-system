@@ -1977,3 +1977,154 @@ describe("LaboratoryReportView - overall category heading", () => {
     expect(screen.getByText("Status")).toBeInTheDocument();
   });
 });
+
+// --- Round 9 (true page footer): the signatory footer must sit at the
+// bottom of the printed/PDF page - pushed there by `mt-auto` in a flex
+// column, not a fixed margin - rather than immediately after Notes.
+// jsdom has no real layout engine (no flexbox height computation), so
+// these tests verify the STRUCTURE the CSS relies on (the flex-column
+// root, the `mt-auto` wrapper, and its position as the LAST element after
+// Notes) rather than actual pixel positions - the visual "near the
+// bottom" behavior itself is confirmed separately via live browser
+// verification (see the implementation report). ---
+describe("LaboratoryReportView - signatory footer page layout", () => {
+  // `LaboratorySignatoryFooter`'s Med Tech/Pathologist columns fetch a
+  // signature blob via `useQuery` - a plain `render()` throws "No
+  // QueryClient set" the moment any signatory snapshot is present, exactly
+  // like the existing round-6 signatory tests below need. Reset the mock
+  // per test since each renders its own dialog fresh.
+  function renderWithClient(ui: React.ReactElement) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  }
+
+  it("the report root is a flex column, so a flex ancestor (the print preview box / print portal root) can stretch it to full page height", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(<LaboratoryReportView order={order({ medTechNameSnapshot: "Aijilie Mosquite" })} />);
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    expect(root.className).toContain("flex");
+    expect(root.className).toContain("flex-1");
+    expect(root.className).toContain("flex-col");
+  });
+
+  it("the signatory footer is wrapped in an 'mt-auto' element - the entire push-to-bottom mechanism - and is the LAST child of the report root, after Notes", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(<LaboratoryReportView order={order({ medTechNameSnapshot: "Aijilie Mosquite", pathologistNameSnapshot: "Dr. Santos" })} />);
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    const lastChild = root.lastElementChild as HTMLElement;
+    expect(lastChild.className).toContain("mt-auto");
+    expect(lastChild.contains(screen.getByTestId("med-tech-signatory"))).toBe(true);
+    expect(lastChild.contains(screen.getByTestId("pathologist-signatory"))).toBe(true);
+    // Notes must be ABOVE the footer, not after it or inside it.
+    const notesBox = document.querySelector(".report-notes") as HTMLElement;
+    expect(notesBox).not.toBeNull();
+    expect(lastChild.contains(notesBox)).toBe(false);
+    expect(
+      notesBox.compareDocumentPosition(lastChild) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("CBC (standard/numeric report): results and notes stay above the mt-auto footer, and all three signatory areas render inside it", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(
+      <LaboratoryReportView
+        order={order({
+          medTechNameSnapshot: "Aijilie Mosquite", medTechLicenseSnapshot: "123456",
+          pathologistNameSnapshot: "Dr. Santos", pathologistLicenseSnapshot: "PRC-1",
+          countersigningMedTechNameSnapshot: "Diego Silang", countersigningMedTechLicenseSnapshot: "654321",
+        })}
+      />
+    );
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    const footerWrapper = root.lastElementChild as HTMLElement;
+    expect(footerWrapper.className).toContain("mt-auto");
+    expect(footerWrapper.contains(screen.getByTestId("med-tech-signatory"))).toBe(true);
+    expect(footerWrapper.contains(screen.getByTestId("pathologist-signatory"))).toBe(true);
+    expect(footerWrapper.contains(screen.getByTestId("countersigning-med-tech-signatory"))).toBe(true);
+    // The results table itself is untouched by this layout change.
+    expect(screen.getByText("Hemoglobin")).toBeInTheDocument();
+  });
+
+  it("categorical/matrix report: the mt-auto footer positioning applies identically, and the matrix itself is unaffected", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(
+      <LaboratoryReportView
+        order={order({
+          testType: "DENGUE RAPID TEST (DRT)",
+          template: {
+            id: "t-drt-footer", testName: "DENGUE RAPID TEST (DRT)", testCategory: "Serology", specimenType: null, defaultPrice: 0,
+            turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+            parameters: [param({ parameterName: "NS1", resultType: "Categorical", options: ["Positive", "Negative"] })],
+          },
+          results: [result({ parameterName: "NS1", resultType: "Categorical", structuredValue: { value: "Negative" } })],
+          medTechNameSnapshot: "Aijilie Mosquite", pathologistNameSnapshot: "Dr. Santos",
+        })}
+      />
+    );
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    const footerWrapper = root.lastElementChild as HTMLElement;
+    expect(footerWrapper.className).toContain("mt-auto");
+    expect(footerWrapper.contains(screen.getByTestId("med-tech-signatory"))).toBe(true);
+    // The matrix's own parent-test-name cell and results remain intact.
+    expect(screen.getByText("DENGUE RAPID TEST (DRT)")).toBeInTheDocument();
+    expect(screen.getByText("Negative")).toBeInTheDocument();
+  });
+
+  it("no countersigning MedTech: the footer still wraps Med Tech In Charge + Pathologist only, correctly positioned", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(
+      <LaboratoryReportView
+        order={order({ medTechNameSnapshot: "Aijilie Mosquite", pathologistNameSnapshot: "Dr. Santos" })}
+      />
+    );
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    const footerWrapper = root.lastElementChild as HTMLElement;
+    expect(footerWrapper.className).toContain("mt-auto");
+    expect(footerWrapper.contains(screen.getByTestId("med-tech-signatory"))).toBe(true);
+    expect(footerWrapper.contains(screen.getByTestId("pathologist-signatory"))).toBe(true);
+    expect(screen.queryByTestId("countersigning-med-tech-signatory")).not.toBeInTheDocument();
+  });
+
+  it("with a countersigning MedTech: all three signatories are inside the footer, countersigner still centered below the top row (not a third column)", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(
+      <LaboratoryReportView
+        order={order({
+          medTechNameSnapshot: "Aijilie Mosquite", pathologistNameSnapshot: "Dr. Santos",
+          countersigningMedTechNameSnapshot: "Diego Silang",
+        })}
+      />
+    );
+    const root = document.querySelector("#laboratory-report-body") as HTMLElement;
+    const footerWrapper = root.lastElementChild as HTMLElement;
+    const twoColumnRow = screen.getByTestId("med-tech-signatory").parentElement as HTMLElement;
+    // Still exactly two columns in the top row - the countersign block is
+    // a sibling AFTER it, not a third column, and the whole thing lives
+    // inside the same mt-auto footer wrapper.
+    expect(twoColumnRow.children).toHaveLength(2);
+    expect(footerWrapper.contains(twoColumnRow)).toBe(true);
+    const countersignBlock = screen.getByTestId("countersigning-med-tech-signatory");
+    expect(footerWrapper.contains(countersignBlock)).toBe(true);
+    expect(twoColumnRow.contains(countersignBlock)).toBe(false);
+  });
+
+  it("does not reintroduce the removed 'MEDICAL TECHNOLOGIST / COUNTERSIGN' heading as part of this layout change", () => {
+    mockFetchBlob.mockReset();
+    renderWithClient(
+      <LaboratoryReportView
+        order={order({
+          medTechNameSnapshot: "Aijilie Mosquite", pathologistNameSnapshot: "Dr. Santos",
+          countersigningMedTechNameSnapshot: "Diego Silang",
+        })}
+      />
+    );
+    expect(screen.queryByText("Countersign")).not.toBeInTheDocument();
+  });
+
+  it("a report with no signatory data at all renders no footer content (the mt-auto wrapper contributes nothing visible)", () => {
+    render(<LaboratoryReportView order={order()} />);
+    expect(screen.queryByTestId("med-tech-signatory")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pathologist-signatory")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("countersigning-med-tech-signatory")).not.toBeInTheDocument();
+  });
+});
