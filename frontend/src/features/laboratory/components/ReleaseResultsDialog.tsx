@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { useEligibleMedTechs, useReleaseResults } from "@/features/laboratory/hooks/use-laboratory";
 import { usePathologists } from "@/features/pathologists/hooks/use-pathologists";
+import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 
 /**
  * Round 6 (Laboratory Report Signatories): Pathologist selection happens
@@ -37,7 +38,20 @@ export function ReleaseResultsDialog({
   const [countersigningMedTechId, setCountersigningMedTechId] = useState<string>("");
   const pathologistsQuery = usePathologists(true, { enabled: open });
   const medTechsQuery = useEligibleMedTechs({ enabled: open });
+  const currentUserQuery = useCurrentUser();
   const release = useReleaseResults();
+
+  // Client requirement: the Countersigning MedTech must never be the same
+  // person as the Med Tech In Charge - who IS the releasing user (see the
+  // "recorded automatically as you" copy below; there's no separate
+  // selector for who they are). Excluded by ID, never by displayed name,
+  // so two Laboratory users who happen to share a name are never confused
+  // with each other. The backend enforces this same rule independently in
+  // `release_results()` - this is a UX convenience, not the source of
+  // truth, since a request bypassing this dialog entirely must still be
+  // rejected server-side.
+  const currentUserId = currentUserQuery.data?.id;
+  const eligibleCountersigners = (medTechsQuery.data ?? []).filter((mt) => mt.id !== currentUserId);
 
   function handleClose(next: boolean) {
     if (!next) {
@@ -92,10 +106,10 @@ export function ReleaseResultsDialog({
             id="release-countersigning-med-tech"
             value={countersigningMedTechId}
             onChange={(e) => setCountersigningMedTechId(e.target.value)}
-            disabled={medTechsQuery.isLoading}
+            disabled={medTechsQuery.isLoading || eligibleCountersigners.length === 0}
           >
             <option value="">None selected</option>
-            {(medTechsQuery.data ?? []).map((mt) => (
+            {eligibleCountersigners.map((mt) => (
               <option key={mt.id} value={mt.id}>
                 {mt.fullName}
               </option>
@@ -104,6 +118,16 @@ export function ReleaseResultsDialog({
           <p className="text-xs text-muted-foreground">
             Both Med Technologists sign the printed report by hand - no e-signature is captured for either.
           </p>
+          {/* The Med Tech In Charge (you) is never offered here - they
+              can't countersign their own release. When they're also the
+              only eligible Laboratory user, that leaves nothing else to
+              select from, so say so explicitly rather than showing an
+              empty-looking dropdown with no explanation. */}
+          {!medTechsQuery.isLoading && eligibleCountersigners.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No other eligible Med Technologist is available to countersign.
+            </p>
+          ) : null}
         </div>
 
         <DialogFooter>

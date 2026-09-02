@@ -572,6 +572,56 @@ async def test_c5_inactive_countersigning_med_tech_selection_rejected(client: As
     assert resp.status_code == 400
 
 
+async def test_c5b_countersigning_med_tech_same_as_med_tech_in_charge_rejected(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Client requirement: the Countersigning MedTech must never be the same
+    person as the Med Tech In Charge - who IS the releasing user (there is
+    no separate "primary MedTech" selector/field; `actor_id` on the
+    `/release` request itself identifies them). Enforced server-side in
+    `release_results()`, independent of and in addition to the frontend's
+    own exclusion in `ReleaseResultsDialog` - this test calls the API
+    directly with the releasing user's OWN id as the countersigner,
+    exactly what a request bypassing that dialog would send."""
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    releasing_med_tech = (await client.get("/api/v1/auth/me", headers=ctx["lab_headers"])).json()
+
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": releasing_med_tech["id"]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "Countersigning MedTech must be different from the Med Tech In Charge" in resp.text
+
+    # The rejected release must not have partially applied - the order is
+    # still exactly as it was before this request, not left half-released.
+    order_after = (await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])).json()
+    assert order_after["status"] != "Released"
+    assert order_after["countersigning_med_tech_id"] is None
+
+
+async def test_c5c_countersigning_med_tech_different_from_med_tech_in_charge_still_succeeds(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The valid counterpart to test_c5b above: a genuinely DIFFERENT
+    eligible Laboratory user as countersigner still releases normally -
+    the new same-person check must reject only an exact id match, never a
+    different user who happens to share a role/clinic."""
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    releasing_med_tech = (await client.get("/api/v1/auth/me", headers=ctx["lab_headers"])).json()
+    _countersigner_headers, countersigner = await _second_lab_user(
+        client, db_session, clinic_id=ctx["clinic"].id, first_name="Diego", last_name="Silang", license_number="654321"
+    )
+    assert str(countersigner.id) != releasing_med_tech["id"]
+
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
+        json={"countersigning_med_tech_id": str(countersigner.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["countersigning_med_tech_id"] == str(countersigner.id)
+
+
 async def test_c6_countersigning_med_tech_historical_snapshot_survives_a_later_rename(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:

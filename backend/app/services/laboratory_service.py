@@ -632,6 +632,21 @@ class LaboratoryService:
             "countersigning_med_tech_license_snapshot": None,
         }
         if countersigning_med_tech_id is not None:
+            # Client requirement: the Countersigning MedTech must never be
+            # the same person as the Med Tech In Charge - who IS `actor_id`
+            # (the releasing user, per the comment above; there is no
+            # separate "primary MedTech" column to compare against). Checked
+            # here, server-side, before any other validation of the
+            # selected id - the frontend selector already excludes the
+            # current user from its own options (see
+            # `ReleaseResultsDialog.tsx`), but that alone is bypassable by
+            # anyone calling this endpoint directly, so the same rule is
+            # enforced again here regardless of what the frontend sent.
+            if countersigning_med_tech_id == actor_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Countersigning MedTech must be different from the Med Tech In Charge.",
+                )
             countersigner = await self.session.execute(
                 select(User)
                 .join(Role, User.role_id == Role.id)
