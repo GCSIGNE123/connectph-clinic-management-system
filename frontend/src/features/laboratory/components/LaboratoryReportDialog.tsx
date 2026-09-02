@@ -1,8 +1,67 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
 import { LaboratoryReportView } from "@/features/laboratory/components/LaboratoryReportView";
 import { useLaboratoryOrder } from "@/features/laboratory/hooks/use-laboratory";
+import type { LaboratoryOrder } from "@/features/laboratory/types";
+
+/** Bug fix (duplicate 2-page print/PDF output): a print-only copy of the
+ * report, portaled directly onto `document.body` (a sibling of the app
+ * root, not nested inside the dialog's own DOM subtree) - the exact same
+ * proven pattern `QueueSlipPrintPortal` already established for this
+ * codebase's other `visibility: hidden` + `position: fixed` print bug
+ * (see that component's own doc comment).
+ *
+ * `PrintableDocumentDialog`'s shared print CSS hides the rest of the page
+ * with `visibility: hidden` (not `display: none`, which would also hide
+ * the printable element - its own descendant - beyond any hope of a
+ * descendant re-declaring `visibility: visible`). `visibility: hidden`
+ * does NOT remove content from LAYOUT, though - the real page behind the
+ * dialog (e.g. the Laboratory worklist's own table, or a patient's
+ * Laboratory History table) still occupies its full height. The printable
+ * element is also `position: fixed` (needed so it prints at the page
+ * origin rather than wherever it happens to sit nested deep in that
+ * hidden tree) - and per CSS Paged Media, a `fixed` box is REPEATED on
+ * EVERY page a print job spans, the same mechanism used for a running
+ * header/footer. Combined: whenever the hidden background page is tall
+ * enough to force a second physical print page to exist for ANY reason
+ * (worklist row count, print-margin/DPI rounding, paper-size choice - not
+ * just "the report is too long"), the fixed report reprints itself onto
+ * that extra page, byte-for-byte identical to page 1. An earlier attempt
+ * at fixing this collapsed `<html>`/`<body>` to zero height at print time
+ * instead of removing the `visibility`+`fixed` mechanism - insufficient,
+ * since collapsing height doesn't change the fact that ANY additional
+ * print page still repeats the fixed element.
+ *
+ * The actual fix: stop relying on `visibility`+`fixed` at all. Once this
+ * portaled copy is a genuine direct child of `<body>`, `@media print` can
+ * hide every OTHER direct child of `<body>` with `display: none` (which
+ * DOES remove content from layout, unlike `visibility`) and force-hide the
+ * original in-dialog printable element too - the only thing left in flow
+ * for the browser to paginate is this portal's own (one-page-tall) content,
+ * rendered normally (no `position: fixed`), so it can never repeat.
+ *
+ * Follow-up (caught by an actual Print -> Save as PDF -> Adobe Reader
+ * check, not just DOM/layout inspection): the shared component's own
+ * `body * { visibility: hidden }` rule still applies to this portal and
+ * every descendant of it - it only ever re-declares `visibility: visible`
+ * for the OLD (now `display: none`-d) printable id, never for this new
+ * one. Left unaddressed, that produced a real, confirmed symptom: exactly
+ * one PDF page (the duplication WAS fixed), but a completely blank one -
+ * `display: block` gives an element correct layout/pagination without
+ * making it visible; `visibility: hidden` still paints nothing. See the
+ * `visibility: visible !important` rule for `#laboratory-report-print-root`
+ * in the stylesheet below, which overrides that inherited hidden state. */
+function LaboratoryReportPrintPortal({ order }: { order: LaboratoryOrder }) {
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div id="laboratory-report-print-root">
+      <LaboratoryReportView order={order} />
+    </div>,
+    document.body
+  );
+}
 
 /** Phase 4G: reuses the exact same generic print pipeline every other
  * printable document in this app already uses (Receipt, Queue Slip,
@@ -42,74 +101,85 @@ export function LaboratoryReportDialog({
         {order ? <LaboratoryReportView order={order} /> : null}
       </PrintableDocumentDialog>
 
+      {/* Print-only: the actual printed/PDF'd content comes from this
+          portaled copy, not the on-screen preview above - see
+          `LaboratoryReportPrintPortal`'s doc comment. Rendered whenever an
+          order is loaded (same convention as `QueueSlipPrintPortal`) -
+          `display: none` on screen (below) makes it invisible/inert
+          outside of `@media print` regardless of the dialog's own
+          `open` state. */}
+      {order ? <LaboratoryReportPrintPortal order={order} /> : null}
+
       {/* Round 2 (clinic-approved reference layout): print-only refinements
-          scoped to this report's own printable id, layered on top of
-          `PrintableDocumentDialog`'s shared full-width/Letter-portrait CSS
-          rather than touching that shared component again -
+          now scoped to the portaled print root (`#laboratory-report-print-
+          root`) rather than the on-screen preview's id - see the bug-fix
+          doc comment above `LaboratoryReportPrintPortal` for why the
+          on-screen preview element is no longer what gets printed.
           `-webkit-print-color-adjust`/`print-color-adjust` so the navy
           table-header band actually prints (browsers drop background
           colors by default to save ink unless told not to), plus
           pagination rules so a long result set breaks cleanly across
           Letter pages: the column header repeats on every page, a result
           row is never split across a page boundary, and a section heading
-          is never left stranded alone at the bottom of one.
-
-          Bug fix (duplicate 2-page output): `PrintableDocumentDialog`'s
-          shared print CSS hides the rest of the page with `visibility:
-          hidden` (not `display: none`) so the printable element - a
-          DESCENDANT of that hidden subtree - can re-declare `visibility:
-          visible` on itself (a `display: none` ancestor can never be
-          un-hidden by a descendant, which is why the shared component
-          doesn't use it). `visibility: hidden` does NOT remove an element
-          from layout, though - the entire page behind the dialog (e.g. a
-          long Laboratory worklist table) still occupies its full height,
-          so the printed document's total height can exceed one physical
-          page even though the report itself fits on one. The printable
-          element is `position: fixed` (needed so it stays pinned at the
-          page origin rather than printing wherever it happens to sit deep
-          in that hidden tree) - and a `fixed` box is REPEATED on every
-          page a print job spans, per the CSS Paged Media behavior used for
-          running headers/footers. Combined, those two facts are the exact
-          root cause: an oversized hidden background page forces a second
-          print page to exist, and the fixed report reprints itself onto
-          that extra page.
-
-          Fix: collapse `<html>`/`<body>` to zero height at print time so
-          the hidden background content no longer contributes any page
-          height. This is safe specifically because the one `position:
-          fixed` ancestor already between `<body>` and this printable div
-          (the plain custom `Dialog`'s own full-viewport overlay wrapper -
-          see `components/ui/dialog.tsx`) is,  by definition, positioned
-          relative to the page/viewport, not clipped by an ancestor's
-          `height`/`overflow` - so the report keeps rendering exactly as
-          before while the excess page is gone. Scoped with `:has(...)` to
-          only apply while THIS report's printable element actually exists
-          in the DOM (i.e. only while this dialog is open and mid-print) -
-          `html`/`body` are otherwise global elements, so this must never
-          affect Receipt/Queue Slip/Prescription/Referral/Lab Request
-          printing, which use the exact same shared `PrintableDocumentDialog`
-          but a different `printableId` and are never open at the same
-          time as this dialog. */}
+          is never left stranded alone at the bottom of one. */}
       <style jsx global>{`
+        /* Invisible on screen - only ever shown under @media print below.
+           display: none (not visibility) so it never occupies on-screen
+           layout space or gets included in the app's normal scroll flow. */
+        #laboratory-report-print-root {
+          display: none;
+        }
         @media print {
-          #laboratory-report-printable,
-          #laboratory-report-printable * {
+          /* The on-screen preview's printable element must never ALSO
+             render during print - only the portaled copy above does now.
+             display: none unconditionally wins over the shared
+             PrintableDocumentDialog's own visibility: visible rule for
+             this same id (no descendant can override display: none). */
+          #laboratory-report-printable {
+            display: none !important;
+          }
+          /* #laboratory-report-print-root is a direct child of body
+             (portaled there via createPortal, a sibling of the app root).
+             Hiding every OTHER direct child of body with display: none
+             removes them from the flow entirely, so the only in-flow
+             content left to measure the printed page against is the
+             report itself - no visibility + fixed-position workaround
+             needed, and nothing can repeat across an extra page since
+             nothing forces an extra page to exist. */
+          body > *:not(#laboratory-report-print-root) {
+            display: none !important;
+          }
+          #laboratory-report-print-root {
+            display: block !important;
+            width: 100%;
+          }
+          /* The shared PrintableDocumentDialog's own print CSS sets
+             "body * { visibility: hidden }" and only re-declares
+             "visibility: visible" for the OLD #laboratory-report-printable
+             id (now force-hidden above via display: none). Without this
+             rule, this portaled root inherits that blanket
+             visibility: hidden - it gets correct display:block LAYOUT
+             (so pagination is correct, one page), but paints nothing,
+             producing an entirely blank printed/PDF page. Confirmed via a
+             real Print -> Save as PDF -> Adobe Reader check: 1 page, but
+             blank, before this rule was added. */
+          #laboratory-report-print-root,
+          #laboratory-report-print-root * {
+            visibility: visible !important;
+          }
+          #laboratory-report-print-root,
+          #laboratory-report-print-root * {
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
           }
-          #laboratory-report-printable thead {
+          #laboratory-report-print-root thead {
             display: table-header-group;
           }
-          #laboratory-report-printable .report-row {
+          #laboratory-report-print-root .report-row {
             break-inside: avoid;
           }
-          #laboratory-report-printable .section-heading {
+          #laboratory-report-print-root .section-heading {
             break-after: avoid;
-          }
-          html:has(#laboratory-report-printable),
-          body:has(#laboratory-report-printable) {
-            height: 0 !important;
-            overflow: hidden !important;
           }
         }
       `}</style>

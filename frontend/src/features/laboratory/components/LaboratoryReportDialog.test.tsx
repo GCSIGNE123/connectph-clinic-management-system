@@ -27,28 +27,38 @@ function renderWithClient(ui: React.ReactElement) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
+function printCssText() {
+  return Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
+}
+
+// The report intentionally renders TWICE once an order is loaded: once for
+// the on-screen preview inside the dialog (`#laboratory-report-printable`),
+// once portaled to `document.body` for `@media print`
+// (`#laboratory-report-print-root` - see `LaboratoryReportPrintPortal`'s
+// doc comment in the component file). This is the exact same proven
+// pattern `QueueSlipDialog`/`QueueSlipPrintPortal` already uses for its own
+// print pipeline - every assertion below therefore uses
+// `findAllByText`/`getAllByText`/`queryAllByText`, never the singular form
+// which would throw on the expected duplicate.
 describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, full page width)", () => {
   it("9: defaults to Letter paper size, whose print CSS carries an explicit 'Letter portrait' @page size", async () => {
     useLaboratoryOrder.mockReturnValue({ data: labOrder() });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
 
-    await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
     // The paper-size selector (from the shared PrintableDocumentDialog)
     // reflects the Laboratory Report's own default, not the clinic-wide
     // stored preference (which defaults to A4).
     expect(screen.getByLabelText(/paper size/i)).toHaveValue("Letter");
-
-    const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-    expect(printCss).toMatch(/@page\s*\{[^}]*size:\s*Letter portrait/);
+    expect(printCssText()).toMatch(/@page\s*\{[^}]*size:\s*Letter portrait/);
   });
 
-  it("10: the print CSS forces the printable container to full width, not the narrow on-screen preview box", async () => {
+  it("10: the print CSS forces the on-screen preview's printable container to full width, not the narrow preview box", async () => {
     useLaboratoryOrder.mockReturnValue({ data: labOrder() });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-    const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-    expect(printCss).toMatch(/#laboratory-report-printable\s*\{[^}]*width:\s*100%\s*!important/);
+    expect(printCssText()).toMatch(/#laboratory-report-printable\s*\{[^}]*width:\s*100%\s*!important/);
   });
 
   it("12: existing Laboratory report printing behavior remains functional (renders results, clinic name, Print button)", async () => {
@@ -65,48 +75,70 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
     });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
 
-    expect(await screen.findByText("Test Clinic")).toBeInTheDocument();
-    expect(screen.getByText("Hemoglobin")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("Hemoglobin").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^print$/i })).toBeInTheDocument();
   });
 
   it("round 2: forces print color-adjust so the navy table-header band actually prints (not dropped to save ink)", async () => {
     useLaboratoryOrder.mockReturnValue({ data: labOrder() });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-    const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-    expect(printCss).toMatch(/#laboratory-report-printable[^{]*\{[^}]*print-color-adjust:\s*exact/);
+    expect(printCssText()).toMatch(/#laboratory-report-print-root[^{]*\{[^}]*print-color-adjust:\s*exact/);
   });
 
   it("round 2: print CSS repeats the table header and avoids splitting a result row or stranding a section heading across pages", async () => {
     useLaboratoryOrder.mockReturnValue({ data: labOrder() });
     renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-    const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-    expect(printCss).toMatch(/#laboratory-report-printable thead\s*\{[^}]*display:\s*table-header-group/);
-    expect(printCss).toMatch(/#laboratory-report-printable \.report-row\s*\{[^}]*break-inside:\s*avoid/);
-    expect(printCss).toMatch(/#laboratory-report-printable \.section-heading\s*\{[^}]*break-after:\s*avoid/);
+    const printCss = printCssText();
+    expect(printCss).toMatch(/#laboratory-report-print-root thead\s*\{[^}]*display:\s*table-header-group/);
+    expect(printCss).toMatch(/#laboratory-report-print-root \.report-row\s*\{[^}]*break-inside:\s*avoid/);
+    expect(printCss).toMatch(/#laboratory-report-print-root \.section-heading\s*\{[^}]*break-after:\s*avoid/);
   });
 
-  // --- Bug fix: a single laboratory report printed as a duplicate 2-page
-  // PDF (the identical report on both pages). Root cause: the shared
-  // `PrintableDocumentDialog` hides the rest of the page via `visibility:
-  // hidden` (not `display: none`, which would also hide the printable
-  // descendant it can't un-hide) - `visibility: hidden` doesn't remove
-  // that hidden content from layout, so a tall page behind the dialog
-  // (e.g. a long worklist) still forces a second physical print page to
-  // exist, and because the printable element is `position: fixed` (a
-  // "repeats on every page" declaration, same mechanism as a running
-  // print header/footer), the whole report reprints itself onto that
-  // extra page. Fix: collapse `<html>`/`<body>` to zero height at print
-  // time, scoped with `:has(#laboratory-report-printable)` so it can
-  // never affect Receipt/Queue Slip/Prescription/Referral/Lab Request
-  // printing (same shared dialog, different `printableId`, never open at
-  // the same time as this one). Data-driven across every report shape the
-  // client asked to verify: CBC (standard/numeric), Dengue Rapid Test
-  // (multi-parameter matrix), and HBsAg (single-parameter matrix). ---
+  // --- Bug fix (URGENT follow-up - the previous fix did not resolve it):
+  // a single laboratory report still printed as a duplicate 2-page PDF
+  // (the identical report on both pages, not a blank/continuation page).
+  //
+  // Root cause: `PrintableDocumentDialog`'s shared print CSS hides the
+  // rest of the page via `visibility: hidden` (not `display: none`, which
+  // would also hide the printable descendant it can't un-hide) -
+  // `visibility: hidden` does NOT remove that hidden content from LAYOUT,
+  // so a tall page behind the dialog (e.g. a long worklist table, or a
+  // patient's Laboratory History table) still forces a second physical
+  // print page to exist for essentially any reason (row count, print
+  // margins, paper size) - not just "the report itself is too long". The
+  // printable element is also `position: fixed` (needed so it prints at
+  // the page origin rather than wherever it sits nested deep in that
+  // hidden tree) - and per CSS Paged Media, a `fixed` box is REPEATED on
+  // EVERY page a print job spans (the same mechanism used for a running
+  // header/footer). Combined: whenever ANY second print page exists, the
+  // fixed report reprints itself onto it, byte-for-byte identical to page
+  // 1. A first attempt collapsed `<html>`/`<body>` to zero height at print
+  // time instead of removing the `visibility` + `fixed` mechanism itself -
+  // insufficient, since collapsing height doesn't stop a `position: fixed`
+  // element from repeating onto whatever pages DO still get created (print
+  // margin/DPI rounding, a `:has()` support gap, or any other source of a
+  // second page all still trigger the exact same repeat).
+  //
+  // Fix: stop relying on `visibility` + `fixed` for the actual printed
+  // content. `LaboratoryReportPrintPortal` portals a second copy of the
+  // report directly onto `document.body` (the exact same proven pattern
+  // `QueueSlipPrintPortal` already established in this codebase for its
+  // own instance of this class of bug). `@media print` then: (1) force-
+  // hides the ORIGINAL on-screen-preview printable element
+  // (`display: none` unconditionally wins - no descendant visibility rule
+  // can override it), (2) hides every OTHER direct child of `body` with
+  // `display: none` (which, unlike `visibility`, genuinely removes content
+  // from layout), leaving the portal as the only in-flow content to
+  // paginate, and (3) renders the portal normally (no `position: fixed`),
+  // so it can never repeat onto an extra page. Data-driven across every
+  // report shape the client asked to verify: CBC (standard/numeric),
+  // Dengue Rapid Test (multi-parameter matrix), and HBsAg
+  // (single-parameter matrix). ---
   describe("Bug fix: duplicate 2-page print output", () => {
     function categoricalParam(name: string) {
       return { parameterName: name, resultType: "Categorical" as const, displayOrder: 0, options: ["Positive", "Negative"] };
@@ -148,60 +180,91 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
       ["CBC (standard/numeric report)", labOrder()],
       ["Dengue Rapid Test (multi-parameter matrix report)", dengueOrder],
       ["HBsAg (single-parameter matrix report)", hbsagOrder],
-    ])("%s: the printable element renders exactly once in the DOM - never mounted/duplicated twice", async (_label, order) => {
+    ])("%s: the print portal is a genuine direct child of document.body, exactly once - never mounted/duplicated twice", async (_label, order) => {
       useLaboratoryOrder.mockReturnValue({ data: order });
       renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-      await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
+      const printRoots = document.querySelectorAll("#laboratory-report-print-root");
+      expect(printRoots).toHaveLength(1);
+      expect(printRoots[0].parentElement).toBe(document.body);
+      // The on-screen preview element still exists too (exactly one) - the
+      // report legitimately renders twice in the DOM by design (preview +
+      // print portal); what must never happen is either one existing more
+      // than once, or both being visible/printed at the same time (proven
+      // by the CSS assertions below).
       expect(document.querySelectorAll("#laboratory-report-printable")).toHaveLength(1);
-      // The clinic name only appears inside the report body itself (never
-      // in the surrounding dialog chrome, which uses "Laboratory Report"
-      // as its own, separate title heading) - proves the report content
-      // isn't duplicated inside or alongside that single printable
-      // container.
-      expect(screen.getAllByText("Test Clinic")).toHaveLength(1);
     });
 
-    it("the print CSS collapses html/body height so a tall hidden page behind the dialog can't force a duplicate second print page", async () => {
-      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+    it.each([
+      ["CBC (standard/numeric report)", labOrder()],
+      ["Dengue Rapid Test (multi-parameter matrix report)", dengueOrder],
+      ["HBsAg (single-parameter matrix report)", hbsagOrder],
+    ])("%s: the print portal actually contains the full report content (clinic name, patient, test type)", async (_label, order) => {
+      useLaboratoryOrder.mockReturnValue({ data: order });
       renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-      await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-      const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-      expect(printCss).toMatch(/html:has\(#laboratory-report-printable\)/);
-      expect(printCss).toMatch(/body:has\(#laboratory-report-printable\)/);
-      expect(printCss).toMatch(/#laboratory-report-printable\)\s*\{[^}]*height:\s*0\s*!important/);
-      expect(printCss).toMatch(/#laboratory-report-printable\)\s*\{[^}]*overflow:\s*hidden\s*!important/);
+      const printRoot = document.getElementById("laboratory-report-print-root") as HTMLElement;
+      expect(printRoot).toHaveTextContent("Test Clinic");
+      expect(printRoot).toHaveTextContent("Juan Dela Cruz");
     });
 
-    it("the collapse rule is scoped to :has(#laboratory-report-printable) - never a bare, unscoped html/body rule that could leak to other printable documents", async () => {
+    it("the original on-screen-preview printable element is force-hidden at print time - only the portal is ever meant to print", async () => {
       useLaboratoryOrder.mockReturnValue({ data: labOrder() });
       renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-      await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-      const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-      // Every html/body selector in this component's print CSS carries the
-      // :has(#laboratory-report-printable) guard - stripping out those two
-      // guarded selectors must leave no leftover bare "html {" / "body {"
-      // rule that would apply unconditionally to every other printable
-      // document sharing the same `PrintableDocumentDialog`.
-      const withGuardedSelectorsRemoved = printCss
-        .replaceAll("html:has(#laboratory-report-printable)", "")
-        .replaceAll("body:has(#laboratory-report-printable)", "");
-      expect(withGuardedSelectorsRemoved).not.toMatch(/\bhtml\s*\{/);
-      expect(withGuardedSelectorsRemoved).not.toMatch(/\bbody\s*\{/);
+      expect(printCssText()).toMatch(/#laboratory-report-printable\s*\{[^}]*display:\s*none\s*!important/);
     });
 
-    it("existing pagination rules (repeated header, no split rows, no stranded section heading, print color-adjust) remain unchanged alongside the new fix", async () => {
+    it("the print CSS hides every other direct child of body, leaving only the portal in flow to paginate", async () => {
       useLaboratoryOrder.mockReturnValue({ data: labOrder() });
       renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
-      await waitFor(() => expect(screen.getByText("Test Clinic")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
 
-      const printCss = Array.from(document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-      expect(printCss).toMatch(/#laboratory-report-printable thead\s*\{[^}]*display:\s*table-header-group/);
-      expect(printCss).toMatch(/#laboratory-report-printable \.report-row\s*\{[^}]*break-inside:\s*avoid/);
-      expect(printCss).toMatch(/#laboratory-report-printable \.section-heading\s*\{[^}]*break-after:\s*avoid/);
-      expect(printCss).toMatch(/#laboratory-report-printable[^{]*\{[^}]*print-color-adjust:\s*exact/);
+      const printCss = printCssText();
+      expect(printCss).toMatch(/body\s*>\s*\*:not\(#laboratory-report-print-root\)\s*\{[^}]*display:\s*none\s*!important/);
+      expect(printCss).toMatch(/#laboratory-report-print-root\s*\{[^}]*display:\s*block\s*!important/);
+    });
+
+    it("the portal is invisible on screen (display: none outside @media print) - it never appears in the normal UI", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const printRoot = document.getElementById("laboratory-report-print-root") as HTMLElement;
+      expect(getComputedStyle(printRoot).display).toBe("none");
+    });
+
+    // Regression for a real bug found via an actual Print -> Save as PDF ->
+    // Adobe Reader check: the duplication was fixed, but the resulting PDF
+    // was exactly 1 page and completely BLANK. Root cause: the shared
+    // PrintableDocumentDialog's own "body * { visibility: hidden }" rule
+    // still applies to this portal (it only ever re-declares
+    // "visibility: visible" for the OLD id), so the portal had correct
+    // display:block LAYOUT (proving pagination was fixed) but painted
+    // nothing. This test fails without the visibility: visible !important
+    // override.
+    it("the print portal is explicitly forced visible, overriding the shared component's blanket 'body * { visibility: hidden }' rule", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const printCss = printCssText();
+      expect(printCss).toMatch(/#laboratory-report-print-root,\s*#laboratory-report-print-root \*\s*\{[^}]*visibility:\s*visible\s*!important/);
+    });
+
+    it("existing pagination rules (repeated header, no split rows, no stranded section heading, print color-adjust) target the print portal, not the on-screen preview", async () => {
+      useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+      renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+      await waitFor(() => expect(screen.getAllByText("Test Clinic").length).toBeGreaterThan(0));
+
+      const printCss = printCssText();
+      expect(printCss).toMatch(/#laboratory-report-print-root thead\s*\{[^}]*display:\s*table-header-group/);
+      expect(printCss).toMatch(/#laboratory-report-print-root \.report-row\s*\{[^}]*break-inside:\s*avoid/);
+      expect(printCss).toMatch(/#laboratory-report-print-root \.section-heading\s*\{[^}]*break-after:\s*avoid/);
+      expect(printCss).toMatch(/#laboratory-report-print-root[^{]*\{[^}]*print-color-adjust:\s*exact/);
     });
   });
 });
