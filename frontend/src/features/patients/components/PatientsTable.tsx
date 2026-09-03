@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, AlertTriangle } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -27,6 +27,14 @@ import { formatDate } from "@/lib/utils";
 export interface PatientsTableProps {
   patients: PatientListItem[];
   isLoading?: boolean;
+  /** The list request itself failed (auth/network/server error) - rendered
+   * as a distinct, explicit failure state so it can never be confused with
+   * "this clinic genuinely has zero matching patients" (see `errorMessage`). */
+  isError?: boolean;
+  /** Real backend/network error text for the `isError` state - e.g.
+   * `ApiError.message`, which is "Not authenticated" for an expired/missing
+   * session. Falls back to a generic message if not provided. */
+  errorMessage?: string;
   onView: (patient: PatientListItem) => void;
   onEdit: (patient: PatientListItem) => void;
   onArchive: (patient: PatientListItem) => void;
@@ -65,6 +73,8 @@ function fullName(p: PatientListItem): string {
 export function PatientsTable({
   patients,
   isLoading,
+  isError,
+  errorMessage,
   onView,
   onEdit,
   onArchive,
@@ -75,6 +85,21 @@ export function PatientsTable({
 }: PatientsTableProps) {
   if (isLoading) {
     return <SkeletonList rows={6} />;
+  }
+
+  // Checked BEFORE the empty-list branch below - an auth/network/server
+  // failure must never render as "No patients found", which reads as "this
+  // clinic has zero patients" and has caused real front-desk confusion
+  // (a failed request silently degrading to an empty list, indistinguishable
+  // from a genuinely empty clinic).
+  if (isError) {
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title="Could not load patients"
+        description={errorMessage ?? "Something went wrong loading the patient list. Please try again."}
+      />
+    );
   }
 
   if (patients.length === 0) {

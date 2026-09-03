@@ -10,12 +10,17 @@ import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 
 /**
  * Round 6 (Laboratory Report Signatories): Pathologist selection happens
- * HERE, as part of the release workflow - never at print time (see the
- * feature's implementation report, section F). The selector only ever
- * lists ACTIVE pathologists (`usePathologists(true)`); selection is
- * optional (matching the existing "release doesn't require a pathologist"
- * business rule) - printing later shows a blank Pathologist block when
- * none was selected here, never a fabricated one.
+ * HERE, as part of the release workflow - never at print time. Product
+ * decision update: Pathologist selection is now MANDATORY - a Laboratory
+ * result must not be finalized without one on record (superseding the
+ * original "deliberately optional" Round 6 decision, section F). The
+ * selector only ever lists ACTIVE pathologists (`usePathologists(true)`);
+ * an empty selection blocks release client-side (see `formError` below)
+ * AND is rejected server-side regardless (`LaboratoryReleaseRequest.
+ * pathologist_id` is a required field - see `release_results()`), so a
+ * request bypassing this dialog entirely still cannot omit it. No default/
+ * first-available pathologist is ever auto-selected - the user must
+ * actively choose one.
  *
  * Client requirement (countersigning MedTech): a second, MANUALLY-signing
  * Med Technologist is also selected here, at release time, following the
@@ -36,6 +41,7 @@ export function ReleaseResultsDialog({
 }) {
   const [pathologistId, setPathologistId] = useState<string>("");
   const [countersigningMedTechId, setCountersigningMedTechId] = useState<string>("");
+  const [formError, setFormError] = useState<string | null>(null);
   const pathologistsQuery = usePathologists(true, { enabled: open });
   const medTechsQuery = useEligibleMedTechs({ enabled: open });
   const currentUserQuery = useCurrentUser();
@@ -57,14 +63,27 @@ export function ReleaseResultsDialog({
     if (!next) {
       setPathologistId("");
       setCountersigningMedTechId("");
+      setFormError(null);
     }
     onOpenChange(next);
   }
 
   function handleConfirm() {
     if (!laboratoryOrderId) return;
+    // Pathologist is mandatory - block the request client-side with the
+    // same inline-error pattern used elsewhere in this codebase for a
+    // plain (non-react-hook-form) dialog's required-field validation (see
+    // e.g. `NewAppointmentDialog`'s `formError`). Not merely a UX nicety:
+    // the backend independently rejects a request missing this field
+    // regardless (`LaboratoryReleaseRequest.pathologist_id` is required),
+    // so this only prevents a doomed round-trip, never substitutes for it.
+    if (!pathologistId) {
+      setFormError("Select a Pathologist before releasing results.");
+      return;
+    }
+    setFormError(null);
     release.mutate(
-      { id: laboratoryOrderId, pathologistId: pathologistId || null, countersigningMedTechId: countersigningMedTechId || null },
+      { id: laboratoryOrderId, pathologistId, countersigningMedTechId: countersigningMedTechId || null },
       { onSuccess: () => handleClose(false) }
     );
   }
@@ -78,14 +97,21 @@ export function ReleaseResultsDialog({
 
         <div className="space-y-2 py-2">
           <label htmlFor="release-pathologist" className="text-sm font-medium">
-            Pathologist (optional)
+            Pathologist (required)
           </label>
           <Select
             id="release-pathologist"
             value={pathologistId}
-            onChange={(e) => setPathologistId(e.target.value)}
+            onChange={(e) => {
+              setPathologistId(e.target.value);
+              if (e.target.value) setFormError(null);
+            }}
             disabled={pathologistsQuery.isLoading}
+            invalid={Boolean(formError)}
           >
+            {/* "None selected" stays the pre-selected default - never the
+                first real pathologist in the list - so nothing is ever
+                auto-assigned; the user must actively pick one. */}
             <option value="">None selected</option>
             {(pathologistsQuery.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
@@ -93,6 +119,7 @@ export function ReleaseResultsDialog({
               </option>
             ))}
           </Select>
+          {formError ? <p className="text-xs text-destructive">{formError}</p> : null}
           <p className="text-xs text-muted-foreground">
             The Med Tech In Charge is recorded automatically as you (the releasing user).
           </p>

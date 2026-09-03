@@ -253,6 +253,142 @@ async def test_inactive_service_rejected(client: AsyncClient, make_clinic_with_o
     assert "not active" in response.json()["detail"]
 
 
+async def test_department_matching_assigned_service_allowed(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A service explicitly assigned to a department (`ClinicService.department_id`
+    set) is still allowed when paired with that same department - Part A of the
+    Department <-> Service enforcement added to `_validate_and_fetch_entities`."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    from uuid import UUID
+
+    from app.models.clinic_service import ClinicService
+
+    service = await db_session.get(ClinicService, UUID(deps["service_id"]))
+    service.department_id = UUID(deps["department_id"])
+    await db_session.commit()
+
+    response = await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))
+    assert response.status_code == 201, response.text
+
+
+async def test_department_mismatched_assigned_service_rejected(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """A service assigned to a DIFFERENT department than the one submitted must
+    be rejected server-side, even if a client bypasses the frontend filtering."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    other_department = (
+        await client.post(
+            "/api/v1/departments",
+            headers=headers,
+            json={"department_code": "LAB", "name": "Laboratory"},
+        )
+    ).json()
+
+    from uuid import UUID
+
+    from app.models.clinic_service import ClinicService
+
+    service = await db_session.get(ClinicService, UUID(deps["service_id"]))
+    service.department_id = UUID(other_department["id"])
+    await db_session.commit()
+
+    response = await client.post("/api/v1/queues", headers=headers, json=_queue_payload(deps))
+    assert response.status_code == 400, response.text
+    assert "does not belong to the selected department" in response.json()["detail"]
+
+
+async def test_unassigned_service_allowed_for_any_department(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """A service with `department_id = NULL` (unassigned/shared - the current
+    state of every pre-existing service) remains valid for any department."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    # Deliberately NOT named "Laboratory" - that name triggers the unrelated
+    # pay-first Laboratory workflow (`QueueService._is_laboratory_department`),
+    # which would reject this direct POST for a reason that has nothing to do
+    # with the Department <-> Service check under test here.
+    other_department = (
+        await client.post(
+            "/api/v1/departments",
+            headers=headers,
+            json={"department_code": "RAD", "name": "Radiology"},
+        )
+    ).json()
+
+    response = await client.post(
+        "/api/v1/queues",
+        headers=headers,
+        json=_queue_payload(deps, department_id=other_department["id"]),
+    )
+    assert response.status_code == 201, response.text
+
+
+async def test_nonexistent_service_rejected(client: AsyncClient, make_clinic_with_owner) -> None:
+    """Existing existence validation is unaffected by the new department check -
+    a service id that doesn't exist at all is still a 404, not a 400."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, headers)
+
+    response = await client.post(
+        "/api/v1/queues", headers=headers, json=_queue_payload(deps, service_id=str(uuid.uuid4()))
+    )
+    assert response.status_code == 404
+    assert "Service not found" in response.json()["detail"]
+
+
+async def test_receptionist_can_select_existing_patient_for_queue_ticket(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Receptionist RBAC requirement: search/see an existing patient and use
+    it to raise a queue ticket - the real end-to-end path behind "New Queue"
+    when the receptionist picks an already-registered patient rather than
+    creating a new one. Branch/department/doctor/service setup is done as
+    Owner (CONFIG_MANAGE_ROLES is Owner/Administrator-only, unrelated to
+    this incident) - the Receptionist token is only used for the patient
+    lookup and queue-creation calls, matching what the frontend actually
+    does in this workflow."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+
+    receptionist_email, _user = await _make_role_login(
+        db_session, clinic_id=clinic.id, role_name="Receptionist"
+    )
+    receptionist_token = await _login(client, clinic.slug, receptionist_email, "TestPass123!")
+    receptionist_headers = {"Authorization": f"Bearer {receptionist_token}"}
+
+    # Raising a queue ticket requires an open shift for Receptionist (see
+    # `enforce_receptionist_open_shift`) - unrelated to this incident, but
+    # required setup for this role to reach the queue-creation call at all.
+    shift_response = await client.post(
+        "/api/v1/shifts",
+        headers=receptionist_headers,
+        json={"opening_cash": "1000.00", "branch_id": deps["branch_id"]},
+    )
+    assert shift_response.status_code == 201, shift_response.text
+
+    # Selecting an existing patient means finding them via the list/search
+    # endpoint first - exactly what `NewQueueDialog`'s patient search does.
+    search_response = await client.get(
+        "/api/v1/patients", headers=receptionist_headers, params={"search": "Juan"}
+    )
+    assert search_response.status_code == 200, search_response.text
+    found_ids = {item["id"] for item in search_response.json()["items"]}
+    assert deps["patient_id"] in found_ids
+
+    response = await client.post(
+        "/api/v1/queues", headers=receptionist_headers, json=_queue_payload(deps)
+    )
+    assert response.status_code == 201, response.text
+
+
 async def test_archived_patient_rejected(client: AsyncClient, make_clinic_with_owner) -> None:
     _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
     deps = await _setup_queue_deps(client, headers)

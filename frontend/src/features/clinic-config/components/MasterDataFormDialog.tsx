@@ -57,7 +57,11 @@ export function MasterDataFormDialog<T extends Record<string, unknown>>({
               // absent/null, not an empty string (e.g. `EmailStr | None` rejects
               // ""). Normalize before sending.
               const payload = Object.fromEntries(
-                Object.entries(values).map(([key, value]) => [key, value === "" ? undefined : value])
+                Object.entries(values).map(([key, value]) => {
+                  if (value !== "") return [key, value];
+                  const field = fields.find((f) => f.name === key);
+                  return [key, field?.nullable ? null : undefined];
+                })
               );
               await onSubmit(payload);
             } finally {
@@ -85,7 +89,12 @@ export function MasterDataFormDialog<T extends Record<string, unknown>>({
                     value={(values[field.name] as string) ?? ""}
                     onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
                   >
-                    <option value="">Select...</option>
+                    {/* Skip the generic placeholder when the field already
+                        supplies its own "" option (e.g. `nullable`'s
+                        "Unassigned") - otherwise the select would show two
+                        empty-value options and always display the generic
+                        one instead of the field's own meaningful label. */}
+                    {field.options?.some((opt) => opt.value === "") ? null : <option value="">Select...</option>}
                     {field.options?.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}

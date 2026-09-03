@@ -80,6 +80,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     setup_logging()
 
+    # Local-clinic-deployment footgun check: `COOKIE_SECURE=true` (the
+    # correct default for a real HTTPS deployment) makes the browser refuse
+    # to ever store/send the refresh-token cookie set by `/auth/login` when
+    # this server is actually reached over plain HTTP - which every
+    # `DEPLOYMENT_MODE=local` install is, by design (see
+    # docs/LOCAL_DEPLOYMENT.md and `.env.local-production.example`'s own
+    # "COOKIE_SECURE must be false here" comment). The symptom is silent and
+    # delayed: login works, then ~ACCESS_TOKEN_EXPIRE_MINUTES later every
+    # authenticated request starts failing with "Not authenticated" (list
+    # endpoints often masking this as an empty result instead of a visible
+    # error) because the automatic token-refresh call has no cookie to send.
+    # This is exactly the failure mode investigated for the receptionist
+    # patient-access incident - logging it loudly at startup turns a
+    # confusing, hours-later support case into an immediate, obvious fix.
+    if settings.DEPLOYMENT_MODE == "local" and settings.COOKIE_SECURE:
+        logging.getLogger("app.startup").warning(
+            "COOKIE_SECURE=true with DEPLOYMENT_MODE=local: the refresh-token "
+            "cookie will be silently dropped by browsers unless this server is "
+            "served over HTTPS. A local clinic install (plain HTTP) needs "
+            "COOKIE_SECURE=false in its .env - see docs/LOCAL_DEPLOYMENT.md."
+        )
+
     # Phase 5B (P2, LR4): Swagger/ReDoc/OpenAPI schema are disabled in
     # production - they were previously exposed unconditionally, publicly
     # revealing the full API surface (including internal/admin routes).

@@ -110,6 +110,30 @@ export function EditQueueDialog({ queueId, onOpenChange }: EditQueueDialogProps)
     return items.filter((d) => !departmentId || !d.department_id || d.department_id === departmentId);
   }, [doctors.data, departmentId]);
 
+  // Department-aware Service filtering: NULL `department_id` is shared
+  // across every department (the transition state of the 442 existing
+  // Canora services, none of which have this set yet); an assigned service
+  // is only offered when its department matches. Same convention as
+  // `filteredDoctors` above.
+  const filteredServices = useMemo(() => {
+    const items = services.data?.items ?? [];
+    return items.filter((s) => !departmentId || !s.department_id || s.department_id === departmentId);
+  }, [services.data, departmentId]);
+
+  // Transition rule: if the Department changes and the currently selected
+  // Service is no longer valid for it, clear the selection. Guarded on
+  // `services.data` being loaded - `reset()` (above) seeds `serviceId` from
+  // the loaded ticket as soon as `queue` resolves, which can race ahead of
+  // this dialog's own `services` query; without the guard, `filteredServices`
+  // would still be `[]` at that moment and this would wrongly clear a
+  // perfectly valid, just-loaded selection before the service list catches up.
+  useEffect(() => {
+    if (!services.data) return;
+    if (serviceId && !filteredServices.some((s) => s.id === serviceId)) {
+      setValue("serviceId", "", { shouldValidate: false });
+    }
+  }, [filteredServices, serviceId, setValue, services.data]);
+
   const onSubmit = handleSubmit(async (values) => {
     if (!queueId) return;
     try {
@@ -185,8 +209,8 @@ export function EditQueueDialog({ queueId, onOpenChange }: EditQueueDialogProps)
                   onChange={(id) => setValue("serviceId", id, { shouldValidate: true })}
                   invalid={Boolean(errors.serviceId)}
                   placeholder="Select service"
-                  emptyLabel="No services match."
-                  options={(services.data?.items ?? []).map((s) => ({
+                  emptyLabel={filteredServices.length === 0 ? "No services available for this department." : "No services match."}
+                  options={filteredServices.map((s) => ({
                     value: s.id,
                     label: `${s.service_name ?? s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}`,
                   }))}

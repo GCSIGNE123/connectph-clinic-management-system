@@ -291,16 +291,21 @@ class LaboratoryOrderRead(BaseModel):
 class LaboratoryReleaseRequest(BaseModel):
     """Body for `POST /laboratory/orders/{id}/release`. Pathologist and
     countersigning-MedTech selection both happen HERE (release time),
-    never at print time - see `LaboratoryService.release_results`. Both
-    deliberately optional: omitting either preserves the pre-existing
-    release behavior (a lab order could always be released with no
-    pathologist/countersigner concept at all before these features) rather
-    than introducing a new hard requirement that could block an otherwise-
-    legitimate release. See the Round 6 implementation report, section F,
-    for the explicit decision this reflects (Pathologist); the
-    countersigning MedTech follows the identical reasoning."""
+    never at print time - see `LaboratoryService.release_results`.
 
-    pathologist_id: UUID | None = None
+    Pathologist selection is now MANDATORY (product decision, superseding
+    the Round 6 "deliberately optional" decision documented in that
+    feature's implementation report, section F): a Laboratory result must
+    not be finalized without a Pathologist on record. Enforced here as a
+    required field (not `| None`) so a request omitting it - or that omits
+    the whole `payload` body, previously allowed - is rejected with a 422
+    before ever reaching the service layer, regardless of what the frontend
+    does or doesn't send.
+
+    The countersigning MedTech follows the ORIGINAL optional reasoning
+    unchanged - this product decision only applies to the Pathologist."""
+
+    pathologist_id: UUID
     countersigning_med_tech_id: UUID | None = None
 
 

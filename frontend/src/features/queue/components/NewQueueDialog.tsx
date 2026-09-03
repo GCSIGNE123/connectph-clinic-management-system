@@ -190,6 +190,16 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     });
   }, [doctors.data, departmentId, branchId]);
 
+  // Department-aware Service filtering: a service with no `department_id`
+  // is shared across every department (unassigned - see the 442 existing
+  // Canora services, none of which have this set yet); a service assigned
+  // to a specific department is only offered when that department is
+  // selected. Same NULL-is-shared convention as `filteredDoctors` above.
+  const filteredServices = useMemo(() => {
+    const items = services.data?.items ?? [];
+    return items.filter((s) => !departmentId || !s.department_id || s.department_id === departmentId);
+  }, [services.data, departmentId]);
+
   function selectPatient(id: string, label: string, isYakapBeneficiary: boolean) {
     setSelectedPatient({ id, label, isYakapBeneficiary });
     setValue("patientId", id, { shouldValidate: true });
@@ -253,12 +263,27 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labServiceIdsKey, patientId, departmentId, labDraftVisit]);
 
-  // Clears any selected Laboratory services when the department changes
-  // away from Laboratory (or to it, starting fresh) - the same pattern
-  // `requiresVitals`/vitals-step state already resets on service change.
+  // Department-aware Service selection, transition rule: when the
+  // Department changes and the currently selected Service (single-select)
+  // is no longer valid for the new department, clear it - mirrors the
+  // draft-visit invalidation effects above (compare current value against
+  // the current valid set, only touch it when it's actually gone stale).
   useEffect(() => {
-    setLabServiceIds([]);
-  }, [departmentId]);
+    if (serviceId && !filteredServices.some((s) => s.id === serviceId)) {
+      setValue("serviceId", "", { shouldValidate: false });
+    }
+  }, [filteredServices, serviceId, setValue]);
+
+  // Same transition rule for the Laboratory multi-select: only the
+  // selections that are no longer valid for the new department are
+  // dropped, not the whole set - e.g. a shared (department_id = NULL)
+  // service stays selected across a department change.
+  useEffect(() => {
+    setLabServiceIds((prev) => {
+      const next = prev.filter((id) => filteredServices.some((s) => s.id === id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [filteredServices]);
 
   async function handleEnterVitals() {
     setDraftError(null);
@@ -511,8 +536,8 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                       invalid={Boolean(errors.serviceId)}
                       disabled={vitalsSaved}
                       placeholder="Select service"
-                      emptyLabel="No services match."
-                      options={(services.data?.items ?? []).map((s) => ({
+                      emptyLabel={filteredServices.length === 0 ? "No services available for this department." : "No services match."}
+                      options={filteredServices.map((s) => ({
                         value: s.id,
                         label: `${s.service_name ?? s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ""}`,
                       }))}
@@ -556,13 +581,13 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                       if (id && !labServiceIds.includes(id)) setLabServiceIds((prev) => [...prev, id]);
                     }}
                     placeholder="Select Laboratory Service"
-                    emptyLabel="No services match."
+                    emptyLabel={filteredServices.length === 0 ? "No services available for this department." : "No services match."}
                     // Already-selected services are excluded from the
                     // dropdown entirely - the same service can never be
                     // selected twice (no duplicate-quantity concept exists
                     // for a Laboratory test), so there's nothing to reject
                     // at click time; it simply isn't offered again.
-                    options={(services.data?.items ?? [])
+                    options={filteredServices
                       .filter((s) => !labServiceIds.includes(s.id))
                       .map((s) => ({ value: s.id, label: s.service_name ?? s.name }))}
                   />

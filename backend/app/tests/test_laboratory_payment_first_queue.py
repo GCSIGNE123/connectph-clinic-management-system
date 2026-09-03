@@ -551,7 +551,16 @@ async def test_lab_order_lifecycle_unchanged_after_payment_gate(client: AsyncCli
     assert results.status_code == 200, results.text
     assert results.json()["status"] == "Completed"
 
-    released = await client.post(f"/api/v1/laboratory/orders/{order_id}/release", headers=headers)
+    # Pathologist selection is now MANDATORY at release (product decision).
+    pathologist_resp = await client.post(
+        "/api/v1/pathologists",
+        headers=headers, json={"name": "Dr. Maria Santos", "license_number": "PRC-12345"},
+    )
+    assert pathologist_resp.status_code == 201, pathologist_resp.text
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{order_id}/release",
+        headers=headers, json={"pathologist_id": pathologist_resp.json()["id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["status"] == "Released"
 

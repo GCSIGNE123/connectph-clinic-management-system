@@ -78,21 +78,77 @@ describe("ReleaseResultsDialog", () => {
     renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
 
     await screen.findByText("Dr. Santos");
-    await user.selectOptions(screen.getByLabelText("Pathologist (optional)"), "path-1");
+    await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
     await user.click(screen.getByRole("button", { name: "Release" }));
 
     await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", "path-1", null));
   });
 
-  it("releases with no pathologist and no countersigning MedTech when neither is selected (preserves existing release behavior)", async () => {
-    mockListPathologists.mockReset().mockResolvedValue([]);
+  it("releases with no countersigning MedTech when none is selected (preserves existing optional behavior for that field)", async () => {
+    mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
     mockListMedTechs.mockReset().mockResolvedValue([]);
     mockReleaseResults.mockReset().mockResolvedValue({ id: "lab-1", status: "Released" });
     const user = userEvent.setup();
     renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
 
+    await screen.findByText("Dr. Santos");
+    await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
     await user.click(screen.getByRole("button", { name: "Release" }));
-    await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", null, null));
+    await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", "path-1", null));
+  });
+
+  // --- Product decision: Pathologist selection is now MANDATORY ---
+  describe("Pathologist is now mandatory", () => {
+    it("marks the field as required, not optional", async () => {
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
+      mockListMedTechs.mockReset().mockResolvedValue([]);
+      renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
+
+      expect(await screen.findByText("Pathologist (required)")).toBeInTheDocument();
+      expect(screen.queryByText("Pathologist (optional)")).not.toBeInTheDocument();
+    });
+
+    it("blocks submission and shows a validation error when no Pathologist is selected", async () => {
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
+      mockListMedTechs.mockReset().mockResolvedValue([]);
+      mockReleaseResults.mockReset();
+      const user = userEvent.setup();
+      renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
+
+      await screen.findByText("Dr. Santos");
+      await user.click(screen.getByRole("button", { name: "Release" }));
+
+      expect(await screen.findByText("Select a Pathologist before releasing results.")).toBeInTheDocument();
+      expect(mockReleaseResults).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-select the first (or only) available Pathologist", async () => {
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Only One", is_active: true }]);
+      mockListMedTechs.mockReset().mockResolvedValue([]);
+      renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
+
+      await screen.findByText("Dr. Only One");
+      const select = screen.getByLabelText("Pathologist (required)") as HTMLSelectElement;
+      expect(select.value).toBe("");
+    });
+
+    it("clears the validation error once a Pathologist is selected", async () => {
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
+      mockListMedTechs.mockReset().mockResolvedValue([]);
+      mockReleaseResults.mockReset().mockResolvedValue({ id: "lab-1", status: "Released" });
+      const user = userEvent.setup();
+      renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
+
+      await screen.findByText("Dr. Santos");
+      await user.click(screen.getByRole("button", { name: "Release" }));
+      expect(await screen.findByText("Select a Pathologist before releasing results.")).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
+      expect(screen.queryByText("Select a Pathologist before releasing results.")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Release" }));
+      await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", "path-1", null));
+    });
   });
 
   // --- Client requirement: countersigning MedTech selection, at release
@@ -111,18 +167,19 @@ describe("ReleaseResultsDialog", () => {
       expect(mockListMedTechs).toHaveBeenCalled();
     });
 
-    it("releases with the selected countersigning MedTech id", async () => {
-      mockListPathologists.mockReset().mockResolvedValue([]);
+    it("releases with the selected countersigning MedTech id (Pathologist still required alongside it)", async () => {
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
       mockListMedTechs.mockReset().mockResolvedValue([{ id: "mt-1", fullName: "Aijilie Mosquite", licenseNumber: "123456" }]);
       mockReleaseResults.mockReset().mockResolvedValue({ id: "lab-1", status: "Released" });
       const user = userEvent.setup();
       renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
 
       await screen.findByText("Aijilie Mosquite");
+      await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
       await user.selectOptions(screen.getByLabelText("Countersigning Med Technologist (optional)"), "mt-1");
       await user.click(screen.getByRole("button", { name: "Release" }));
 
-      await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", null, "mt-1"));
+      await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", "path-1", "mt-1"));
     });
 
     it("selecting both a Pathologist and a countersigning MedTech releases with both ids independently", async () => {
@@ -134,7 +191,7 @@ describe("ReleaseResultsDialog", () => {
 
       await screen.findByText("Dr. Santos");
       await screen.findByText("Aijilie Mosquite");
-      await user.selectOptions(screen.getByLabelText("Pathologist (optional)"), "path-1");
+      await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
       await user.selectOptions(screen.getByLabelText("Countersigning Med Technologist (optional)"), "mt-1");
       await user.click(screen.getByRole("button", { name: "Release" }));
 
@@ -221,7 +278,7 @@ describe("ReleaseResultsDialog", () => {
 
     it("releasing with a countersigning MedTech other than the logged-in user still submits that id normally", async () => {
       mockUseCurrentUser.mockReturnValue({ data: { id: "mt-1" }, isLoading: false });
-      mockListPathologists.mockReset().mockResolvedValue([]);
+      mockListPathologists.mockReset().mockResolvedValue([{ id: "path-1", name: "Dr. Santos", is_active: true }]);
       mockListMedTechs.mockReset().mockResolvedValue([
         { id: "mt-1", fullName: "Aijilie Mosquite", licenseNumber: "123456" },
         { id: "mt-2", fullName: "Diego Silang", licenseNumber: "654321" },
@@ -231,10 +288,11 @@ describe("ReleaseResultsDialog", () => {
       renderWithClient(<ReleaseResultsDialog laboratoryOrderId="lab-1" open={true} onOpenChange={() => {}} />);
 
       await screen.findByText("Diego Silang");
+      await user.selectOptions(screen.getByLabelText("Pathologist (required)"), "path-1");
       await user.selectOptions(screen.getByLabelText("Countersigning Med Technologist (optional)"), "mt-2");
       await user.click(screen.getByRole("button", { name: "Release" }));
 
-      await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", null, "mt-2"));
+      await waitFor(() => expect(mockReleaseResults).toHaveBeenCalledWith("lab-1", "path-1", "mt-2"));
     });
   });
 });

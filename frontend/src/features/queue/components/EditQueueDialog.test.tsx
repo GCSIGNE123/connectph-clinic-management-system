@@ -8,6 +8,10 @@ import { QueuePriority, QueueStatus, VisitClassification, type QueueDetail } fro
 const mockUpdateMutateAsync = vi.fn().mockResolvedValue({});
 let mockQueueDetail: QueueDetail | undefined;
 let mockDetailLoading = false;
+// "svc-1"'s department_id, mutable per-test - null by default (unassigned/
+// shared) so every existing test above is unaffected; the department-change
+// clearing test below assigns it to "dept-1" to exercise the mismatch case.
+let mockServiceDeptId: string | null = null;
 
 vi.mock("@/features/queue/hooks/use-queues", () => ({
   useQueueDetail: () => ({ data: mockQueueDetail, isLoading: mockDetailLoading }),
@@ -35,7 +39,10 @@ vi.mock("@/features/clinic-config/api/crud-factory", () => ({
       }
       if (path === "/services") {
         return Promise.resolve({
-          items: [{ id: "svc-1", service_name: "CBC, PLATELET", name: "CBC, PLATELET" }],
+          items: [
+            { id: "svc-1", service_name: "CBC, PLATELET", name: "CBC, PLATELET", department_id: mockServiceDeptId },
+            { id: "svc-2", service_name: "CONSULTATION", name: "CONSULTATION", department_id: null },
+          ],
         });
       }
       return Promise.resolve({ items: [] });
@@ -114,5 +121,46 @@ describe("EditQueueDialog", () => {
     mockDetailLoading = false;
     renderDialog(null);
     expect(screen.queryByText(/edit queue ticket/i)).not.toBeInTheDocument();
+  });
+
+  describe("department-aware Service filtering", () => {
+    it("clears the selected Service when it no longer belongs to the newly selected Department", async () => {
+      mockServiceDeptId = "dept-1"; // svc-1 is assigned to dept-1, the ticket's initial department.
+      mockQueueDetail = buildDetail();
+      mockDetailLoading = false;
+      const user = userEvent.setup();
+      renderDialog("queue-1");
+
+      await screen.findByText("Edit Queue Ticket L001");
+      // Initially valid: the pre-filled Service label shows the ticket's
+      // real current service.
+      expect(await screen.findByDisplayValue("CBC, PLATELET")).toBeInTheDocument();
+
+      const departmentSelect = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+      await user.selectOptions(departmentSelect, "dept-2");
+
+      // svc-1 belongs to dept-1, not dept-2 - no longer valid, so the
+      // selection is cleared back to the placeholder.
+      await waitFor(() => expect(screen.queryByDisplayValue("CBC, PLATELET")).not.toBeInTheDocument());
+      expect(screen.getByPlaceholderText("Select service")).toHaveValue("");
+    });
+
+    it("keeps an unassigned (department_id = NULL) Service selected across a Department change", async () => {
+      mockServiceDeptId = null;
+      mockQueueDetail = buildDetail({ serviceId: "svc-2", serviceName: "CONSULTATION" });
+      mockDetailLoading = false;
+      const user = userEvent.setup();
+      renderDialog("queue-1");
+
+      await screen.findByText("Edit Queue Ticket L001");
+      expect(await screen.findByDisplayValue("CONSULTATION")).toBeInTheDocument();
+
+      const departmentSelect = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+      await user.selectOptions(departmentSelect, "dept-2");
+
+      // svc-2 has no department_id - shared across every department, so the
+      // selection survives the Department change.
+      expect(screen.getByDisplayValue("CONSULTATION")).toBeInTheDocument();
+    });
   });
 });

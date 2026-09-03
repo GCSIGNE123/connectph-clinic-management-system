@@ -222,15 +222,21 @@ async def enter_results(
 @router.post("/orders/{laboratory_order_id}/release", response_model=LaboratoryOrderRead)
 async def release_results(
     laboratory_order_id: UUID,
-    payload: LaboratoryReleaseRequest | None = None,
+    # Pathologist selection is now mandatory (product decision) - the body
+    # itself is no longer optional (was `| None = None`), and
+    # `LaboratoryReleaseRequest.pathologist_id` is a required field, so a
+    # request with no body, or a body missing `pathologist_id`, is rejected
+    # with a 422 by FastAPI/Pydantic before this handler ever runs - this
+    # holds regardless of what the frontend does or doesn't send.
+    payload: LaboratoryReleaseRequest,
     clinic_id: UUID = Depends(require_clinic_context),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_lab_manage_role),
 ) -> LaboratoryOrderRead:
     return await LaboratoryService(db).release_results(
         laboratory_order_id, clinic_id=clinic_id, actor_id=current_user.id,
-        pathologist_id=payload.pathologist_id if payload else None,
-        countersigning_med_tech_id=payload.countersigning_med_tech_id if payload else None,
+        pathologist_id=payload.pathologist_id,
+        countersigning_med_tech_id=payload.countersigning_med_tech_id,
     )
 
 

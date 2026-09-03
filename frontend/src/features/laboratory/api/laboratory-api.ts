@@ -271,14 +271,14 @@ export const laboratoryApi = {
       .then(toOrder),
 
   // Round 6: Pathologist selection happens HERE, at release time - never
-  // at print time. Omitting `pathologistId` preserves the pre-existing
-  // release behavior (no pathologist concept at all). Countersigning
-  // MedTech selection follows the identical pattern (both optional,
-  // independent of each other).
-  releaseResults: (id: string, pathologistId?: string | null, countersigningMedTechId?: string | null) =>
+  // at print time. Pathologist selection is now MANDATORY (product
+  // decision, superseding the original "deliberately optional" choice) -
+  // `pathologistId` is a required argument, always sent as `pathologist_id`.
+  // Countersigning MedTech selection remains optional, unchanged.
+  releaseResults: (id: string, pathologistId: string, countersigningMedTechId?: string | null) =>
     apiClient
       .post<any>(`/laboratory/orders/${id}/release`, {
-        ...(pathologistId ? { pathologist_id: pathologistId } : {}),
+        pathologist_id: pathologistId,
         ...(countersigningMedTechId ? { countersigning_med_tech_id: countersigningMedTechId } : {}),
       })
       .then(toOrder),

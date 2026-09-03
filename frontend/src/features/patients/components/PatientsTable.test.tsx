@@ -57,6 +57,29 @@ describe("PatientsTable", () => {
     expect(screen.getByText(/no patients found/i)).toBeInTheDocument();
   });
 
+  it("shows a distinct failure state (not \"No patients found\") when the request itself failed", () => {
+    render(
+      <PatientsTable
+        patients={[]}
+        isError
+        errorMessage="Not authenticated"
+        onView={noop}
+        onEdit={noop}
+        onArchive={noop}
+        onRestore={noop}
+        canManage
+        canArchive
+      />
+    );
+
+    // The exact production incident this guards against: an auth/network
+    // failure must never render as "No patients found" - that phrase reads
+    // as "this clinic has zero patients", which it is not.
+    expect(screen.queryByText(/no patients found/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/could not load patients/i)).toBeInTheDocument();
+    expect(screen.getByText("Not authenticated")).toBeInTheDocument();
+  });
+
   it("shows a loading skeleton instead of the table while loading", () => {
     render(
       <PatientsTable

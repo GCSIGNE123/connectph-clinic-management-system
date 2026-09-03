@@ -62,10 +62,19 @@ async def _lab_user_headers(client: AsyncClient, db_session: AsyncSession, *, cl
 
 async def _release_ready_order(client: AsyncClient, make_clinic_with_owner, db_session):
     """Sets up a lab order and advances it through collect/process/enter-
-    results (auto-transitions to Completed), ready for `/release`."""
+    results (auto-transitions to Completed), ready for `/release`.
+
+    Also creates a default Pathologist and exposes its id as
+    `ctx["pathologist_id"]` - Pathologist selection is now MANDATORY at
+    release (product decision), so every test in this file that doesn't
+    care about a SPECIFIC pathologist can just pass this one along."""
     ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
     lab_id = ctx["lab_order"]["id"]
     await _enter_one_result(client, lab_id, ctx["lab_headers"])
+    pathologist = await _create_pathologist(
+        client, ctx["owner_headers"], name="Dr. Default Pathologist"
+    )
+    ctx["pathologist_id"] = pathologist["id"]
     return ctx, lab_id
 
 
@@ -216,7 +225,10 @@ async def test_5b_med_tech_signature_is_never_captured_regardless_of_when_the_ac
     account's signature is set before release, after release, or both."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
     await client.post("/api/v1/auth/me/signature", headers=ctx["lab_headers"], files=_png_file(content=PNG_BYTES))
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.json()["med_tech_signature_snapshot_url"] is None
 
     # Changing the account's signature AFTER release changes nothing either
@@ -241,7 +253,10 @@ async def test_5c_a_historical_med_tech_signature_snapshot_from_before_this_chan
     from app.models.laboratory_order import LaboratoryOrder
 
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.json()["med_tech_signature_snapshot_url"] is None
 
     # Simulate a pre-existing historical row by writing the snapshot
@@ -358,21 +373,64 @@ async def test_13_missing_med_tech_signature_does_not_block_release_or_fabricate
     configured on the account - release still succeeds, and the snapshot
     is simply always null rather than fabricated."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["med_tech_signature_snapshot_url"] is None
     assert released.json()["med_tech_name_snapshot"]  # name still captured even with no signature image
 
 
-async def test_14_missing_pathologist_selection_does_not_block_release_or_fabricate_one(
+async def test_14_missing_pathologist_selection_blocks_release(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
+    """Product decision (superseding the original Round 6 "optional"
+    choice): Pathologist selection is now MANDATORY - a request that omits
+    `pathologist_id` entirely, or omits the request body altogether, must
+    be rejected before the order is touched at all, exactly the case a
+    request bypassing the frontend dialog would produce."""
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+
+    no_body = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"]
+    )
+    assert no_body.status_code == 422, no_body.text
+
+    missing_field = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"], json={}
+    )
+    assert missing_field.status_code == 422, missing_field.text
+
+    null_field = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": None},
+    )
+    assert null_field.status_code == 422, null_field.text
+
+    # None of the rejected attempts touched the order - still exactly as
+    # it was before any of these requests, not left half-released.
+    order_after = (
+        await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])
+    ).json()
+    assert order_after["status"] != "Released"
+    assert order_after["pathologist_id"] is None
+
+
+async def test_14b_release_with_a_valid_pathologist_succeeds(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """The valid counterpart to test_14 above - a real, active,
+    same-clinic Pathologist id lets the release through normally."""
+    ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.status_code == 200, released.text
-    assert released.json()["pathologist_id"] is None
-    assert released.json()["pathologist_name_snapshot"] is None
-    assert released.json()["pathologist_signature_snapshot_url"] is None
+    assert released.json()["status"] == "Released"
+    assert released.json()["pathologist_id"] == ctx["pathologist_id"]
+    assert released.json()["pathologist_name_snapshot"] == "Dr. Default Pathologist"
 
 
 # --- 15. Historical report remains unchanged (combined regression) ---
@@ -433,7 +491,10 @@ async def test_17_18_released_result_remains_printable_and_existing_lifecycle_in
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["status"] == "Released"
     assert released.json()["released_at"] is not None
@@ -445,9 +506,13 @@ async def test_17_18_released_result_remains_printable_and_existing_lifecycle_in
     assert len(reprint.json()["results"]) >= 1
 
     # #18: existing idempotent re-release rejection (unchanged pre-existing
-    # behavior) still holds with the new optional pathologist_id parameter
-    # in play.
-    re_release = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    # behavior) still holds with the now-mandatory pathologist_id supplied -
+    # a real, valid Pathologist id on the SECOND attempt proves the 400 is
+    # genuinely the "already released" guard, not a 422 for a missing field.
+    re_release = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert re_release.status_code == 400
 
 
@@ -483,7 +548,8 @@ async def test_c1_release_snapshots_the_selected_countersigning_med_tech_name_an
 
     released = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(countersigner.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(countersigner.id)},
     )
     assert released.status_code == 200, released.text
     body = released.json()
@@ -501,7 +567,10 @@ async def test_c2_missing_countersigning_med_tech_selection_does_not_block_relea
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": ctx["pathologist_id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["countersigning_med_tech_id"] is None
     assert released.json()["countersigning_med_tech_name_snapshot"] is None
@@ -517,7 +586,8 @@ async def test_c3_cross_clinic_countersigning_med_tech_selection_rejected(client
 
     resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(foreign_med_tech.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(foreign_med_tech.id)},
     )
     assert resp.status_code == 404
 
@@ -534,7 +604,8 @@ async def test_c3b_nonexistent_countersigning_med_tech_id_rejected(client: Async
     ctx, lab_id = await _release_ready_order(client, make_clinic_with_owner, db_session)
     resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(_uuid.uuid4())},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(_uuid.uuid4())},
     )
     assert resp.status_code == 404
 
@@ -552,7 +623,8 @@ async def test_c4_non_medtech_roles_cannot_be_selected_as_countersigner(client: 
     for non_medtech_id in (doc_me["id"], recep_me["id"], owner_me["id"]):
         resp = await client.post(
             f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-            json={"countersigning_med_tech_id": non_medtech_id},
+            json={"pathologist_id": ctx["pathologist_id"],
+            "countersigning_med_tech_id": non_medtech_id},
         )
         assert resp.status_code == 404, f"role check should reject {non_medtech_id}"
 
@@ -567,7 +639,8 @@ async def test_c5_inactive_countersigning_med_tech_selection_rejected(client: As
 
     resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(countersigner.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(countersigner.id)},
     )
     assert resp.status_code == 400
 
@@ -588,7 +661,8 @@ async def test_c5b_countersigning_med_tech_same_as_med_tech_in_charge_rejected(
 
     resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": releasing_med_tech["id"]},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": releasing_med_tech["id"]},
     )
     assert resp.status_code == 400, resp.text
     assert "Countersigning MedTech must be different from the Med Tech In Charge" in resp.text
@@ -616,7 +690,8 @@ async def test_c5c_countersigning_med_tech_different_from_med_tech_in_charge_sti
 
     resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(countersigner.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(countersigner.id)},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["countersigning_med_tech_id"] == str(countersigner.id)
@@ -634,7 +709,8 @@ async def test_c6_countersigning_med_tech_historical_snapshot_survives_a_later_r
     )
     released = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(countersigner.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(countersigner.id)},
     )
     assert released.json()["countersigning_med_tech_name_snapshot"] == "Original Name"
 
@@ -657,7 +733,8 @@ async def test_c7_missing_countersigning_med_tech_license_is_handled_safely(clie
 
     released = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"],
-        json={"countersigning_med_tech_id": str(countersigner.id)},
+        json={"pathologist_id": ctx["pathologist_id"],
+        "countersigning_med_tech_id": str(countersigner.id)},
     )
     assert released.status_code == 200, released.text
     assert released.json()["countersigning_med_tech_name_snapshot"] == "No License"

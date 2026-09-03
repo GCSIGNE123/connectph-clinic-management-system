@@ -19,6 +19,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Fired when the automatic 401-refresh-and-retry dance (below) exhausts
+ * itself - the access token is gone/expired AND the refresh token could not
+ * restore it (expired refresh token, or a browser that silently refused to
+ * store/send the refresh cookie at all - e.g. `COOKIE_SECURE=true` behind
+ * plain HTTP, see `docs/LOCAL_DEPLOYMENT.md`). Without this, the SPA stays
+ * on the current page with a silently-dead session: every subsequent action
+ * fails with a raw "Not authenticated" error (mutations) or a request that
+ * looks like an empty result (queries, unless the page checks `isError` -
+ * see `PatientsTable`'s `isError` prop), with nothing prompting the user to
+ * sign in again. A listener (see `SessionExpiredListener`) sends them back
+ * to `/login`. Never dispatched for a normal, user-initiated logout - that
+ * flow (`useLogout`) already navigates to `/login` itself.
+ */
+export const SESSION_EXPIRED_EVENT = "cph:session-expired";
+
+function notifySessionExpired(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
 /** Token storage helpers (localStorage + a lightweight cookie for middleware). */
 export const tokenStorage = {
   getAccessToken(): string | null {
@@ -119,6 +140,7 @@ async function performAuthedFetch(
       response = await doFetch();
     } else {
       tokenStorage.clearTokens();
+      notifySessionExpired();
     }
   }
 

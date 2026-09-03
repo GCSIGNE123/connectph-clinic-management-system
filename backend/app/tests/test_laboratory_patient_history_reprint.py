@@ -153,7 +153,18 @@ async def _setup_released_lab_order_for_clinic(client: AsyncClient, db_session, 
     )
     assert results_resp.status_code == 200, results_resp.text
 
-    release_resp = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    # Pathologist selection is now MANDATORY at release (product decision) -
+    # a real, active, same-clinic Pathologist is required for every release
+    # call in this file.
+    pathologist_resp = await client.post(
+        "/api/v1/pathologists",
+        headers=owner_headers, json={"name": "Dr. Maria Santos", "license_number": "PRC-12345"},
+    )
+    assert pathologist_resp.status_code == 201, pathologist_resp.text
+    release_resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=lab_headers, json={"pathologist_id": pathologist_resp.json()["id"]},
+    )
     assert release_resp.status_code == 200, release_resp.text
 
     return {

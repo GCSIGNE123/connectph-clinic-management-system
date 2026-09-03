@@ -47,6 +47,17 @@ async def _owner_headers(client: AsyncClient, make_clinic_with_owner):
     return clinic, owner, {"Authorization": f"Bearer {token}"}
 
 
+async def _create_pathologist(client: AsyncClient, headers: dict, **overrides) -> dict:
+    """Pathologist selection is now MANDATORY at release (product
+    decision) - every `/release` call in this file needs a real
+    Pathologist id, same helper/convention as `test_laboratory_signatories.py`."""
+    payload = {"name": "Dr. Maria Santos", "license_number": "PRC-12345"}
+    payload.update(overrides)
+    resp = await client.post("/api/v1/pathologists", headers=headers, json=payload)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
 async def _make_role_login(db_session: AsyncSession, *, clinic_id, role_name: str, doctor_id=None, password: str = "TestPass123!"):
     from app.models.user import User
 
@@ -274,7 +285,11 @@ async def test_full_lifecycle_with_timeline_events(client: AsyncClient, make_cli
     assert results.json()["status"] == "Completed"
     assert len(results.json()["results"]) == 2
 
-    release = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    release = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=lab_headers, json={"pathologist_id": pathologist["id"]},
+    )
     assert release.status_code == 200
     assert release.json()["status"] == "Released"
 
@@ -2851,7 +2866,11 @@ async def test_queue_ticket_completes_when_laboratory_result_is_released(
     queue_before_release = (await client.get(f"/api/v1/queues/{ctx['queue_id']}", headers=ctx["owner_headers"])).json()
     assert queue_before_release["status"] == "Called"  # confirms the pre-fix bug reproduction
 
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["status"] == "Released"
 
@@ -2879,14 +2898,21 @@ async def test_releasing_already_released_laboratory_order_does_not_duplicate_qu
     lab_id = ctx["lab_order"]["id"]
     await _run_lab_lifecycle_to_completed(client, lab_id, ctx["lab_headers"])
 
-    first = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    first = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert first.status_code == 200, first.text
 
     queue_after_first = (await client.get(f"/api/v1/queues/{ctx['queue_id']}", headers=ctx["owner_headers"])).json()
     history_count_after_first = len(queue_after_first["history"])
     assert queue_after_first["status"] == "Completed"
 
-    second = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    second = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert second.status_code == 400, second.text  # already Released - harmless rejection, not a crash
 
     queue_after_second = (await client.get(f"/api/v1/queues/{ctx['queue_id']}", headers=ctx["owner_headers"])).json()
@@ -2932,7 +2958,11 @@ async def test_laboratory_order_without_queue_still_releases_normally(
     lab_headers = {"Authorization": f"Bearer {lab_token}"}
     await _run_lab_lifecycle_to_completed(client, lab_id, lab_headers)
 
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    pathologist = await _create_pathologist(client, owner_headers)
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=lab_headers, json={"pathologist_id": pathologist["id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["status"] == "Released"
 
@@ -2973,7 +3003,11 @@ async def test_laboratory_queue_sync_respects_tenant_isolation(
     ctx = await _setup_lab_order_with_called_queue(client, make_clinic_with_owner, db_session)
     lab_id = ctx["lab_order"]["id"]
     await _run_lab_lifecycle_to_completed(client, lab_id, ctx["lab_headers"])
-    await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
 
     _clinic_b, _owner_b, owner_b_headers = await _owner_headers(client, make_clinic_with_owner)
     cross_tenant = await client.get(f"/api/v1/queues/{ctx['queue_id']}", headers=owner_b_headers)
@@ -3731,11 +3765,18 @@ async def test_phase_4h_partial_save_then_completing_the_remaining_parameter_pre
     assert completed.status_code == 200, completed.text
     assert len(completed.json()["results"]) == 2
 
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert released.status_code == 200, released.text
 
     # Re-releasing is idempotent - rejected, not duplicated.
-    re_release = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    re_release = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert re_release.status_code == 400
 
     report_source = (await client.get(f"/api/v1/laboratory/orders/{lab_id}", headers=ctx["owner_headers"])).json()
@@ -3820,7 +3861,11 @@ async def test_phase_4i_released_order_rejects_further_result_entry(
     ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
     lab_id = ctx["lab_order"]["id"]
     await _enter_one_result(client, lab_id, ctx["lab_headers"], numeric_value=14.0)
-    release = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    release = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
     assert release.status_code == 200, release.text
 
     post_release_edit = await client.post(
@@ -3842,7 +3887,11 @@ async def test_phase_4i_released_order_cannot_be_cancelled(
     ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
     lab_id = ctx["lab_order"]["id"]
     await _enter_one_result(client, lab_id, ctx["lab_headers"], numeric_value=14.0)
-    await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=ctx["lab_headers"])
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=ctx["lab_headers"], json={"pathologist_id": pathologist["id"]},
+    )
 
     cancel = await client.post(f"/api/v1/laboratory/orders/{lab_id}/cancel", headers=ctx["lab_headers"])
     assert cancel.status_code == 400, cancel.text
@@ -3866,8 +3915,16 @@ async def test_phase_4i_every_lifecycle_state_transition_matches_the_declared_st
     assert cancel.status_code == 200, cancel.text
     assert cancel.json()["status"] == "Cancelled"
 
+    # "release" needs a real Pathologist id in the body now that selection
+    # is mandatory - otherwise the request 422s on the missing field before
+    # ever reaching the status-transition guard this loop is testing.
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
     for method in ["collect", "start-processing", "release"]:
-        resp = await client.post(f"/api/v1/laboratory/orders/{lab_id}/{method}", headers=ctx["lab_headers"])
+        json_body = {"pathologist_id": pathologist["id"]} if method == "release" else None
+        resp = await client.post(
+            f"/api/v1/laboratory/orders/{lab_id}/{method}",
+            headers=ctx["lab_headers"], json=json_body,
+        )
         assert resp.status_code == 400, f"{method} should be rejected on a Cancelled order"
     results_resp = await client.post(
         f"/api/v1/laboratory/orders/{lab_id}/results", headers=ctx["lab_headers"],
@@ -3950,7 +4007,11 @@ async def test_phase_6_realistic_end_to_end_clinic_encounter(
     assert entered.json()["invoice_item_id"] is not None
     invoice_item_id = entered.json()["invoice_item_id"]
 
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    pathologist = await _create_pathologist(client, ctx["owner_headers"])
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=lab_headers, json={"pathologist_id": pathologist["id"]},
+    )
     assert released.status_code == 200, released.text
     assert released.json()["status"] == "Released"
 

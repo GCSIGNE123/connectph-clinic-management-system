@@ -710,7 +710,16 @@ async def test_released_laboratory_result_removes_ticket_from_now_serving(
         f"/api/v1/laboratory/orders/{lab_id}/results", headers=lab_headers,
         json={"results": [{"parameter_name": "Note", "result_type": "Text", "text_value": "ok"}]},
     )
-    released = await client.post(f"/api/v1/laboratory/orders/{lab_id}/release", headers=lab_headers)
+    # Pathologist selection is now MANDATORY at release (product decision).
+    pathologist_resp = await client.post(
+        "/api/v1/pathologists",
+        headers=owner_headers, json={"name": "Dr. Maria Santos", "license_number": "PRC-12345"},
+    )
+    assert pathologist_resp.status_code == 201, pathologist_resp.text
+    released = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/release",
+        headers=lab_headers, json={"pathologist_id": pathologist_resp.json()["id"]},
+    )
     assert released.status_code == 200, released.text
 
     after = (await client.get(f"/api/v1/public/tv-display/{slug}")).json()

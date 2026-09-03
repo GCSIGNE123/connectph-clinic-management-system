@@ -614,7 +614,7 @@ class LaboratoryService:
         *,
         clinic_id: UUID,
         actor_id: UUID,
-        pathologist_id: UUID | None = None,
+        pathologist_id: UUID,
         countersigning_med_tech_id: UUID | None = None,
     ) -> LaboratoryOrderRead:
         lab_order = await self._require(laboratory_order_id, clinic_id)
@@ -631,24 +631,25 @@ class LaboratoryService:
         # are - only for whether their e-signature shows (it never does
         # anymore, see below).
         med_tech = await self.session.get(User, actor_id)
+        # Pathologist selection is now MANDATORY (product decision,
+        # superseding Round 6's "deliberately optional" choice) - `pathologist_id`
+        # is a required parameter (see the signature above and
+        # `LaboratoryReleaseRequest`, which is why this is always resolved,
+        # never branched on `None`). Existence/clinic-scope/active-status
+        # validation is unchanged from before this decision.
+        pathologist = await self.session.execute(
+            select(Pathologist).where(Pathologist.id == pathologist_id, Pathologist.clinic_id == clinic_id, Pathologist.is_deleted.is_(False))
+        )
+        pathologist = pathologist.scalar_one_or_none()
+        if pathologist is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pathologist not found")
+        if not pathologist.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected Pathologist is not active")
         pathologist_fields: dict = {
-            "pathologist_id": None, "pathologist_name_snapshot": None,
-            "pathologist_license_snapshot": None, "pathologist_signature_snapshot_url": None,
+            "pathologist_id": pathologist.id, "pathologist_name_snapshot": pathologist.name,
+            "pathologist_license_snapshot": pathologist.license_number,
+            "pathologist_signature_snapshot_url": pathologist.signature_url,
         }
-        if pathologist_id is not None:
-            pathologist = await self.session.execute(
-                select(Pathologist).where(Pathologist.id == pathologist_id, Pathologist.clinic_id == clinic_id, Pathologist.is_deleted.is_(False))
-            )
-            pathologist = pathologist.scalar_one_or_none()
-            if pathologist is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pathologist not found")
-            if not pathologist.is_active:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected Pathologist is not active")
-            pathologist_fields = {
-                "pathologist_id": pathologist.id, "pathologist_name_snapshot": pathologist.name,
-                "pathologist_license_snapshot": pathologist.license_number,
-                "pathologist_signature_snapshot_url": pathologist.signature_url,
-            }
 
         # Client requirement change: a laboratory report's Med Tech In
         # Charge signs the PRINTED PAGE BY HAND now - no e-signature, on

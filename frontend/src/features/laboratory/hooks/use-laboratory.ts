@@ -135,7 +135,12 @@ export function useReleaseResults() {
   const { toast } = useToast();
   const invalidateAll = useInvalidateAllLabViews();
   return useMutation({
-    mutationFn: ({ id, pathologistId, countersigningMedTechId }: { id: string; pathologistId?: string | null; countersigningMedTechId?: string | null }) =>
+    // `pathologistId` is required (not optional/nullable) - Pathologist
+    // selection is now mandatory (see `ReleaseResultsDialog`'s doc comment
+    // and `LaboratoryReleaseRequest.pathologist_id` on the backend); this
+    // hook has exactly one caller (`ReleaseResultsDialog`), which already
+    // validates a non-empty selection before ever calling `mutate()`.
+    mutationFn: ({ id, pathologistId, countersigningMedTechId }: { id: string; pathologistId: string; countersigningMedTechId?: string | null }) =>
       laboratoryApi.releaseResults(id, pathologistId, countersigningMedTechId),
     onSuccess: (order) => {
       invalidateAll(order);

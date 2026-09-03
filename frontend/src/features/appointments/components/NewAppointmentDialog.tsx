@@ -101,6 +101,22 @@ export function NewAppointmentDialog({ open, onOpenChange, defaultBranchId, onCr
     });
   }, [doctors.data, departmentId, branchId]);
 
+  // Department-aware Service filtering: NULL `department_id` is shared
+  // across every department; an assigned service is only offered for its
+  // own department. Same convention as `filteredDoctors` above.
+  const filteredServices = useMemo(() => {
+    const items = services.data?.items ?? [];
+    return items.filter((s) => !departmentId || !s.department_id || s.department_id === departmentId);
+  }, [services.data, departmentId]);
+
+  // Transition rule: clear the selected Service when the Department changes
+  // and the current selection is no longer valid for it.
+  useEffect(() => {
+    if (serviceId && !filteredServices.some((s) => s.id === serviceId)) {
+      setServiceId("");
+    }
+  }, [filteredServices, serviceId]);
+
   const slots = useAvailableSlots(doctorId || null, appointmentDate || null, branchId || undefined);
 
   function selectPatient(id: string, label: string) {
@@ -218,9 +234,15 @@ export function NewAppointmentDialog({ open, onOpenChange, defaultBranchId, onCr
               <Label>Service (optional)</Label>
               <Select value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
                 <option value="">Select service</option>
-                {(services.data?.items ?? []).map((s) => (
-                  <option key={s.id} value={s.id}>{s.service_name ?? s.name}</option>
-                ))}
+                {filteredServices.length === 0 ? (
+                  <option value="" disabled>
+                    No services available for this department.
+                  </option>
+                ) : (
+                  filteredServices.map((s) => (
+                    <option key={s.id} value={s.id}>{s.service_name ?? s.name}</option>
+                  ))
+                )}
               </Select>
             </div>
             <div className="space-y-1.5">

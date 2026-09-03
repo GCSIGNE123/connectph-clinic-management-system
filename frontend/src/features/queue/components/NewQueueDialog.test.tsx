@@ -44,6 +44,10 @@ vi.mock("@/features/clinic-config/api/crud-factory", () => ({
             { id: "svc-lab", service_name: "BLOOD CHEMISTRY", name: "BLOOD CHEMISTRY", service_code: "BLDCHEM", default_price: "350.00" },
             { id: "svc-lab-2", service_name: "URINALYSIS", name: "URINALYSIS", service_code: "URIN", default_price: "150.00" },
             { id: "svc-med", service_name: "Consultation - Follow-up Visit", name: "Follow-up", service_code: "OTHER" },
+            // Department-aware Service filtering: assigned to a specific
+            // department, unlike every other mock service above (all
+            // `department_id: undefined` - unassigned/shared).
+            { id: "svc-lab-only", service_name: "HEP B SCREENING", name: "HEP B SCREENING", service_code: "HEPB", default_price: "200.00", department_id: "dept-lab" },
           ],
         });
       }
@@ -406,6 +410,52 @@ describe("NewQueueDialog", () => {
       await selectLabService(user, "URINALYSIS");
 
       expect(screen.queryByText(/^Doctor/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("department-aware Service filtering", () => {
+    it("does not offer a department-assigned service under a different department", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-med");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await user.click(screen.getByPlaceholderText(/select service/i));
+      // "HEP B SCREENING" (svc-lab-only) is assigned to dept-lab, not dept-med.
+      expect(screen.queryByText("HEP B SCREENING")).not.toBeInTheDocument();
+      // A shared (unassigned) service is still offered.
+      expect(screen.getByText("Consultation - Follow-up Visit")).toBeInTheDocument();
+    });
+
+    it("drops a Laboratory-service selection that's no longer valid after the Department changes, but keeps a shared one", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      await user.click(await screen.findByText("BLOOD CHEMISTRY")); // shared (department_id undefined)
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      await user.click(await screen.findByText("HEP B SCREENING")); // assigned to dept-lab
+      expect(screen.getByText("BLOOD CHEMISTRY")).toBeInTheDocument();
+      expect(screen.getByText("HEP B SCREENING")).toBeInTheDocument();
+
+      // Switch away to a non-Laboratory department (hides the multi-select)
+      // and back - HEP B SCREENING no longer belongs to dept-med, so it's
+      // dropped; the shared BLOOD CHEMISTRY selection survives.
+      await user.selectOptions(getSelectByLabel("Department"), "dept-med");
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+
+      expect(screen.getByText("BLOOD CHEMISTRY")).toBeInTheDocument();
+      expect(screen.queryByText("HEP B SCREENING")).not.toBeInTheDocument();
     });
   });
 

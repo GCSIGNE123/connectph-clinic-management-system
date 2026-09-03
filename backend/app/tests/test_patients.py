@@ -2,10 +2,28 @@
 archive/restore/search/pagination/tenant-isolation.
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    """This file logs in via the real endpoint multiple times per test
+    (Owner + a role-specific user for several of them) - reusing the same
+    per-test reset already used by `test_queues.py`/`test_tv_display.py`/
+    `test_billing.py` (see BUG-034) so this file's own login count never
+    trips the shared, real, non-test-mode-bypassed rate limiter within a
+    single pytest run. Test-isolation-only; no production code path is
+    affected."""
+    from app.core.rate_limit import _memory_buckets
+
+    _memory_buckets.clear()
+    yield
+    _memory_buckets.clear()
 
 
 async def _login(client: AsyncClient, clinic_slug: str, email: str, password: str) -> str:
@@ -244,3 +262,87 @@ async def test_viewer_role_is_read_only(client: AsyncClient, make_clinic_with_ow
 
     create_response = await client.post("/api/v1/patients", headers=headers, json=_patient_payload())
     assert create_response.status_code == 403
+
+
+async def _make_role_headers(client: AsyncClient, db_session, *, clinic, role_name: str) -> dict:
+    """Creates a real user of `role_name` in `clinic` (direct DB write, no
+    HTTP round-trip needed for setup - same pattern as
+    `test_viewer_role_is_read_only` above and `test_queues.py::_make_role_login`)
+    and returns Authorization headers for a freshly logged-in session."""
+    from sqlalchemy import select
+
+    from app.core.security import hash_password
+    from app.models.role import Role
+    from app.models.user import User
+
+    result = await db_session.execute(select(Role).where(Role.name == role_name))
+    role = result.scalar_one()
+    suffix = uuid.uuid4().hex[:8]
+    email = f"{role_name.lower()}-{suffix}@example.com"
+    user = User(
+        clinic_id=clinic.id, email=email, username=f"{role_name.lower()}{suffix}",
+        hashed_password=hash_password("TestPass123!"), first_name="Test", last_name=role_name,
+        role_id=role.id, is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    token = await _login(client, clinic.slug, email, "TestPass123!")
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_receptionist_can_list_and_create_patients(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Receptionist RBAC requirement: see/search all of their clinic's
+    patients and create a patient - the exact two actions reported broken
+    ("Not authenticated" on create, "No patients found" on list) in the
+    receptionist patient-access production incident. `PATIENT_VIEW_ROLES`/
+    `PATIENT_MANAGE_ROLES` already include Receptionist (see
+    `core/dependencies.py`) - this proves the whole request path (auth ->
+    role gate -> clinic scoping -> repository query) actually honors that,
+    not just the role-set constant in isolation."""
+    clinic, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    # A pre-existing patient (created by the Owner) that the Receptionist
+    # must be able to see - proves this isn't just "can create", but also
+    # "can see records that already exist" (the reported "No patients
+    # found" symptom).
+    existing = await client.post("/api/v1/patients", headers=owner_headers, json=_patient_payload())
+    assert existing.status_code == 201, existing.text
+    existing_id = existing.json()["patient"]["id"]
+
+    receptionist_headers = await _make_role_headers(
+        client, db_session, clinic=clinic, role_name="Receptionist"
+    )
+
+    list_response = await client.get("/api/v1/patients", headers=receptionist_headers)
+    assert list_response.status_code == 200, list_response.text
+    ids = {item["id"] for item in list_response.json()["items"]}
+    assert existing_id in ids
+
+    create_response = await client.post(
+        "/api/v1/patients",
+        headers=receptionist_headers,
+        json=_patient_payload(
+            first_name="Maria",
+            last_name="Santos",
+            mobile_number="+639171112222",
+            email="maria.santos@example.com",
+        ),
+    )
+    assert create_response.status_code == 201, create_response.text
+    assert create_response.json()["patient"] is not None
+
+
+async def test_unauthenticated_patient_requests_rejected(client: AsyncClient) -> None:
+    """No Authorization header at all - the exact `get_current_user`/
+    `get_current_clinic_id` branch that produces the reported "Not
+    authenticated" error - must 401 on both list and create, with no clinic
+    context ever resolved."""
+    list_response = await client.get("/api/v1/patients")
+    assert list_response.status_code == 401
+    assert list_response.json()["detail"] == "Not authenticated"
+
+    create_response = await client.post("/api/v1/patients", json=_patient_payload())
+    assert create_response.status_code == 401
+    assert create_response.json()["detail"] == "Not authenticated"

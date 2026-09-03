@@ -190,6 +190,16 @@ class QueueService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
         if service.status != "Active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected service is not active.")
+        # Department <-> Service enforcement: a service with no department_id
+        # is unassigned/shared and valid for any department (the transition
+        # state every pre-existing service is currently in - see
+        # `ClinicService.department_id`). A service assigned to a specific
+        # department may only be used with that same department.
+        if service.department_id is not None and service.department_id != department_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected service does not belong to the selected department.",
+            )
 
         return patient, department, doctor, service
 

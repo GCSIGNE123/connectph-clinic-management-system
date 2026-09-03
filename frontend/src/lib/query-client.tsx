@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { useState, type ReactNode, type JSX } from "react";
 import { ToastProvider } from "@/components/ui/toast";
+import { SessionExpiredListener } from "@/features/auth/components/SessionExpiredListener";
 
 function makeQueryClient(): QueryClient {
   return new QueryClient({
@@ -37,7 +38,10 @@ export function Providers({ children }: { children: ReactNode }): JSX.Element {
         disableTransitionOnChange
         storageKey="connectph-theme"
       >
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <SessionExpiredListener />
+          {children}
+        </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

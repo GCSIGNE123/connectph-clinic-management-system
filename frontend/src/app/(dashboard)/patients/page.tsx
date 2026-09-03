@@ -13,6 +13,7 @@ import { patientsApi } from "@/features/patients/api/patients-api";
 import { PatientsTable } from "@/features/patients/components/PatientsTable";
 import { PatientFormDialog } from "@/features/patients/components/PatientFormDialog";
 import { ArchiveRestoreDialog } from "@/features/patients/components/ArchiveRestoreDialog";
+import { ApiError } from "@/lib/api-client";
 import {
   PatientGender,
   PatientStatus,
@@ -65,7 +66,7 @@ export default function PatientsPage() {
     [debouncedSearch, gender, status, sort, dateRange, page]
   );
 
-  const { data, isLoading, isFetching } = usePatients(params);
+  const { data, isLoading, isFetching, isError, error } = usePatients(params);
   const patients = data?.data ?? [];
   const meta = data?.meta;
 
@@ -168,6 +169,8 @@ export default function PatientsPage() {
       <PatientsTable
         patients={patients}
         isLoading={isLoading}
+        isError={isError}
+        errorMessage={error instanceof ApiError ? error.message : undefined}
         canManage={canManage}
         canArchive={canArchive}
         emptyMessage={
