@@ -4,7 +4,9 @@ Phase 16 (Production Hardening) adds `/ready` and `/live` alongside the
 existing `/health` (kept for backward compatibility - existing tooling and
 `docs/TESTING.md`'s manual-verification notes already reference it):
 
-- `/health` - original combined check, unchanged shape (`{"status": "ok"}`).
+- `/health` - original combined check. Also reports the deployed Git
+  commit (`git_commit`/`git_commit_short`/`deployed_at`, all `null` unless
+  `deploy/windows/update_server.bat` has run - see `app/core/deploy_info.py`).
 - `/live` - liveness probe: the process is up and able to answer HTTP at
   all. No dependencies (no DB call) - a container orchestrator uses this to
   decide whether to restart the process; it must never depend on anything
@@ -25,6 +27,7 @@ import time
 from fastapi import APIRouter, Response, status
 from sqlalchemy import text
 
+from app.core.deploy_info import get_deploy_info
 from app.db.session import AsyncSessionLocal
 
 router = APIRouter(tags=["health"])
@@ -33,8 +36,15 @@ _process_start = time.monotonic()
 
 
 @router.get("/health")
-async def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+async def health_check() -> dict[str, object]:
+    # `git_commit`/`git_commit_short`/`deployed_at` answer "what's actually
+    # running on this machine" - see `app/core/deploy_info.py`. Added here
+    # (not just on the auth-gated `/system/status`) so `check_health.bat`
+    # and `deploy/windows/update_server.bat` can read the deployed commit
+    # with no token at all - this is deployment metadata, not sensitive
+    # data. `None` for every deploy_info field on a machine that has never
+    # run `update_server.bat` (e.g. a dev checkout) is expected, not a bug.
+    return {"status": "ok", **get_deploy_info()}
 
 
 @router.get("/live")

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.dependencies import get_db, require_system_status_role
+from app.core.deploy_info import get_deploy_info
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.schemas.system_status import SystemStatusResponse
 from app.services import connectivity_service, sync_worker_service
@@ -60,9 +61,13 @@ async def get_system_status(db: AsyncSession = Depends(get_db)) -> SystemStatusR
         )
     ).scalar_one_or_none()
 
+    deploy_info = get_deploy_info()
     return SystemStatusResponse(
         deployment_mode=state.deployment_mode,
         app_version=settings.APP_VERSION,
+        git_commit=deploy_info["git_commit"],
+        git_commit_short=deploy_info["git_commit_short"],
+        deployed_at=deploy_info["deployed_at"],
         local_status=state.local_status,
         cloud_status=state.cloud_status,
         database_status=state.database_status,

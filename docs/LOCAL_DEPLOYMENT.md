@@ -215,3 +215,24 @@ step-by-step (paths, a scheduled daily `pg_dump`, and the restore drill).
 Cloud backup (uploading to a Phase 2.5 Cloud Server) is a separate,
 optional, opt-in mechanism — see Phase 2/2.5 docs — not required for this
 local install to be considered "backed up".
+
+## 13. Updating an already-installed Server PC
+
+Separate from everything above (which is the one-time initial install) —
+see **[`docs/UPDATE_PROCEDURE.md`](UPDATE_PROCEDURE.md)** for the full,
+authoritative runbook for moving an already-running Server PC from one
+approved GitHub commit to the next:
+
+```
+deploy\windows\update_server.bat
+```
+
+One script, run by a human on the Server PC after code has already been
+reviewed and pushed from the Dev PC. It never force-resets or cleans the
+working tree, never touches `backend\.env`/`frontend\.env*`, only
+reinstalls/rebuilds/restarts what actually changed, always backs up before
+running a migration, and never restarts a service after a failed migration.
+`docs/UPDATE_PROCEDURE.md` also covers dependency-change detection,
+migration/rollback behavior, how to verify the deployed commit (`GET
+/api/v1/health`), and what to do after a failed update — read that document
+before running this on a real clinic machine for the first time.

@@ -14,6 +14,14 @@ class SystemStatusResponse(BaseModel):
     deployment_mode: str
     # --- Post-RC1 Phase 2.5: Production Cloud Deployment ---
     app_version: str  # backend app version string (settings.APP_VERSION / FastAPI `version=`)
+    # Deployment metadata (see app/core/deploy_info.py) - the actual Git
+    # commit running on this machine, written by
+    # deploy/windows/update_server.bat on every deploy. All three are
+    # `None` on a machine that has never run that script (e.g. a dev
+    # checkout) - never fabricated.
+    git_commit: str | None
+    git_commit_short: str | None
+    deployed_at: str | None
     local_status: str  # "up" (trivially true if this response was returned)
     cloud_status: str  # "up" | "down" | "not_configured"
     database_status: str  # "reachable" | "unreachable"

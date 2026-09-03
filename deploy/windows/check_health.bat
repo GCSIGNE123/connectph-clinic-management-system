@@ -4,7 +4,8 @@ REM check_health.bat  -  Phase 2.6 Local Production Deployment
 REM
 REM Read-only health check. Prints a clear PASS/FAIL summary for:
 REM   - PostgreSQL (tcp reachability)
-REM   - Backend      (/api/v1/health  - process up, no auth)
+REM   - Backend      (/api/v1/health  - process up, no auth; also reports the
+REM                   deployed Git commit - see backend/app/core/deploy_info.py)
 REM   - Backend+DB   (/api/v1/ready   - DB reachable via SELECT 1, no auth)
 REM   - Frontend     (http 200 on /)
 REM   - Deployment mode / cloud backup status (/api/v1/system/status - needs
@@ -40,13 +41,16 @@ if errorlevel 1 (
 )
 
 REM --- Backend liveness -------------------------------------------------------
+REM Also prints the deployed Git commit (see backend/app/core/deploy_info.py) -
+REM /api/v1/health is unauthenticated, so this answers "what commit is
+REM running" with zero setup, unlike the System Status check below (needs
+REM BACKEND_HEALTH_TOKEN). Shows "not recorded" (never a fabricated value)
+REM on a machine that has never run update_server.bat.
 powershell -NoProfile -Command ^
-    "try { $r = Invoke-WebRequest -Uri 'http://localhost:%BACKEND_PORT%/api/v1/health' -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
+    "try { $r = Invoke-WebRequest -Uri 'http://localhost:%BACKEND_PORT%/api/v1/health' -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -ne 200) { exit 1 }; $j = $r.Content | ConvertFrom-Json; $commit = if ($j.git_commit_short) { $j.git_commit_short } else { 'not recorded' }; Write-Host ('[ OK ] Backend          - /api/v1/health responding on port %BACKEND_PORT% (deployed commit: ' + $commit + ')'); exit 0 } catch { exit 1 }"
 if errorlevel 1 (
     echo [FAIL] Backend          - /api/v1/health not responding on port %BACKEND_PORT%
     set "OVERALL_OK=0"
-) else (
-    echo [ OK ] Backend          - /api/v1/health responding on port %BACKEND_PORT%
 )
 
 REM --- Backend + DB readiness --------------------------------------------------

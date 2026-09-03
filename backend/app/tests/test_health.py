@@ -13,4 +13,11 @@ async def test_health_check() -> None:
         response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # Deployment metadata (see app/core/deploy_info.py) - None in the test
+    # environment, since no update_server.bat run has ever written
+    # deploy_info.json here; the keys must still be present.
+    assert body["git_commit"] is None
+    assert body["git_commit_short"] is None
+    assert body["deployed_at"] is None

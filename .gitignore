@@ -27,6 +27,11 @@ venv/
 .venv/
 backend/backups/
 backend/var/
+# Generated deployment metadata (git commit + deploy timestamp) - written by
+# deploy/windows/update_server.bat via scripts/write_deploy_info.py on every
+# deploy, read by app/core/deploy_info.py. Regenerated every deploy, no
+# secrets - never a human-edited config file. See docs/UPDATE_PROCEDURE.md.
+backend/deploy_info.json
 
 # --- Frontend (Node) ---
 node_modules/

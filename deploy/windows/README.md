@@ -25,6 +25,9 @@ a future cloud-hosted instance) — those are unrelated to this folder.
 | `install-frontend-service.bat` | Registers the production frontend (`next start`) as an NSSM Windows Service, `DependOnService` Backend. | **No — Administrator-only.** |
 | `open-firewall-ports.bat` | `netsh advfirewall` rule opening inbound TCP 3000/8000 on the Private network profile. | **No — Administrator-only, modifies real firewall rules.** |
 | `install_local_clinic.bat` | Orchestrates all four `install-*`/`open-firewall-ports` scripts above, in order, then starts everything. The one script clinic IT runs top-to-bottom on install day. | **No — Administrator-only. This is the real install.** |
+| `update_server.bat` | The one entry point for updating an **already-installed** Server PC to the latest approved `origin/main` commit — pulls (fast-forward only), reinstalls/rebuilds only what changed, backs up + migrates safely, restarts only the affected service(s), health-checks, and reports SUCCESS/FAILED. See `docs/UPDATE_PROCEDURE.md` for the full runbook. | Yes on a real install — refuses to run over a dirty working tree or diverged history, never touches `.env` files, never force-resets/cleans. |
+| `run_backup.bat` | Scheduled/manual database + attachment backup (see `docs/BACKUP.md`). Also invoked automatically by `update_server.bat` before any migration. | Yes. |
+| `run_restore_drill.bat` | Non-destructive "is this backup actually restorable" check (see `docs/BACKUP.md`). | Yes. |
 
 Every script is idempotent (safe to re-run) and uses **poll-with-timeout**
 (`_wait_for.bat`) rather than fixed sleeps to avoid startup-order race
