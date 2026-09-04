@@ -24,8 +24,11 @@ export interface MasterDataCsvConfig<T> {
   /** Maps one record to a CSV row, in the same order as `headers`. */
   toRow: (item: T) => (string | number | null | undefined)[];
   /** Parses one CSV row (header-keyed) into a create/update payload. Throw
-   * a descriptive `Error` to reject a malformed row - surfaced per-row in
-   * the import summary rather than aborting the whole file. */
+   * a descriptive `Error` to reject a malformed row - the whole import is
+   * validated (this function called for every row) BEFORE any row is
+   * actually created/updated, so a thrown error here rejects the entire
+   * file with zero writes, not just the one bad row. See
+   * `handleImportCsvFile`'s two-phase validate-then-apply split below. */
   fromRow: (row: Record<string, string>) => Partial<T>;
   /** Field used to detect "this row already exists" during import (e.g.
    * `service_code`) - a match updates that record, no match creates a new
@@ -130,15 +133,55 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
     try {
       const text = await file.text();
       const rows = parseCsv(text);
-      let created = 0;
-      let updated = 0;
-      const errors: string[] = [];
 
+      // PHASE 1 - VALIDATE ONLY. `csv.fromRow` runs for every row and the
+      // existing-record match is resolved for every row, but NOTHING is
+      // written yet - no `create`/`update` call happens in this loop. A
+      // real production import once produced "0 created, 25 updated, 25
+      // errors": 25 rows had an unresolvable value (e.g. a Department name
+      // that didn't exist) and were rejected, but the OTHER 25 valid rows
+      // in the same file had already been committed before the loop even
+      // reached the bad ones. Splitting validation from application closes
+      // exactly that failure mode - if ANY row fails to parse, the import
+      // is rejected in full, with zero rows written, and every invalid row
+      // is reported at once (not just the first one encountered).
+      const validationErrors: string[] = [];
+      const planned: { payload: Partial<T>; existing: T | undefined }[] = [];
       for (const [index, row] of rows.entries()) {
         try {
           const payload = csv.fromRow(row);
           const matchValue = payload[csv.matchKey];
           const existing = items.find((item) => item[csv.matchKey] === matchValue);
+          planned.push({ payload, existing });
+        } catch (err) {
+          validationErrors.push(`Row ${index + 2}: ${(err as Error).message}`);
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        toast({
+          title: `Import rejected - ${validationErrors.length} invalid row(s)`,
+          description: `No changes were made. ${validationErrors.slice(0, 3).join(" ")}`,
+          variant: "error",
+        });
+        return;
+      }
+
+      // PHASE 2 - APPLY. Every row parsed and matched cleanly in Phase 1
+      // (`planned` has exactly one entry per CSV row, in file order, since
+      // Phase 1 only reaches here with zero validation errors) - now
+      // actually create/update each one. NOTE: this is still not true
+      // database-level atomicity - a network/database failure partway
+      // through THIS loop is not rolled back, and rows already applied
+      // before such a failure stay applied. What Phase 1 above eliminates
+      // is specifically validation-error-driven partial imports (a bad
+      // value in the CSV itself); a genuine runtime failure mid-apply is a
+      // different, still-open class of partial-write risk.
+      let created = 0;
+      let updated = 0;
+      const applyErrors: string[] = [];
+      for (const [index, { payload, existing }] of planned.entries()) {
+        try {
           if (existing) {
             await update.mutateAsync({ id: existing.id, payload });
             updated += 1;
@@ -147,16 +190,16 @@ export function MasterDataPage<T extends { id: string; status?: string }>({
             created += 1;
           }
         } catch (err) {
-          errors.push(`Row ${index + 2}: ${(err as Error).message}`);
+          applyErrors.push(`Row ${index + 2}: ${(err as Error).message}`);
         }
       }
 
-      if (errors.length === 0) {
+      if (applyErrors.length === 0) {
         toast({ title: `Import complete`, description: `${created} created, ${updated} updated.`, variant: "success" });
       } else {
         toast({
-          title: `Import finished with ${errors.length} error(s)`,
-          description: `${created} created, ${updated} updated. ${errors.slice(0, 3).join(" ")}`,
+          title: `Import finished with ${applyErrors.length} error(s)`,
+          description: `${created} created, ${updated} updated. ${applyErrors.slice(0, 3).join(" ")}`,
           variant: "error",
         });
       }

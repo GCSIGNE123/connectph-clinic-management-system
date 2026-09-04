@@ -24,8 +24,9 @@ vi.mock("@/features/auth/hooks/use-current-user", () => ({
   useCurrentUser: () => ({ data: { role: Role.Owner } }),
 }));
 
+const mockToast = vi.fn();
 vi.mock("@/components/ui/toast", () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast: mockToast }),
 }));
 
 const mockCreateMutateAsync = vi.fn().mockResolvedValue({});
@@ -126,7 +127,7 @@ describe("ServicesPage - Department assignment", () => {
     expect(csvText).toContain("Unassigned");
   });
 
-  it("CSV import resolves a department name to its id, and rejects an unknown department name", async () => {
+  it("CSV import resolves a valid department name to its id", async () => {
     mockCreateMutateAsync.mockClear();
     renderPage();
     await screen.findByText("Consultation");
@@ -141,6 +142,49 @@ describe("ServicesPage - Department assignment", () => {
 
     await waitFor(() => expect(mockCreateMutateAsync).toHaveBeenCalled());
     expect(mockCreateMutateAsync.mock.calls[0][0]).toMatchObject({ service_code: "NEWSVC", department_id: "dept-2" });
+  });
+
+  it('CSV import maps the literal "Unassigned" value to department_id: null', async () => {
+    mockCreateMutateAsync.mockClear();
+    renderPage();
+    await screen.findByText("Consultation");
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const csvText =
+      "service_code,service_name,description,default_price,duration_minutes,department,status\r\n" +
+      "NEWSVC2,New Service 2,,250,10,Unassigned,Active";
+    const file = new File([csvText], "services.csv", { type: "text/csv" });
+    await userEvent.upload(fileInput, file);
+
+    await waitFor(() => expect(mockCreateMutateAsync).toHaveBeenCalled());
+    expect(mockCreateMutateAsync.mock.calls[0][0]).toMatchObject({ service_code: "NEWSVC2", department_id: null });
+  });
+
+  it("CSV import rejects an unknown Department name with no changes made, and lists the real active Department names", async () => {
+    mockCreateMutateAsync.mockClear();
+    mockUpdateMutateAsync.mockClear();
+    mockToast.mockClear();
+    renderPage();
+    await screen.findByText("Consultation");
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    // Mirrors the real production mistake: "Consultation" is a Service
+    // name in this system, not a Department name - there is no such
+    // Department, so this must be rejected, not silently treated as
+    // unassigned or fuzzy-matched to something else.
+    const badCsv =
+      "service_code,service_name,description,default_price,duration_minutes,department,status\r\n" +
+      "NEWSVC3,New Service 3,,250,10,Consultation,Active";
+    const file = new File([badCsv], "services.csv", { type: "text/csv" });
+    await userEvent.upload(fileInput, file);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    expect(mockCreateMutateAsync).not.toHaveBeenCalled();
+    expect(mockUpdateMutateAsync).not.toHaveBeenCalled();
+    const [toastArg] = mockToast.mock.calls[0];
+    expect(toastArg.description).toContain(
+      'Invalid Department "Consultation". Valid Department names are: Internal Medicine, Laboratory.'
+    );
   });
 
   it("CSV import treats a blank department column as unassigned - backward compatible with pre-existing exports", async () => {

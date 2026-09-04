@@ -27,6 +27,17 @@ export default function ServicesPage() {
   // so the Department selector's options reflect the clinic's real,
   // currently-active department list - no hard-coded mapping, no schema
   // change, just a dynamic `options` array on an existing `select` field.
+  // KNOWN, DEFERRED LIMITATION (not fixed in this change - see the CSV
+  // import investigation this was found in): `limit: 100` here is already
+  // the backend's own hard cap (`Query(..., le=100)` on `GET /departments`
+  // - a higher value here would just be rejected, not silently honored).
+  // A clinic with more than 100 active departments would have some real,
+  // valid names missing from `departmentItems` below, causing both the
+  // Department selector and CSV import matching to incorrectly report a
+  // real department as "not found". Fixing this properly needs either
+  // paginating through every page of departments here, or raising the
+  // backend's cap - a small-looking but out-of-scope change for this fix,
+  // deferred as a separate follow-up.
   const departments = useQuery({
     queryKey: ["services-page", "departments"],
     queryFn: () => departmentsApi.list({ status: "Active", limit: 100 }),
@@ -42,7 +53,17 @@ export default function ServicesPage() {
     const trimmed = name?.trim();
     if (!trimmed || trimmed.toLowerCase() === UNASSIGNED_LABEL.toLowerCase()) return null;
     const match = departmentItems.find((d) => d.name.toLowerCase() === trimmed.toLowerCase());
-    if (!match) throw new Error(`Department "${trimmed}" was not found.`);
+    if (!match) {
+      // Lists the clinic's actual, currently-active Department names -
+      // fetched live above, never hard-coded - so a typo (or, as happened
+      // in production, confusing a Service name like "Consultation" for a
+      // Department name) is immediately obvious from the error itself,
+      // without a separate trip to the Departments page to check spelling.
+      const validNames = departmentItems.map((d) => d.name).sort((a, b) => a.localeCompare(b));
+      throw new Error(
+        `Invalid Department "${trimmed}". Valid Department names are: ${validNames.join(", ")}.`
+      );
+    }
     return match.id;
   }
 
