@@ -99,32 +99,52 @@ version: "3.9"
 #   clinic LAN.
 #
 # Deliberately NOT touched here: postgres and redis otherwise stay exactly
-# as defined in the base file - same images, same volumes (still named
-# `postgres_data`/`redis_data` as service keys, see the pinned `name:`
-# override below), never rebuilt or recreated by an app-code deploy.
-# Nothing in this file can delete or reset their data.
+# as defined in the base file - same images, never rebuilt or recreated by
+# an app-code deploy. Nothing in this file can delete or reset their data.
 #
-# - Pinned project `name:` and pinned volume `name:`s (below) - fixes the
-#   volume-identity ambiguity found during the Docker-architecture
-#   investigation: with no explicit name, Compose prefixes every named
-#   volume with the *project* name, which by default is derived from
-#   whatever directory `docker compose` happens to be run from - `deploy.cmd`
-#   always runs from the repo root, but a manual command run from `docker/`
-#   instead (as this very file's own header comment for the base file
-#   shows as an example) would silently resolve to a DIFFERENT project,
-#   and therefore DIFFERENT volumes, than the one already running. Pinning
-#   both the project name and each volume's literal name makes the actual
-#   on-disk volume identity independent of current working directory,
-#   checkout path, or checkout case, permanently. IMPORTANT - this pin
-#   takes effect the first time this file is used with these names; if the
-#   Server PC's existing `postgres_data`/`redis_data`/`backend_var_data`
-#   volumes were created under an different, project-prefixed name before
-#   this pin existed, they will NOT automatically be picked up - see
-#   `docs/DOCKER_UPDATE_PROCEDURE.md`'s "Volume identity - one-time
-#   verification" section, which the updater's own preflight check
-#   (`deploy.cmd`'s `:check_volume_protection`) enforces before ever
-#   building or restarting anything.
-name: canora_clinic
+# - EXTERNAL production volumes (below) - live-verified read-only evidence
+#   from the actual Canora Server PC showed its already-running stack was
+#   created under Compose project name "docker" (the literal name of the
+#   `docker/` directory containing the compose files, NOT the repo root -
+#   i.e. someone once ran `docker compose` from inside `docker/` rather
+#   than the repo root), giving its real, already-populated volumes the
+#   names `docker_postgres_data` / `docker_redis_data` /
+#   `docker_backend_var_data`. An earlier version of this file pinned a
+#   brand-new literal name (`canora_postgres_data` etc.) instead - WRONG,
+#   because pinning a name that doesn't match what's already running would
+#   have made Compose create a fresh, EMPTY volume under the new name
+#   rather than reusing the real database. That mistake never reached the
+#   Server PC and is corrected here before ever being used.
+#
+#   The fix is `external: true` with `name: ${POSTGRES_VOLUME_NAME:?...}` -
+#   NOT a hardcoded name (this repo may serve more than one clinic, and a
+#   hardcoded name would misdirect - or silently fabricate a fresh volume
+#   for - every install that doesn't happen to use these exact
+#   already-existing names). `external: true` is the actual point: it
+#   tells Compose this volume MUST already exist and must NEVER be created,
+#   renamed, or recreated by `docker compose` itself - if the named volume
+#   is missing, every `build`/`up`/`config` command fails outright with a
+#   clear Compose error instead of silently fabricating a fresh, empty
+#   replacement. The `${VAR:?message}` form additionally fails loudly if
+#   the project-root `.env` doesn't define the variable at all, rather than
+#   silently falling back to nothing. Each clinic's own root `.env` (never
+#   tracked, see `.env.example`) supplies its own already-existing volume
+#   names - this file itself never needs editing per-machine, and never
+#   encodes any one clinic's specific volume names.
+#
+#   `deploy.cmd`'s own `:check_volume_protection` preflight adds a second,
+#   independent layer on top of this: it verifies the *running*
+#   `connectph-postgres` container is actually mounted from the exact
+#   volume `POSTGRES_VOLUME_NAME` names (not just that a volume with that
+#   name exists somewhere) - see docs/DOCKER_UPDATE_PROCEDURE.md.
+#
+# Compose project `name:` is intentionally NOT pinned here (an earlier
+# version of this file did) - once every persistent volume is `external`,
+# the project name can no longer affect data identity at all (external
+# volumes are addressed by their literal name regardless of project), so
+# pinning it would only be solving an already-solved problem while adding
+# a second thing to keep in sync. Container names remain safe regardless -
+# every service already sets an explicit `container_name:` in the base file.
 
 services:
   backend:
@@ -164,15 +184,19 @@ services:
     ports: !reset []
 
 volumes:
-  # Explicit, literal volume names - see the header comment above. These
-  # merge with the base file's `postgres_data`/`redis_data` service-key
-  # declarations (still used as the *key* everywhere else in both files -
-  # e.g. `backend.volumes` above still says `backend_var_data:/app/var`,
-  # unchanged); only the actual on-disk volume name changes, from whatever
-  # the project-prefixed default would have been to these fixed values.
+  # `external: true` - see the header comment above. These merge with the
+  # base file's `postgres_data`/`redis_data` service-key declarations
+  # (still used as the *key* everywhere else in both files - e.g.
+  # `backend.volumes` above still says `backend_var_data:/app/var`,
+  # unchanged); only the actual on-disk volume this key resolves to
+  # changes, from a project-prefixed Compose-managed volume to this
+  # clinic's real, already-existing, externally-managed one.
   postgres_data:
-    name: canora_postgres_data
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:?POSTGRES_VOLUME_NAME must be set in the project-root .env to this machine's EXISTING production Postgres volume name (find it with `docker volume ls` - never guess) - see .env.example. Refusing to let Compose create a fresh, empty volume in its place.}
   redis_data:
-    name: canora_redis_data
+    external: true
+    name: ${REDIS_VOLUME_NAME:?REDIS_VOLUME_NAME must be set in the project-root .env to this machine's EXISTING production Redis volume name - see .env.example.}
   backend_var_data:
-    name: canora_backend_var_data
+    external: true
+    name: ${BACKEND_VAR_VOLUME_NAME:?BACKEND_VAR_VOLUME_NAME must be set in the project-root .env to this machine's EXISTING backend var-data volume name - see .env.example.}

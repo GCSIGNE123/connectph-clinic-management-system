@@ -34,9 +34,11 @@ REM        "already up to date". See "Repository state vs. running
 REM        deployment state" below - this is the point of this whole step.
 REM    8.  Validates the merged production Compose configuration.
 REM    9.  Protects the production Postgres/Redis/attachment volumes -
-REM        refuses to proceed if the pinned volume names don't exist yet
-REM        AND a differently-named data volume is already present (see
-REM        docker/docker-compose.prod.yml's volume-pinning comment).
+REM        reads the configured `POSTGRES_VOLUME_NAME`/`REDIS_VOLUME_NAME`/
+REM        `BACKEND_VAR_VOLUME_NAME` from .env, refuses to proceed if the
+REM        named volume doesn't exist, and cross-checks that the RUNNING
+REM        connectph-postgres container is actually mounted from that exact
+REM        volume (see docker/docker-compose.prod.yml's header comment).
 REM   10.  Rebuilds ONLY the backend and/or frontend images whose inputs
 REM        actually changed (or that step 7 determined are already stale).
 REM   11.  If any file under `backend/alembic/versions` changed: takes a
@@ -96,7 +98,15 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
 set COMPOSE_FILES=-f docker\docker-compose.yml -f docker\docker-compose.prod.yml
 set ENV_FILE=--env-file .env
-set "PROJECT_FLAG="
+
+REM Every `docker ...` invocation below is prefixed with `call` (matching
+REM this same file's pre-existing `call npm ci`/`call npm run build`
+REM convention) - defensively correct regardless of whether `docker`
+REM resolves to a real .exe (the normal case) or a .cmd/.bat wrapper (some
+REM environments ship one) - invoking a batch file from inside another
+REM batch script WITHOUT `call` transfers control permanently into it,
+REM abandoning the rest of this script the moment the callee exits. `call`
+REM costs nothing when the target is already a real .exe.
 
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "RUN_TS=%%i"
 set "DETAIL_LOG=%LOG_DIR%\update-%RUN_TS%.log"
@@ -123,28 +133,42 @@ echo [1/16] Checking for the clinic .env...
 if not exist ".env" (
     echo.
     echo FAILED: no ".env" file found in the repo root.
-    echo This file is required - it supplies POSTGRES_PASSWORD and the
-    echo optional CLINIC_API_BASE_URL / CLINIC_FRONTEND_ORIGIN /
-    echo COMPOSE_PROJECT_NAME_OVERRIDE overrides. Copy .env.example to .env
-    echo and fill in the real values for this clinic - see .env.example.
+    echo This file is required - it supplies POSTGRES_PASSWORD and this
+    echo machine's real POSTGRES_VOLUME_NAME / REDIS_VOLUME_NAME /
+    echo BACKEND_VAR_VOLUME_NAME. Copy .env.example to .env and fill in the
+    echo real values for this clinic - see .env.example.
     echo Nothing was pulled, validated, built, or restarted.
     set "FAIL_REASON=Repo-root .env is missing."
-    goto :fail
+    call :fail
+    exit /b 1
 )
-REM Optional escape hatch - see .env.example's COMPOSE_PROJECT_NAME_OVERRIDE
-REM comment. Only needed if a one-time volume-identity check (docs/
-REM DOCKER_UPDATE_PROCEDURE.md) found this machine's real volumes were
-REM created under a different project name than the pinned "canora_clinic".
-set "COMPOSE_PROJECT_NAME_OVERRIDE="
+REM Read the three required production volume names up front - printed now
+REM (before anything else happens) so an operator sees exactly what this
+REM run expects BEFORE any git/docker command runs. Never defaulted/guessed
+REM here - an unset value is caught later by docker-compose.prod.yml's own
+REM `${VAR:?message}` requirement, which fails the whole `docker compose`
+REM invocation rather than silently omitting the volume.
+set "POSTGRES_VOLUME_NAME="
+set "REDIS_VOLUME_NAME="
+set "BACKEND_VAR_VOLUME_NAME="
 for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
-    if /i "%%A"=="COMPOSE_PROJECT_NAME_OVERRIDE" set "COMPOSE_PROJECT_NAME_OVERRIDE=%%B"
+    if /i "%%A"=="POSTGRES_VOLUME_NAME" set "POSTGRES_VOLUME_NAME=%%B"
+    if /i "%%A"=="REDIS_VOLUME_NAME" set "REDIS_VOLUME_NAME=%%B"
+    if /i "%%A"=="BACKEND_VAR_VOLUME_NAME" set "BACKEND_VAR_VOLUME_NAME=%%B"
 )
-if defined COMPOSE_PROJECT_NAME_OVERRIDE (
-    set "PROJECT_FLAG=-p !COMPOSE_PROJECT_NAME_OVERRIDE!"
-    echo   OK - .env found ^(COMPOSE_PROJECT_NAME_OVERRIDE=!COMPOSE_PROJECT_NAME_OVERRIDE! in effect^).
-) else (
-    echo   OK - .env found ^(using the pinned project name "canora_clinic" from
-    echo   docker-compose.prod.yml - no override set^).
+echo   OK - .env found.
+echo   Expected production volumes for this machine:
+echo     Postgres:     !POSTGRES_VOLUME_NAME!
+echo     Redis:        !REDIS_VOLUME_NAME!
+echo     Backend var:  !BACKEND_VAR_VOLUME_NAME!
+if not defined POSTGRES_VOLUME_NAME (
+    echo.
+    echo FAILED: POSTGRES_VOLUME_NAME is not set in .env - refusing to guess.
+    echo Run `docker volume ls` on this machine and set it to the real,
+    echo already-existing Postgres data volume name - see .env.example.
+    set "FAIL_REASON=POSTGRES_VOLUME_NAME is not set in .env."
+    call :fail
+    exit /b 1
 )
 echo.
 
@@ -152,12 +176,14 @@ REM --- [2/16] Verify this is the CMS repository -------------------------------
 echo [2/16] Checking repository...
 if not exist "%CMS_ROOT%\.git" (
     set "FAIL_REASON=Not a git repository - %CMS_ROOT%\.git does not exist. Nothing was changed."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 git rev-parse --is-inside-work-tree >>"%DETAIL_LOG%" 2>&1
 if errorlevel 1 (
     set "FAIL_REASON=git rev-parse failed - is git installed and on PATH? See %DETAIL_LOG%."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 echo   OK.
 echo.
@@ -173,7 +199,8 @@ if not "%CURRENT_BRANCH%"=="main" (
     echo updates to origin/main. A human must check out "main" deliberately
     echo first before re-running.
     set "FAIL_REASON=Not on branch main (currently: %CURRENT_BRANCH%)."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 echo   OK.
 echo.
@@ -191,7 +218,8 @@ if not "%DIRTY_SIZE%"=="0" (
     type "%DIRTY_CHECK%"
     del "%DIRTY_CHECK%" >nul 2>&1
     set "FAIL_REASON=Working tree is not clean - see console output above."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 del "%DIRTY_CHECK%" >nul 2>&1
 echo   OK - working tree clean.
@@ -203,7 +231,8 @@ for /f %%i in ('git rev-parse HEAD') do set "OLD_SHA=%%i"
 git fetch origin >>"%DETAIL_LOG%" 2>&1
 if errorlevel 1 (
     set "FAIL_REASON=git fetch origin failed - check network/GitHub connectivity. See %DETAIL_LOG%."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 git merge --ff-only origin/main >>"%DETAIL_LOG%" 2>&1
 if errorlevel 1 (
@@ -212,7 +241,8 @@ if errorlevel 1 (
     echo origin/main have diverged, or the remote is unreachable. This script
     echo will never force this with a reset/checkout. Resolve manually.
     set "FAIL_REASON=git merge --ff-only failed (diverged history) - see %DETAIL_LOG%."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 for /f %%i in ('git rev-parse HEAD') do set "NEW_SHA=%%i"
 echo   Old commit: %OLD_SHA%
@@ -241,7 +271,17 @@ if not "%OLD_SHA%"=="%NEW_SHA%" (
     echo   Repository already up to date - no file-level diff to inspect.
 )
 
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost:8000/api/v1/health' -UseBasicParsing -TimeoutSec 5; $j = $r.Content | ConvertFrom-Json; if ($j.git_commit) { $j.git_commit } else { 'none' } } catch { 'unreachable' }"`) do set "RUNNING_SHA_BEFORE=%%i"
+REM Written to a temp file and read back via `set /p` rather than a
+REM backtick-command-substitution `for /f`, matching the pattern already
+REM used safely elsewhere in this script (:docker_backup,
+REM :check_volume_protection) - simpler and more consistent, though the
+REM cmd.exe bug below turned out to be unrelated to this specific choice.
+set "RUNNING_SHA_FILE=%TEMP%\cms_docker_running_sha_%RANDOM%.txt"
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost:8000/api/v1/health' -UseBasicParsing -TimeoutSec 5; $j = $r.Content | ConvertFrom-Json; if ($j.git_commit) { $j.git_commit } else { 'none' } } catch { 'unreachable' }" > "%RUNNING_SHA_FILE%" 2>>"%DETAIL_LOG%"
+set "RUNNING_SHA_BEFORE="
+set /p RUNNING_SHA_BEFORE=<"%RUNNING_SHA_FILE%"
+del "%RUNNING_SHA_FILE%" >nul 2>&1
+if not defined RUNNING_SHA_BEFORE set "RUNNING_SHA_BEFORE=unreachable"
 echo   Currently RUNNING backend reports commit: %RUNNING_SHA_BEFORE%
 if /i not "%RUNNING_SHA_BEFORE%"=="%NEW_SHA%" (
     echo   [BOOTSTRAP/DRIFT] The running container does not report the new
@@ -261,13 +301,14 @@ echo.
 
 REM --- [7/16] Validate the production Compose configuration --------------------
 echo [7/16] Validating production Compose configuration...
-docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% config >>"%DETAIL_LOG%" 2>&1
+call docker compose %ENV_FILE% %COMPOSE_FILES% config >>"%DETAIL_LOG%" 2>&1
 if errorlevel 1 (
     echo.
     echo FAILED: the production Compose configuration is invalid, or .env is
     echo missing a required value ^(e.g. POSTGRES_PASSWORD^). See %DETAIL_LOG%.
     set "FAIL_REASON=docker compose config validation failed - see %DETAIL_LOG%."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 echo   OK.
 echo.
@@ -277,7 +318,8 @@ echo [8/16] Verifying production volume identity...
 call :check_volume_protection
 if errorlevel 1 (
     set "FAIL_REASON=Production volume identity check failed - see console output above and %DETAIL_LOG%."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 echo.
 
@@ -286,20 +328,22 @@ echo [9/16] Building images for changed services...
 set "GIT_COMMIT=%NEW_SHA%"
 if "!BACKEND_CHANGED!"=="1" (
     echo   Building backend...
-    docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% build backend >>"%DETAIL_LOG%" 2>&1
+    call docker compose %ENV_FILE% %COMPOSE_FILES% build backend >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
         set "FAIL_REASON=docker compose build backend failed - see %DETAIL_LOG%. Previous container is still running, untouched."
-        goto :fail
+        call :fail
+        exit /b 1
     )
 ) else (
     echo   Backend image unchanged - skipped.
 )
 if "!FRONTEND_CHANGED!"=="1" (
     echo   Building frontend...
-    docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% build frontend >>"%DETAIL_LOG%" 2>&1
+    call docker compose %ENV_FILE% %COMPOSE_FILES% build frontend >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
         set "FAIL_REASON=docker compose build frontend failed - see %DETAIL_LOG%. Previous container is still running, untouched."
-        goto :fail
+        call :fail
+        exit /b 1
     )
 ) else (
     echo   Frontend image unchanged - skipped.
@@ -319,11 +363,12 @@ if "!MIGRATION_REQUIRED!"=="1" (
         echo   backend\backups\backup_log.txt for detail.
         set "MIGRATION_RESULT=backup failed - migration not attempted"
         set "FAIL_REASON=Pre-migration Docker backup failed - see %DETAIL_LOG% and backend\backups\backup_log.txt."
-        goto :fail
+        call :fail
+        exit /b 1
     )
     echo.
     echo   Running: docker exec connectph-backend python -m alembic upgrade head ...
-    docker exec connectph-backend python -m alembic upgrade head >>"%DETAIL_LOG%" 2>&1
+    call docker exec connectph-backend python -m alembic upgrade head >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
         echo   [FAIL] alembic upgrade head FAILED inside connectph-backend.
         echo.
@@ -340,7 +385,8 @@ if "!MIGRATION_REQUIRED!"=="1" (
         echo   ================================================================
         set "MIGRATION_RESULT=FAILED - see %DETAIL_LOG%"
         set "FAIL_REASON=alembic upgrade head failed inside connectph-backend - see %DETAIL_LOG%."
-        goto :fail
+        call :fail
+        exit /b 1
     )
     echo   [ OK ] Migration applied successfully.
     set "MIGRATION_RESULT=applied successfully"
@@ -353,20 +399,22 @@ echo.
 REM --- [11/16] Restart/recreate only the containers that need it ----------------
 echo [11/16] Restarting containers as needed (postgres/redis left untouched)...
 if "!BACKEND_CHANGED!"=="1" (
-    docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% up -d --no-deps backend >>"%DETAIL_LOG%" 2>&1
+    call docker compose %ENV_FILE% %COMPOSE_FILES% up -d --no-deps backend >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
         set "FAIL_REASON=docker compose up -d --no-deps backend failed - see %DETAIL_LOG%."
-        goto :fail
+        call :fail
+        exit /b 1
     )
     echo   [ OK ] backend restarted.
 ) else (
     echo   Backend restart not required - skipped.
 )
 if "!FRONTEND_CHANGED!"=="1" (
-    docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% up -d --no-deps frontend >>"%DETAIL_LOG%" 2>&1
+    call docker compose %ENV_FILE% %COMPOSE_FILES% up -d --no-deps frontend >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
         set "FAIL_REASON=docker compose up -d --no-deps frontend failed - see %DETAIL_LOG%."
-        goto :fail
+        call :fail
+        exit /b 1
     )
     echo   [ OK ] frontend restarted.
 ) else (
@@ -377,7 +425,7 @@ echo.
 
 REM --- [12/16] Current status ------------------------------------------------------
 echo [12/16] Current container status:
-docker compose %ENV_FILE% %PROJECT_FLAG% %COMPOSE_FILES% ps
+call docker compose %ENV_FILE% %COMPOSE_FILES% ps
 echo.
 
 REM --- [13/16] Wait for real readiness before checking health -------------------
@@ -405,7 +453,7 @@ REM --- [14/16] Docker-aware health checks -------------------------------------
 echo [14/16] Running health checks...
 set HEALTH_OK=1
 
-docker exec connectph-postgres pg_isready -U connectph >>"%DETAIL_LOG%" 2>&1
+call docker exec connectph-postgres pg_isready -U connectph >>"%DETAIL_LOG%" 2>&1
 if errorlevel 1 (
     echo   FAILED: PostgreSQL ^(docker exec connectph-postgres pg_isready^)
     set HEALTH_OK=0
@@ -438,7 +486,12 @@ if errorlevel 1 (
 )
 
 REM --- Deployed-SHA verification - the actual point of this whole script -------
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost:8000/api/v1/health' -UseBasicParsing -TimeoutSec 5; $j = $r.Content | ConvertFrom-Json; if ($j.git_commit) { $j.git_commit } else { 'none' } } catch { 'unreachable' }"`) do set "RUNNING_SHA_AFTER=%%i"
+set "RUNNING_SHA_FILE=%TEMP%\cms_docker_running_sha_%RANDOM%.txt"
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri 'http://localhost:8000/api/v1/health' -UseBasicParsing -TimeoutSec 5; $j = $r.Content | ConvertFrom-Json; if ($j.git_commit) { $j.git_commit } else { 'none' } } catch { 'unreachable' }" > "%RUNNING_SHA_FILE%" 2>>"%DETAIL_LOG%"
+set "RUNNING_SHA_AFTER="
+set /p RUNNING_SHA_AFTER=<"%RUNNING_SHA_FILE%"
+del "%RUNNING_SHA_FILE%" >nul 2>&1
+if not defined RUNNING_SHA_AFTER set "RUNNING_SHA_AFTER=unreachable"
 if /i "%RUNNING_SHA_AFTER%"=="%NEW_SHA%" (
     echo   OK - running backend now reports the new commit ^(%RUNNING_SHA_AFTER%^).
 ) else (
@@ -487,7 +540,8 @@ echo.
 
 if "!HEALTH_OK!"=="0" (
     set "FAIL_REASON=Post-deploy health checks reported failures - see [FAILED] lines above."
-    goto :fail
+    call :fail
+    exit /b 1
 )
 
 REM --- [15/16] Record deployment history -----------------------------------------
@@ -507,6 +561,19 @@ echo  Verified running commit: %RUNNING_SHA_AFTER%
 echo ============================================================
 exit /b 0
 
+REM Every failure path above does `call :fail` + `exit /b 1` (never a bare
+REM `goto :fail`) - empirically found, via live testing against an isolated
+REM scratch repo, that a `goto :fail` jumping past certain earlier blocks in
+REM this file did NOT reliably stop execution (a known cmd.exe parser
+REM quirk where `goto` can misbehave jumping over/into large parenthesized
+REM blocks in a long script - it is not specific to any one block here,
+REM adding unrelated lines elsewhere in the file was enough to make a given
+REM failure "accidentally" work, which is exactly the kind of fragility
+REM that must never ship). `call` does not have this problem - it always
+REM properly saves/resumes execution context - so `:fail` is now invoked as
+REM an ordinary subroutine; the caller's own `exit /b 1` immediately after
+REM the `call` is what actually terminates the script, since a called
+REM subroutine's own `exit /b` only returns from that one call.
 :fail
 call :record_history "FAILED" "%FAIL_REASON%"
 echo.
@@ -546,56 +613,91 @@ endlocal
 exit /b 0
 
 REM --- :check_volume_protection --------------------------------------------------
-REM Refuses to let Compose silently create a fresh, empty volume in place of
-REM a real one that already exists under a different name - see
-REM docker/docker-compose.prod.yml's volume-pinning comment and
-REM docs/DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section. Read-only
-REM (`docker volume ls`) - never creates, renames, or deletes anything itself.
+REM Two independent, read-only checks - never creates, renames, or deletes
+REM anything itself:
+REM   1. The volume named by POSTGRES_VOLUME_NAME/REDIS_VOLUME_NAME/
+REM      BACKEND_VAR_VOLUME_NAME (from .env) must already exist
+REM      (`docker volume ls`). docker-compose.prod.yml's `external: true`
+REM      would also refuse at build/up time if it didn't - this check exists
+REM      to fail EARLIER, with a clearer message, before any build starts.
+REM   2. The currently RUNNING connectph-postgres container must actually be
+REM      mounted from that exact volume (`docker inspect`'s Mounts list,
+REM      matched against the data directory) - existence alone isn't enough:
+REM      a typo'd-but-real volume name (e.g. a leftover from another
+REM      clinic's install, or a stale test volume) would pass check 1 while
+REM      still being catastrophically wrong. This is what actually answers
+REM      "is this the real clinic database", not just "does a volume with
+REM      this name exist somewhere on this machine".
+REM See docker/docker-compose.prod.yml's header comment and
+REM docs/DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section.
 :check_volume_protection
 setlocal DisableDelayedExpansion
 set "VOL_LIST=%TEMP%\cms_docker_volumes_%RUN_TS%.txt"
-docker volume ls --format "{{.Name}}" > "%VOL_LIST%" 2>>"%DETAIL_LOG%"
+call docker volume ls --format "{{.Name}}" > "%VOL_LIST%" 2>>"%DETAIL_LOG%"
 if errorlevel 1 (
     echo   [FAIL] Could not list Docker volumes - is Docker Desktop running?
     del "%VOL_LIST%" >nul 2>&1
     endlocal
     exit /b 1
 )
-findstr /x /c:"canora_postgres_data" "%VOL_LIST%" >nul 2>&1
-if not errorlevel 1 (
-    echo   OK - pinned production volume "canora_postgres_data" already exists.
-    del "%VOL_LIST%" >nul 2>&1
-    endlocal
-    exit /b 0
-)
-findstr /e /c:"postgres_data" "%VOL_LIST%" >nul 2>&1
-if not errorlevel 1 (
+findstr /x /c:"%POSTGRES_VOLUME_NAME%" "%VOL_LIST%" >nul 2>&1
+if errorlevel 1 (
     echo.
     echo   [FAIL] Refusing to proceed.
     echo.
-    echo   The pinned production volume "canora_postgres_data" does not exist
-    echo   yet, but a DIFFERENTLY-NAMED Postgres data volume already exists on
-    echo   this machine:
+    echo   The configured production volume "%POSTGRES_VOLUME_NAME%"
+    echo   ^(POSTGRES_VOLUME_NAME in .env^) does not exist on this machine.
+    echo   Existing volumes are:
     echo.
-    for /f "usebackq delims=" %%L in ("%VOL_LIST%") do (
-        echo %%L | findstr /e /c:"postgres_data" >nul 2>&1
-        if not errorlevel 1 echo     %%L
-    )
+    type "%VOL_LIST%"
     echo.
-    echo   Proceeding would make Docker silently create a NEW, EMPTY volume
-    echo   named "canora_postgres_data" and use that instead of the real
-    echo   clinic database. See docs\DOCKER_UPDATE_PROCEDURE.md's "Volume
-    echo   identity - one-time verification" section for exactly how to fix
-    echo   this safely. Nothing was built or restarted.
+    echo   This is never auto-created - a fresh, empty volume under this name
+    echo   would silently look like a working database while containing none
+    echo   of the real clinic's data. Verify POSTGRES_VOLUME_NAME in .env
+    echo   against `docker volume ls` and fix whichever one is wrong. See
+    echo   docs\DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section.
+    echo   Nothing was built or restarted.
     del "%VOL_LIST%" >nul 2>&1
     endlocal
     exit /b 1
 )
-echo   No existing Postgres volume found anywhere on this machine - treating
-echo   this as a first-time bootstrap. Compose will create fresh, empty
-echo   "canora_postgres_data"/"canora_redis_data"/"canora_backend_var_data"
-echo   volumes.
 del "%VOL_LIST%" >nul 2>&1
+echo   OK - configured volume "%POSTGRES_VOLUME_NAME%" exists.
+
+REM Cross-check: is the RUNNING connectph-postgres container actually using
+REM this exact volume for its data directory? (existence alone, above,
+REM would not catch a correctly-existing-but-wrong volume name.)
+set "MOUNT_FILE=%TEMP%\cms_docker_pg_mount_%RANDOM%.txt"
+call docker inspect -f "{{range .Mounts}}{{if eq .Destination \"/var/lib/postgresql/data\"}}{{.Name}}{{end}}{{end}}" connectph-postgres > "%MOUNT_FILE%" 2>>"%DETAIL_LOG%"
+if errorlevel 1 (
+    echo   [WARN] connectph-postgres container not found/not running - cannot
+    echo   cross-verify its actual mounted volume. Proceeding on the basis of
+    echo   the volume-existence check above only ^(expected only on a genuine
+    echo   first-time bootstrap - if this is an already-running clinic
+    echo   install, this is unexpected and worth investigating before
+    echo   continuing^).
+    del "%MOUNT_FILE%" >nul 2>&1
+    endlocal
+    exit /b 0
+)
+set "ACTUAL_PG_MOUNT="
+set /p ACTUAL_PG_MOUNT=<"%MOUNT_FILE%"
+del "%MOUNT_FILE%" >nul 2>&1
+if not "%ACTUAL_PG_MOUNT%"=="%POSTGRES_VOLUME_NAME%" (
+    echo.
+    echo   [FAIL] Refusing to proceed.
+    echo.
+    echo   connectph-postgres is currently running with its data directory
+    echo   mounted from volume "%ACTUAL_PG_MOUNT%", but .env's
+    echo   POSTGRES_VOLUME_NAME says "%POSTGRES_VOLUME_NAME%". These MUST
+    echo   match - proceeding could build/restart against the wrong database
+    echo   entirely. Fix POSTGRES_VOLUME_NAME in .env to
+    echo   "%ACTUAL_PG_MOUNT%" ^(the value the container is actually,
+    echo   currently using^) and re-run. Nothing was built or restarted.
+    endlocal
+    exit /b 1
+)
+echo   OK - connectph-postgres is confirmed running with volume "%POSTGRES_VOLUME_NAME%".
 endlocal
 exit /b 0
 
@@ -613,7 +715,7 @@ if not exist "%BK_BACKUP_DIR%" mkdir "%BK_BACKUP_DIR%" >nul 2>&1
 set "BK_DEST=%BK_BACKUP_DIR%\docker-backup-%RUN_TS%.sql"
 
 set "BK_RUNNING_FILE=%TEMP%\cms_docker_pg_running_%RANDOM%.txt"
-docker inspect -f "{{.State.Running}}" connectph-postgres > "%BK_RUNNING_FILE%" 2>>"%DETAIL_LOG%"
+call docker inspect -f "{{.State.Running}}" connectph-postgres > "%BK_RUNNING_FILE%" 2>>"%DETAIL_LOG%"
 set "BK_PG_RUNNING="
 set /p BK_PG_RUNNING=<"%BK_RUNNING_FILE%"
 del "%BK_RUNNING_FILE%" >nul 2>&1
@@ -623,7 +725,7 @@ if not "%BK_PG_RUNNING%"=="true" (
     exit /b 1
 )
 
-docker exec connectph-postgres pg_dump -U connectph --format=plain canora_clinic > "%BK_DEST%" 2>>"%DETAIL_LOG%"
+call docker exec connectph-postgres pg_dump -U connectph --format=plain canora_clinic > "%BK_DEST%" 2>>"%DETAIL_LOG%"
 if errorlevel 1 (
     echo   [FAIL] docker exec pg_dump failed - see %DETAIL_LOG%.
     endlocal

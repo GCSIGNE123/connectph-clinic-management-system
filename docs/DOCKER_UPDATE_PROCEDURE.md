@@ -36,57 +36,68 @@ run both updaters against the same machine.
 - **One-time only, before the very first run of this updated `deploy.cmd`
   on this specific machine**: the volume-identity verification below.
 
-## Volume identity — one-time verification (do this before the first run)
+## Volume identity — REQUIRED one-time setup (do this before the first run)
 
-`docker/docker-compose.prod.yml` now pins the production Postgres/Redis/
-attachment volumes to fixed names (`canora_postgres_data`,
-`canora_redis_data`, `canora_backend_var_data`) and pins the Compose
-project name itself (`name: canora_clinic`) — this closes a real gap found
-during the Docker-architecture investigation: without an explicit name,
-Docker prefixes every named volume with whatever the *Compose project
-name* happens to resolve to, which by default is derived from the current
-working directory a `docker compose` command happens to be run from. That
-name has, until now, never been pinned anywhere — so this machine's
-**real, already-running** database volume may exist under a different,
-implicit name.
-
-**Before running the new `deploy.cmd` on this machine for the first time**,
-a human must run (read-only, changes nothing):
+**Live-verified read-only evidence from the actual Canora Server PC**
+(confirmed via `docker volume ls`/`docker inspect`, no changes made) showed
+its already-running stack was created under Compose project name `docker`
+(i.e. `docker compose` was once run from inside the `docker/` directory
+rather than the repo root), giving its real, already-populated volumes
+these names:
 
 ```
-docker volume ls
+docker_postgres_data
+docker_redis_data
+docker_backend_var_data
 ```
 
-- **If `canora_postgres_data` is already in the list** — nothing to do,
-  proceed normally.
-- **If it is NOT in the list, but some other `*_postgres_data` volume is**
-  (e.g. `clinicms_postgres_data`, `docker_postgres_data`) — **stop**. This
-  is very likely the real, existing clinic database under its old implicit
-  name. `deploy.cmd`'s own preflight check (`:check_volume_protection`)
-  will refuse to proceed automatically rather than risk creating a fresh
-  empty volume in its place, but a human still needs to resolve it, by one
-  of:
-  1. **Rename the volume's contents** (Docker has no in-place volume
-     rename): create the new named volume, then copy the old volume's data
-     into it with a disposable container —
-     ```
-     docker volume create canora_postgres_data
-     docker run --rm -v <old_name>:/from -v canora_postgres_data:/to alpine sh -c "cp -a /from/. /to/."
-     ```
-     Verify the copy (e.g. spin up a throwaway `postgres:16-alpine`
-     container against `canora_postgres_data` and check `psql -l`) before
-     ever pointing production at it. Repeat the same pattern for
-     `redis_data`/`backend_var_data` if they're also under an old name.
-  2. **Or**, set `COMPOSE_PROJECT_NAME_OVERRIDE=<old project name>` in the
-     repo-root `.env` instead — this makes `deploy.cmd` pass `-p <old
-     project name>` on every `docker compose` invocation, which resolves
-     the OLD implicit volume names again (a CLI `-p` flag always wins over
-     a compose file's own `name:`). Simpler, no data movement — but it
-     means this machine never actually adopts the new pinned name, so
-     document clearly which one it uses.
-- **If no `*_postgres_data` volume exists at all** — this is a genuine
-  first-time bootstrap; proceed, Compose will create the new pinned
-  volumes fresh.
+with `connectph-postgres` confirmed mounted from `docker_postgres_data` and
+`connectph-backend` confirmed mounted from `docker_backend_var_data`.
+
+**`docker/docker-compose.prod.yml` declares all three volumes
+`external: true`** — Compose will never create, rename, or recreate them;
+it only ever attaches to a volume that already exists under exactly the
+name given, and refuses outright (an ordinary Compose error, no
+destructive action) if that name doesn't exist. The actual name is never
+hardcoded in the compose file itself (this repo may serve more than one
+clinic) — it comes from three required variables in the repo-root `.env`
+(never tracked — see `.env.example`):
+
+```
+POSTGRES_VOLUME_NAME=docker_postgres_data
+REDIS_VOLUME_NAME=docker_redis_data
+BACKEND_VAR_VOLUME_NAME=docker_backend_var_data
+```
+
+**For the Canora Server PC specifically, these are the exact, confirmed,
+correct values** — set them in that machine's `.env` exactly as shown
+above before ever running the corrected `deploy.cmd`. Do not guess these
+for any *other* installation — run `docker volume ls` on that machine and
+use whatever it actually shows.
+
+An earlier version of this design pinned a brand-new literal volume name
+(`canora_postgres_data` etc.) instead of reusing the real ones. **That was
+wrong** — it would have made Compose create a fresh, empty volume under
+the new name on the very first run rather than reusing the real database,
+and never reached the Server PC. It is corrected here, before ever being
+used, via the `external: true` + `.env`-variable design above.
+
+**Defense in depth** — `deploy.cmd`'s own `:check_volume_protection`
+preflight (step 8) adds a second, independent, read-only layer beyond
+Compose's own `external: true` refusal:
+
+1. Confirms the volume named by `POSTGRES_VOLUME_NAME` actually exists
+   (`docker volume ls`) — fails with a clear message, before any build
+   starts, if it doesn't. Never silently creates a replacement.
+2. Cross-checks that the **currently running** `connectph-postgres`
+   container is actually mounted from that exact volume (`docker inspect`)
+   — existence alone isn't enough; a correctly-existing-but-wrong name
+   (e.g. a stale volume from testing, or another clinic's leftover) would
+   pass check 1 while still being catastrophically wrong. This is the
+   check that actually answers "is this the real clinic database."
+
+Both checks print the expected volume name before making any changes, and
+both refuse to proceed on any mismatch.
 
 ## Running an update
 
@@ -115,9 +126,11 @@ reviewed and pushed from the Dev PC.
 7. Validates the merged production Compose configuration
    (`docker compose --env-file .env -f docker/docker-compose.yml -f
    docker/docker-compose.prod.yml config`).
-8. Runs the volume-identity preflight check (read-only `docker volume ls`)
-   — refuses to proceed if the pinned volume doesn't exist yet AND a
-   differently-named one already does (see above).
+8. Runs the volume-identity preflight check: confirms the volume named by
+   `.env`'s `POSTGRES_VOLUME_NAME` exists (`docker volume ls`), then
+   cross-checks that the **running** `connectph-postgres` container is
+   actually mounted from that exact volume (`docker inspect`) — refuses to
+   proceed on either failure (see "Volume identity" above).
 9. Rebuilds **only** the backend and/or frontend image whose inputs
    actually changed (or that step 6 determined is already stale).
 10. **If** any file under `backend\alembic\versions` changed: takes a
