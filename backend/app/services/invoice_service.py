@@ -230,6 +230,22 @@ class InvoiceService:
             service = await self.session.get(ClinicService, service_id)
             if service is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Service not found: {service_id}")
+            # Strict Laboratory-department enforcement - deliberately NOT the
+            # NULL-is-shared rule `QueueService._validate_and_fetch_entities`
+            # uses for the ordinary single-service queue path. A service with
+            # no `department_id` (the transition state most of the existing
+            # catalog is still in) is valid for any ordinary department but
+            # is NOT automatically a Laboratory service - clinic staff must
+            # explicitly assign it via the Services admin page (or its CSV
+            # import) before it can be submitted here. `visit.department_id`
+            # is always set for a pre-queue visit (`VisitPreQueueCreate.
+            # department_id` is required) and, for this Laboratory pay-first
+            # path, is always the Laboratory department.
+            if service.department_id != visit.department_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected service does not belong to the Laboratory department.",
+                )
             services.append(service)
 
         today = datetime.now(UTC).date()

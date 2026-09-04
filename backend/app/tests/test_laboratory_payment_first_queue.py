@@ -87,7 +87,14 @@ async def _setup(
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
-            json={"service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "BLOOD CHEMISTRY", "default_price": price},
+            json={
+                "service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "BLOOD CHEMISTRY", "default_price": price,
+                # Explicitly assigned to this same department (Laboratory by
+                # default here) - required since the pre-queue/laboratory-
+                # invoice paths now strictly enforce department_id match for
+                # Laboratory tickets (no NULL-is-shared fallback there).
+                "department_id": department["id"],
+            },
         )
     ).json()
     patient = (

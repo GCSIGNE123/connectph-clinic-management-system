@@ -24,6 +24,41 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+// `mockServicesList` is a real `vi.fn()` (not an inline `Promise.resolve`
+// like every other mocked list below) specifically so the empty-Laboratory-
+// catalog test can override it for one render via `mockResolvedValueOnce`,
+// without disturbing every other test's default fixture. `vi.hoisted` is
+// required here - `vi.mock` factories are hoisted above the file's normal
+// top-level statements, so a plain `const` declared below would not yet be
+// initialized when the factory below first runs.
+const { mockServicesList } = vi.hoisted(() => ({ mockServicesList: vi.fn() }));
+mockServicesList.mockImplementation(() =>
+  Promise.resolve({
+    items: [
+      // Both explicitly assigned to Laboratory (`dept-lab`) - real
+      // Laboratory tests, used throughout the "Multiple Laboratory
+      // Services" tests below to exercise the multi-select's own
+      // mechanics (rendering, running total, removal, no-duplicate,
+      // button-enable), independent of the classification rule itself.
+      { id: "svc-lab", service_name: "BLOOD CHEMISTRY", name: "BLOOD CHEMISTRY", service_code: "BLDCHEM", default_price: "350.00", department_id: "dept-lab" },
+      { id: "svc-lab-2", service_name: "URINALYSIS", name: "URINALYSIS", service_code: "URIN", default_price: "150.00", department_id: "dept-lab" },
+      // Unassigned/shared (`department_id` omitted) - valid for the normal
+      // Service field under any department (the NULL-is-shared rule), but
+      // must NEVER appear in the Laboratory Services multi-select - see
+      // "department-aware Service filtering" below.
+      { id: "svc-med", service_name: "Consultation - Follow-up Visit", name: "Follow-up", service_code: "OTHER" },
+      // Assigned to Laboratory specifically (used to prove a department-
+      // assigned service is excluded from a *different* department's
+      // normal Service field).
+      { id: "svc-lab-only", service_name: "HEP B SCREENING", name: "HEP B SCREENING", service_code: "HEPB", default_price: "200.00", department_id: "dept-lab" },
+      // Assigned to Internal Medicine, NOT Laboratory - proves the
+      // Laboratory selector's strict filter rejects a real-but-wrong
+      // department assignment, not just NULL/unassigned ones.
+      { id: "svc-med-only", service_name: "X-RAY CHEST", name: "X-RAY CHEST", service_code: "XRAY", default_price: "600.00", department_id: "dept-med" },
+    ],
+  })
+);
+
 vi.mock("@/features/clinic-config/api/crud-factory", () => ({
   createCrudApi: (path: string) => ({
     list: () => {
@@ -39,17 +74,7 @@ vi.mock("@/features/clinic-config/api/crud-factory", () => ({
         return Promise.resolve({ items: [{ id: "doc-1", first_name: "Jose", last_name: "Rizal", department_id: null }] });
       }
       if (path === "/services") {
-        return Promise.resolve({
-          items: [
-            { id: "svc-lab", service_name: "BLOOD CHEMISTRY", name: "BLOOD CHEMISTRY", service_code: "BLDCHEM", default_price: "350.00" },
-            { id: "svc-lab-2", service_name: "URINALYSIS", name: "URINALYSIS", service_code: "URIN", default_price: "150.00" },
-            { id: "svc-med", service_name: "Consultation - Follow-up Visit", name: "Follow-up", service_code: "OTHER" },
-            // Department-aware Service filtering: assigned to a specific
-            // department, unlike every other mock service above (all
-            // `department_id: undefined` - unassigned/shared).
-            { id: "svc-lab-only", service_name: "HEP B SCREENING", name: "HEP B SCREENING", service_code: "HEPB", default_price: "200.00", department_id: "dept-lab" },
-          ],
-        });
+        return mockServicesList();
       }
       if (path === "/branches") {
         return Promise.resolve({ items: [{ id: "branch-1", name: "Main Branch" }] });
@@ -431,7 +456,7 @@ describe("NewQueueDialog", () => {
       expect(screen.getByText("Consultation - Follow-up Visit")).toBeInTheDocument();
     });
 
-    it("drops a Laboratory-service selection that's no longer valid after the Department changes, but keeps a shared one", async () => {
+    it("drops every Laboratory-service selection once the Department changes away from Laboratory", async () => {
       const user = userEvent.setup();
       renderDialog();
 
@@ -442,20 +467,81 @@ describe("NewQueueDialog", () => {
       await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
 
       await user.click(screen.getByPlaceholderText(/select laboratory service/i));
-      await user.click(await screen.findByText("BLOOD CHEMISTRY")); // shared (department_id undefined)
+      await user.click(await screen.findByText("BLOOD CHEMISTRY")); // assigned to dept-lab
       await user.click(screen.getByPlaceholderText(/select laboratory service/i));
       await user.click(await screen.findByText("HEP B SCREENING")); // assigned to dept-lab
       expect(screen.getByText("BLOOD CHEMISTRY")).toBeInTheDocument();
       expect(screen.getByText("HEP B SCREENING")).toBeInTheDocument();
 
-      // Switch away to a non-Laboratory department (hides the multi-select)
-      // and back - HEP B SCREENING no longer belongs to dept-med, so it's
-      // dropped; the shared BLOOD CHEMISTRY selection survives.
+      // Switch away to a non-Laboratory department (hides the multi-select
+      // entirely) and back to Laboratory - both selections are gone (the
+      // multi-select is empty again, showing the "select at least one"
+      // prompt), since re-selecting is required rather than silently
+      // carrying stale selections across an intervening department change.
       await user.selectOptions(getSelectByLabel("Department"), "dept-med");
       await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
 
-      expect(screen.getByText("BLOOD CHEMISTRY")).toBeInTheDocument();
+      expect(screen.queryByText("BLOOD CHEMISTRY")).not.toBeInTheDocument();
       expect(screen.queryByText("HEP B SCREENING")).not.toBeInTheDocument();
+      expect(screen.getByText(/select at least one laboratory service/i)).toBeInTheDocument();
+    });
+
+    it("excludes an unassigned/shared (department_id NULL) service from Laboratory Services, but keeps it in the normal Service field", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      // "Consultation - Follow-up Visit" is unassigned (department_id
+      // undefined) - the NULL-is-shared rule must NOT apply here.
+      expect(screen.queryByText("Consultation - Follow-up Visit")).not.toBeInTheDocument();
+
+      // The same shared service IS still offered in the normal Service
+      // field for a non-Laboratory department - unchanged behavior.
+      await user.selectOptions(getSelectByLabel("Department"), "dept-med");
+      await user.click(screen.getByPlaceholderText(/select service/i));
+      expect(await screen.findByText("Consultation - Follow-up Visit")).toBeInTheDocument();
+    });
+
+    it("excludes a service assigned to a different (non-Laboratory) department from Laboratory Services", async () => {
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      // "X-RAY CHEST" is explicitly assigned to Internal Medicine, not
+      // Laboratory - a real, non-NULL, but wrong department assignment.
+      expect(screen.queryByText("X-RAY CHEST")).not.toBeInTheDocument();
+    });
+
+    it('shows "No laboratory services available for this department." when nothing is assigned to Laboratory', async () => {
+      mockServicesList.mockResolvedValueOnce({
+        items: [
+          { id: "svc-med", service_name: "Consultation - Follow-up Visit", name: "Follow-up", service_code: "OTHER" },
+          { id: "svc-med-only", service_name: "X-RAY CHEST", name: "X-RAY CHEST", service_code: "XRAY", department_id: "dept-med" },
+        ],
+      });
+      const user = userEvent.setup();
+      renderDialog();
+
+      await selectPatient(user);
+      await waitFor(() => expect(getSelectByLabel("Department")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Department"), "dept-lab");
+      await waitFor(() => expect(getSelectByLabel("Branch")).toBeInTheDocument());
+      await user.selectOptions(getSelectByLabel("Branch"), "branch-1");
+
+      await user.click(screen.getByPlaceholderText(/select laboratory service/i));
+      expect(await screen.findByText("No laboratory services available for this department.")).toBeInTheDocument();
     });
   });
 

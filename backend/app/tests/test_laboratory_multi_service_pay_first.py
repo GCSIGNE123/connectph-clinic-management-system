@@ -61,7 +61,12 @@ async def _setup(client: AsyncClient, headers: dict, *, service_prices: dict[str
         service = (
             await client.post(
                 "/api/v1/services", headers=headers,
-                json={"service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": name, "default_price": price},
+                json={
+                    "service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": name, "default_price": price,
+                    # Required - the multi-service Laboratory invoice path
+                    # strictly enforces department_id match, no NULL fallback.
+                    "department_id": department["id"],
+                },
             )
         ).json()
         service_ids[name] = service["id"]
@@ -400,3 +405,150 @@ async def test_tenant_isolation_for_multi_service_invoice_and_orders(client: Asy
 
     queue_resp = await client.get(f"/api/v1/queues/{result['queue']['id']}/slip", headers=headers_b)
     assert queue_resp.status_code == 404, queue_resp.text
+
+
+# --- Strict Laboratory-department enforcement (production bug fix: the
+# Laboratory Services selector/submission must never accept a service that
+# isn't explicitly assigned to the Laboratory department - NOT the same
+# NULL-is-shared rule the ordinary single-service queue path uses) ---
+
+
+async def test_laboratory_service_with_correct_department_is_accepted(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, service_prices={"CBC": "250.00"})
+    cbc_id = deps["service_ids"]["CBC"]
+    visit = await _create_draft_visit(client, headers, deps, primary_service_id=cbc_id)
+
+    resp = await client.post(
+        f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers, json={"service_ids": [cbc_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["description"] == "CBC"
+
+
+async def test_service_assigned_to_a_different_department_is_rejected(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, service_prices={"CBC": "250.00"})
+    cbc_id = deps["service_ids"]["CBC"]
+    visit = await _create_draft_visit(client, headers, deps, primary_service_id=cbc_id)
+
+    # A real service, but assigned to a DIFFERENT, non-Laboratory department.
+    other_department = (
+        await client.post(
+            "/api/v1/departments", headers=headers, json={"department_code": f"D{uuid.uuid4().hex[:6]}", "name": "Radiology"}
+        )
+    ).json()
+    other_service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={
+                "service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "X-RAY CHEST", "default_price": "600.00",
+                "department_id": other_department["id"],
+            },
+        )
+    ).json()
+
+    resp = await client.post(
+        f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers,
+        json={"service_ids": [cbc_id, other_service["id"]]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "does not belong to the Laboratory department" in resp.json()["detail"]
+
+
+async def test_unassigned_null_department_service_is_rejected_for_laboratory_submission(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """The general NULL-is-shared convention (a service with no
+    `department_id` is valid for any ordinary department) must NOT apply
+    to the Laboratory multi-service submission path - an unassigned
+    service is exactly as invalid here as one assigned elsewhere."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, service_prices={"CBC": "250.00"})
+    cbc_id = deps["service_ids"]["CBC"]
+    visit = await _create_draft_visit(client, headers, deps, primary_service_id=cbc_id)
+
+    unassigned_service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "UNASSIGNED TEST", "default_price": "100.00"},
+        )
+    ).json()
+    assert unassigned_service.get("department_id") is None
+
+    resp = await client.post(
+        f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers,
+        json={"service_ids": [cbc_id, unassigned_service["id"]]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "does not belong to the Laboratory department" in resp.json()["detail"]
+
+
+async def test_nonexistent_service_still_returns_404_not_a_department_error(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, service_prices={"CBC": "250.00"})
+    cbc_id = deps["service_ids"]["CBC"]
+    visit = await _create_draft_visit(client, headers, deps, primary_service_id=cbc_id)
+
+    resp = await client.post(
+        f"/api/v1/visits/{visit['id']}/laboratory-invoice", headers=headers,
+        json={"service_ids": [cbc_id, str(uuid.uuid4())]},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_pre_queue_draft_visit_rejects_a_non_laboratory_service_for_a_laboratory_department(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """`POST /visits/pre-queue`'s own `service_id` (the frontend's
+    `labServiceIds[0]`) must be rejected here too when the selected
+    Department is Laboratory and the service isn't assigned to it - not
+    just later at the invoice step. Mirrors the investigation's finding
+    that this path previously had zero department validation at all."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup(client, headers, service_prices={"CBC": "250.00"})
+
+    unassigned_service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "UNASSIGNED TEST 2", "default_price": "100.00"},
+        )
+    ).json()
+
+    resp = await client.post(
+        "/api/v1/visits/pre-queue", headers=headers,
+        json={
+            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
+            "doctor_id": None, "department_id": deps["department_id"], "service_id": unassigned_service["id"],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "does not belong to the Laboratory department" in resp.json()["detail"]
+
+
+async def test_non_laboratory_pre_queue_still_allows_an_unassigned_shared_service(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Regression: the strict Laboratory-only check must not leak into the
+    ordinary (non-Laboratory) pre-queue path, which still needs to accept
+    an unassigned/shared service exactly as before."""
+    _clinic, _owner, headers = await _owner_headers(client, make_clinic_with_owner)
+    # A non-Laboratory department, deliberately.
+    deps = await _setup(client, headers, service_prices={"Consult": "0"}, department_name="General Medicine")
+    unassigned_service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": f"S{uuid.uuid4().hex[:6]}", "service_name": "UNASSIGNED TEST 3", "default_price": "0"},
+        )
+    ).json()
+
+    resp = await client.post(
+        "/api/v1/visits/pre-queue", headers=headers,
+        json={
+            "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
+            "doctor_id": None, "department_id": deps["department_id"], "service_id": unassigned_service["id"],
+        },
+    )
+    assert resp.status_code == 201, resp.text

@@ -889,6 +889,16 @@ async def test_queue_slip_laboratory_department_bypasses_vitals_requirement(
             "/api/v1/departments", headers=headers, json={"department_code": "LAB", "name": "Laboratory"}
         )
     ).json()
+    # `deps["service_id"]` (from `_setup_queue_deps`) is NULL-department and
+    # cannot be used here - the pre-queue/laboratory-invoice paths strictly
+    # enforce a Laboratory-assigned service, no NULL-is-shared fallback.
+    lab_service = (
+        await client.post(
+            "/api/v1/services", headers=headers,
+            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                  "department_id": lab_department["id"]},
+        )
+    ).json()
 
     # Laboratory pay-first workflow: a Laboratory-department queue ticket
     # must now come from a paid draft visit (see
@@ -901,7 +911,7 @@ async def test_queue_slip_laboratory_department_bypasses_vitals_requirement(
             "/api/v1/visits/pre-queue", headers=headers,
             json={
                 "patient_id": deps["patient_id"], "branch_id": deps["branch_id"],
-                "doctor_id": deps["doctor_id"], "department_id": lab_department["id"], "service_id": deps["service_id"],
+                "doctor_id": deps["doctor_id"], "department_id": lab_department["id"], "service_id": lab_service["id"],
             },
         )
     ).json()

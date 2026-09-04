@@ -200,6 +200,23 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
     return items.filter((s) => !departmentId || !s.department_id || s.department_id === departmentId);
   }, [services.data, departmentId]);
 
+  // Laboratory Services multi-select: deliberately STRICTER than
+  // `filteredServices` above - NO NULL/shared fallback. `department_id`
+  // is the only real classification a service has (see ClinicService's
+  // module docstring); the Services admin page already lets clinic staff
+  // assign it, including a Laboratory department, per service or via bulk
+  // CSV import. Applying the shared/NULL convention here would mean the
+  // Laboratory selector shows every not-yet-classified service in the
+  // catalog (442 of them today) - exactly the bug this fixes. An
+  // unclassified/shared service remains available in the normal Service
+  // field above; it is intentionally NOT offered as a Laboratory service
+  // until an Administrator explicitly assigns it to Laboratory.
+  const filteredLabServices = useMemo(() => {
+    const items = services.data?.items ?? [];
+    if (!departmentId) return [];
+    return items.filter((s) => s.department_id === departmentId);
+  }, [services.data, departmentId]);
+
   function selectPatient(id: string, label: string, isYakapBeneficiary: boolean) {
     setSelectedPatient({ id, label, isYakapBeneficiary });
     setValue("patientId", id, { shouldValidate: true });
@@ -276,14 +293,16 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
 
   // Same transition rule for the Laboratory multi-select: only the
   // selections that are no longer valid for the new department are
-  // dropped, not the whole set - e.g. a shared (department_id = NULL)
-  // service stays selected across a department change.
+  // dropped, not the whole set. Checked against `filteredLabServices`
+  // (the strict, no-NULL-fallback list) - e.g. moving away from
+  // Laboratory, or a shared (department_id = NULL) service that was
+  // somehow selected before this filter existed, both correctly clear.
   useEffect(() => {
     setLabServiceIds((prev) => {
-      const next = prev.filter((id) => filteredServices.some((s) => s.id === id));
+      const next = prev.filter((id) => filteredLabServices.some((s) => s.id === id));
       return next.length === prev.length ? prev : next;
     });
-  }, [filteredServices]);
+  }, [filteredLabServices]);
 
   async function handleEnterVitals() {
     setDraftError(null);
@@ -581,13 +600,19 @@ export function NewQueueDialog({ open, onOpenChange, defaultBranchId, onCreated 
                       if (id && !labServiceIds.includes(id)) setLabServiceIds((prev) => [...prev, id]);
                     }}
                     placeholder="Select Laboratory Service"
-                    emptyLabel={filteredServices.length === 0 ? "No services available for this department." : "No services match."}
+                    emptyLabel={
+                      filteredLabServices.length === 0
+                        ? "No laboratory services available for this department."
+                        : "No services match."
+                    }
                     // Already-selected services are excluded from the
                     // dropdown entirely - the same service can never be
                     // selected twice (no duplicate-quantity concept exists
                     // for a Laboratory test), so there's nothing to reject
                     // at click time; it simply isn't offered again.
-                    options={filteredServices
+                    // `filteredLabServices` - strict department_id match
+                    // only, no NULL/shared fallback - see its own definition.
+                    options={filteredLabServices
                       .filter((s) => !labServiceIds.includes(s.id))
                       .map((s) => ({ value: s.id, label: s.service_name ?? s.name }))}
                   />

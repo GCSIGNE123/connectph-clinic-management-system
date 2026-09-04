@@ -4125,7 +4125,10 @@ async def test_laboratory_worklist_orders_newest_request_first(
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
-            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+            json={
+                "service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                "department_id": department["id"],
+            },
         )
     ).json()
 
@@ -4170,7 +4173,10 @@ async def test_laboratory_worklist_uses_id_descending_as_a_stable_tie_break_for_
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
-            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+            json={
+                "service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                "department_id": department["id"],
+            },
         )
     ).json()
 
@@ -4212,7 +4218,10 @@ async def test_laboratory_worklist_date_range_filter_and_empty_and_tenant_isolat
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
-            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+            json={
+                "service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                "department_id": department["id"],
+            },
         )
     ).json()
 

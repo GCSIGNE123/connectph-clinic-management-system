@@ -36,6 +36,7 @@ from app.schemas.visit import (
     VisitUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.department_rules import is_laboratory_department
 from app.services.visit_number_generator import VisitNumberGenerator
 from app.services import sync_queue_service
 
@@ -230,6 +231,27 @@ class VisitService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A doctor must be selected before entering vitals for this service.",
             )
+
+        # Strict Laboratory-department enforcement for the pre-queue draft
+        # Visit's own `service_id` (this is `labServiceIds[0]` from the
+        # Laboratory pay-first multi-select on the frontend - see
+        # NewQueueDialog.tsx). Deliberately NOT added to `_validate_entities`
+        # above, which is shared by every other department's pre-queue
+        # creation and correctly keeps the NULL-is-shared rule there.
+        # `InvoiceService.create_draft_invoice_for_laboratory_visit`
+        # independently re-validates every service in the full
+        # Laboratory `service_ids` list before any invoice line item is
+        # created - this check exists so the draft Visit row itself never
+        # even briefly carries a `service_id` inconsistent with a
+        # Laboratory `department_id`, not because the invoice step alone
+        # would be insufficient.
+        department = await self.repo.get_active_entity(Department, payload.department_id, clinic_id)
+        if department is not None and is_laboratory_department(department):
+            if service is None or service.department_id != payload.department_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected service does not belong to the Laboratory department.",
+                )
 
         today = datetime.now(UTC).date()
         visit_number = await self.number_generator.next_number(clinic_id, payload.branch_id, today)

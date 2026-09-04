@@ -72,7 +72,10 @@ async def _setup(client: AsyncClient, headers: dict, *, department_code: str, de
     service = (
         await client.post(
             "/api/v1/services", headers=headers,
-            json={"service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00"},
+            json={
+                "service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                "department_id": department["id"],
+            },
         )
     ).json()
     patient = (

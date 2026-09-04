@@ -28,6 +28,7 @@ from app.repositories.consultation_repository import ConsultationRepository
 from app.repositories.invoice_repository import InvoiceRepository
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.queue_setting_repository import QueueSettingRepository
+from app.services.department_rules import is_laboratory_department
 from app.services.queue_destination import resolve_room_label
 from app.services.shift_service import enforce_receptionist_open_shift
 from app.schemas.queue import (
@@ -79,16 +80,11 @@ def service_requires_pre_queue_vitals(service: ClinicService) -> bool:
     return service.service_code in PRE_QUEUE_VITALS_SERVICE_CODES
 
 
-def _is_laboratory_department(department: Department) -> bool:
-    # Matched by NAME, not `department.department_code == "LAB"` - see the
-    # comment on the original walk-in-lab-order gate this was factored out
-    # of (below, in `create_queue`): `department_code` is only reliable for
-    # the *seeded* default Laboratory department, and a clinic that created
-    # its own Laboratory department manually (a real, observed case) would
-    # never match it. Used for both the existing auto-lab-order-linking gate
-    # and the new Laboratory pay-first payment gate, so both features agree
-    # on what counts as "the Laboratory department" for a given clinic.
-    return department.name.strip().lower() == "laboratory"
+# See app/services/department_rules.py for the actual definition and why
+# it lives there (shared with visit_service.py, no circular import). Kept
+# under this historical private name since every call site/comment in this
+# file already refers to it that way.
+_is_laboratory_department = is_laboratory_department
 
 
 def _slip_qr_token(clinic_id: UUID, queue_id: UUID) -> str:
