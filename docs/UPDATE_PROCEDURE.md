@@ -1,8 +1,19 @@
-# Updating an Installed Server PC (Post-RC1 Phase 2.6+)
+# Updating an Installed Server PC — NSSM/Manual Architecture (Post-RC1 Phase 2.6+)
+
+> **This document covers ONLY the NSSM/manual-Windows-process Server PC
+> architecture** (portable Postgres under `.devdb\`, a `backend\.venv`,
+> `next start`, three NSSM-registered Windows Services). **The actual
+> Canora Medical Clinic Server PC uses a different, Docker-based
+> architecture** (`docker/docker-compose.prod.yml`, containers, no
+> `backend\.venv`) — for that machine, use
+> [`DOCKER_UPDATE_PROCEDURE.md`](DOCKER_UPDATE_PROCEDURE.md) and
+> `deploy.cmd` instead, never `update_server.bat`. See that document's
+> "Which updater do I actually run?" table if you're unsure which
+> architecture a given machine is.
 
 This document is the single procedure for moving an **already-installed**
-clinic Server PC from one approved GitHub commit to the next. If you are
-doing the *first* install instead, see
+NSSM-architecture clinic Server PC from one approved GitHub commit to the
+next. If you are doing the *first* install instead, see
 [`FIRST_CLINIC_INSTALLATION.md`](FIRST_CLINIC_INSTALLATION.md) — this
 document assumes `install_local_clinic.bat` has already been run once and
 the three Windows Services already exist.

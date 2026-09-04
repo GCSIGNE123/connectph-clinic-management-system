@@ -218,21 +218,24 @@ local install to be considered "backed up".
 
 ## 13. Updating an already-installed Server PC
 
-Separate from everything above (which is the one-time initial install) —
-see **[`docs/UPDATE_PROCEDURE.md`](UPDATE_PROCEDURE.md)** for the full,
-authoritative runbook for moving an already-running Server PC from one
-approved GitHub commit to the next:
+Separate from everything above (which is the one-time initial install).
+**This whole document (§1–12) describes the NSSM/manual-Windows-process
+architecture** — a portable Postgres, a `backend\.venv`, `next start`,
+three NSSM Windows Services. **A second, Docker-based architecture also
+exists in this repo** (`docker/docker-compose.prod.yml` + the repo-root
+`deploy.cmd`) and is what the actual **Canora Medical Clinic Server PC**
+runs — do not assume every Server PC uses the architecture described above.
 
-```
-deploy\windows\update_server.bat
-```
+| This Server PC uses... | Update runbook | Update command |
+|---|---|---|
+| NSSM Windows Services (this document's architecture) | [`docs/UPDATE_PROCEDURE.md`](UPDATE_PROCEDURE.md) | `deploy\windows\update_server.bat` |
+| Docker Desktop / `docker-compose.prod.yml` (the actual Canora Server PC) | [`docs/DOCKER_UPDATE_PROCEDURE.md`](DOCKER_UPDATE_PROCEDURE.md) | `deploy.cmd` (repo root) |
 
-One script, run by a human on the Server PC after code has already been
-reviewed and pushed from the Dev PC. It never force-resets or cleans the
-working tree, never touches `backend\.env`/`frontend\.env*`, only
-reinstalls/rebuilds/restarts what actually changed, always backs up before
-running a migration, and never restarts a service after a failed migration.
-`docs/UPDATE_PROCEDURE.md` also covers dependency-change detection,
-migration/rollback behavior, how to verify the deployed commit (`GET
-/api/v1/health`), and what to do after a failed update — read that document
-before running this on a real clinic machine for the first time.
+Each runbook never force-resets or cleans the working tree, never touches
+`backend\.env`/the repo-root `.env`/`frontend\.env*`, only
+rebuilds/restarts what actually changed, always backs up before running a
+migration, and never restarts a service/container after a failed
+migration. Read the runbook matching this specific machine's actual
+architecture before running anything on a real clinic machine for the
+first time — see `DOCKER_UPDATE_PROCEDURE.md`'s "Which updater do I
+actually run?" table if unsure.

@@ -99,12 +99,44 @@ version: "3.9"
 #   clinic LAN.
 #
 # Deliberately NOT touched here: postgres and redis otherwise stay exactly
-# as defined in the base file - same images, same named volumes
-# (postgres_data/redis_data), never rebuilt or recreated by an app-code
-# deploy. Nothing in this file can delete or reset their data.
+# as defined in the base file - same images, same volumes (still named
+# `postgres_data`/`redis_data` as service keys, see the pinned `name:`
+# override below), never rebuilt or recreated by an app-code deploy.
+# Nothing in this file can delete or reset their data.
+#
+# - Pinned project `name:` and pinned volume `name:`s (below) - fixes the
+#   volume-identity ambiguity found during the Docker-architecture
+#   investigation: with no explicit name, Compose prefixes every named
+#   volume with the *project* name, which by default is derived from
+#   whatever directory `docker compose` happens to be run from - `deploy.cmd`
+#   always runs from the repo root, but a manual command run from `docker/`
+#   instead (as this very file's own header comment for the base file
+#   shows as an example) would silently resolve to a DIFFERENT project,
+#   and therefore DIFFERENT volumes, than the one already running. Pinning
+#   both the project name and each volume's literal name makes the actual
+#   on-disk volume identity independent of current working directory,
+#   checkout path, or checkout case, permanently. IMPORTANT - this pin
+#   takes effect the first time this file is used with these names; if the
+#   Server PC's existing `postgres_data`/`redis_data`/`backend_var_data`
+#   volumes were created under an different, project-prefixed name before
+#   this pin existed, they will NOT automatically be picked up - see
+#   `docs/DOCKER_UPDATE_PROCEDURE.md`'s "Volume identity - one-time
+#   verification" section, which the updater's own preflight check
+#   (`deploy.cmd`'s `:check_volume_protection`) enforces before ever
+#   building or restarting anything.
+name: canora_clinic
 
 services:
   backend:
+    build:
+      args:
+        # Passed by `deploy.cmd` (`set GIT_COMMIT=<new sha>` before `docker
+        # compose build backend`) so the image bakes in exactly the commit
+        # it was built from - see docker/Dockerfile.backend and
+        # app/core/deploy_info.py. `${GIT_COMMIT:-unknown}` so a manual,
+        # deploy.cmd-less `docker compose build` still produces a working
+        # image (deploy_info.py treats "unknown" as "not set").
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     volumes: !override
       - backend_var_data:/app/var
     environment:
@@ -132,4 +164,15 @@ services:
     ports: !reset []
 
 volumes:
+  # Explicit, literal volume names - see the header comment above. These
+  # merge with the base file's `postgres_data`/`redis_data` service-key
+  # declarations (still used as the *key* everywhere else in both files -
+  # e.g. `backend.volumes` above still says `backend_var_data:/app/var`,
+  # unchanged); only the actual on-disk volume name changes, from whatever
+  # the project-prefixed default would have been to these fixed values.
+  postgres_data:
+    name: canora_postgres_data
+  redis_data:
+    name: canora_redis_data
   backend_var_data:
+    name: canora_backend_var_data

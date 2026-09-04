@@ -53,10 +53,22 @@ RUN if [ -f "pyproject.toml" ]; then \
 # ----------------------
 FROM python:3.12-slim AS runtime
 
+# Git commit this image was built from - passed by `docker compose build`
+# via docker-compose.prod.yml's `build.args.GIT_COMMIT: ${GIT_COMMIT}`, in
+# turn set by the repo-root `deploy.cmd` from `git rev-parse HEAD` right
+# before building. Baked in as a real ENV (not just an ARG, which would not
+# survive into the running container) so `app/core/deploy_info.py` can read
+# it at runtime and report "what commit is this container actually running"
+# - see that module's docstring. Left as the literal "unknown" on a plain
+# `docker build`/`docker compose build` invocation that never passed
+# --build-arg GIT_COMMIT=..., which `deploy_info.py` treats as "not set".
+ARG GIT_COMMIT=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
-    PORT=8000
+    PORT=8000 \
+    GIT_COMMIT=${GIT_COMMIT}
 
 # Runtime system deps (libpq for asyncpg/psycopg runtime linking)
 RUN apt-get update \

@@ -1,11 +1,18 @@
 """Tests for deployment metadata: `app/core/deploy_info.py`,
 `scripts/write_deploy_info.py`, and their exposure via `GET /health` and
-`GET /system/status` (see `deploy/windows/update_server.bat` and
-`docs/UPDATE_PROCEDURE.md` for the end-to-end mechanism this backs).
+`GET /system/status`. Backs TWO independent update mechanisms:
 
-Every test monkeypatches the module's file path rather than touching the
-real, gitignored `backend/deploy_info.json` - these tests must never depend
-on (or leave behind) that file's actual state on the machine running them.
+- NSSM/manual architecture: `deploy/windows/update_server.bat` +
+  `docs/UPDATE_PROCEDURE.md` (the file-based `deploy_info.json` source).
+- Docker architecture (the actual Canora Server PC): the repo-root
+  `deploy.cmd` + `docs/DOCKER_UPDATE_PROCEDURE.md` (the `GIT_COMMIT`
+  environment variable source, baked into the image at build time - see
+  `docker/Dockerfile.backend`).
+
+Every test monkeypatches the module's file path (and/or the `GIT_COMMIT`
+env var) rather than touching the real, gitignored `backend/deploy_info.json`
+or the real process environment - these tests must never depend on (or
+leave behind) either source's actual state on the machine running them.
 """
 
 import json
@@ -44,6 +51,7 @@ async def _owner_headers(client: AsyncClient, make_clinic_with_owner):
 
 
 def test_get_deploy_info_returns_all_none_when_file_is_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
     assert deploy_info_module.get_deploy_info() == {
         "git_commit": None, "git_commit_short": None, "deployed_at": None,
@@ -51,6 +59,7 @@ def test_get_deploy_info_returns_all_none_when_file_is_missing(tmp_path, monkeyp
 
 
 def test_get_deploy_info_returns_all_none_on_malformed_json(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     path = tmp_path / "deploy_info.json"
     path.write_text("{not valid json", encoding="utf-8")
     monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", path)
@@ -60,6 +69,7 @@ def test_get_deploy_info_returns_all_none_on_malformed_json(tmp_path, monkeypatc
 
 
 def test_get_deploy_info_parses_a_real_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     path = tmp_path / "deploy_info.json"
     path.write_text(
         json.dumps({
@@ -72,6 +82,70 @@ def test_get_deploy_info_parses_a_real_file(tmp_path, monkeypatch) -> None:
     assert deploy_info_module.get_deploy_info() == {
         "git_commit": "abc1234def", "git_commit_short": "abc1234",
         "deployed_at": "2026-09-04T00:00:00+00:00",
+    }
+
+
+# --- Docker architecture: GIT_COMMIT env var source (see docker/Dockerfile.backend) ---
+
+
+def test_get_deploy_info_prefers_git_commit_env_var_over_the_file(tmp_path, monkeypatch) -> None:
+    """The Docker source must win outright when present - it's the more
+    trustworthy signal for that architecture (see the module docstring's
+    "repository state vs. running deployment state" reasoning)."""
+    path = tmp_path / "deploy_info.json"
+    path.write_text(
+        json.dumps(
+            {"git_commit": "fileonly" * 5, "git_commit_short": "fileonl", "deployed_at": "x"}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", path)
+    monkeypatch.setenv("GIT_COMMIT", "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec")
+
+    info = deploy_info_module.get_deploy_info()
+
+    assert info["git_commit"] == "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec"
+    assert info["git_commit_short"] == "0cd8dc7"
+    assert info["deployed_at"]  # a real timestamp, not the file's "x" placeholder
+
+
+def test_get_deploy_info_env_var_works_even_when_no_file_exists(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
+    monkeypatch.setenv("GIT_COMMIT", "ABCDEF1234567890")  # mixed case, as a real SHA might arrive
+
+    info = deploy_info_module.get_deploy_info()
+
+    assert info["git_commit"] == "abcdef1234567890"  # normalized to lowercase
+    assert info["git_commit_short"] == "abcdef1"
+
+
+def test_get_deploy_info_treats_the_dockerfile_default_as_unset(tmp_path, monkeypatch) -> None:
+    """docker/Dockerfile.backend's `ARG GIT_COMMIT=unknown` default - a
+    plain `docker build` with no `--build-arg GIT_COMMIT=...` bakes in the
+    literal string "unknown", which must fall through to the file-based
+    source rather than being reported as a real (fake) commit."""
+    path = tmp_path / "deploy_info.json"
+    path.write_text(
+        json.dumps(
+            {"git_commit": "filefallback" * 3, "git_commit_short": "filefal", "deployed_at": "y"}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", path)
+    monkeypatch.setenv("GIT_COMMIT", "unknown")
+
+    info = deploy_info_module.get_deploy_info()
+
+    assert info["git_commit"] == "filefallback" * 3
+    assert info["deployed_at"] == "y"
+
+
+def test_get_deploy_info_treats_an_empty_env_var_as_unset(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
+    monkeypatch.setenv("GIT_COMMIT", "")
+
+    assert deploy_info_module.get_deploy_info() == {
+        "git_commit": None, "git_commit_short": None, "deployed_at": None,
     }
 
 
@@ -127,6 +201,7 @@ def test_write_deploy_info_rejects_a_value_that_is_not_a_commit_sha(tmp_path, mo
 async def test_health_endpoint_reports_null_deploy_info_when_file_absent(
     client: AsyncClient, tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
     response = await client.get("/api/v1/health")
     assert response.status_code == 200
@@ -136,9 +211,28 @@ async def test_health_endpoint_reports_null_deploy_info_when_file_absent(
     assert body["deployed_at"] is None
 
 
+async def test_health_endpoint_reports_the_docker_env_var_commit_when_present(
+    client: AsyncClient, tmp_path, monkeypatch
+) -> None:
+    """The Docker source (GIT_COMMIT env var) must be visible through the
+    same /health endpoint the NSSM architecture's file-based source uses -
+    both updaters read this one endpoint the same way."""
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
+    monkeypatch.setenv("GIT_COMMIT", "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec")
+
+    response = await client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["git_commit"] == "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec"
+    assert body["git_commit_short"] == "0cd8dc7"
+    assert body["deployed_at"]
+
+
 async def test_health_endpoint_reports_the_deployed_commit_when_present(
     client: AsyncClient, tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     path = tmp_path / "deploy_info.json"
     path.write_text(
         json.dumps({
@@ -164,6 +258,7 @@ async def test_health_endpoint_reports_the_deployed_commit_when_present(
 async def test_system_status_reports_deploy_info_fields(
     client: AsyncClient, make_clinic_with_owner, tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     path = tmp_path / "deploy_info.json"
     path.write_text(
         json.dumps({
@@ -187,6 +282,7 @@ async def test_system_status_reports_deploy_info_fields(
 async def test_system_status_reports_null_deploy_info_on_a_never_deployed_machine(
     client: AsyncClient, make_clinic_with_owner, tmp_path, monkeypatch
 ) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
     monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
     headers = await _owner_headers(client, make_clinic_with_owner)
 
@@ -197,3 +293,18 @@ async def test_system_status_reports_null_deploy_info_on_a_never_deployed_machin
     assert body["git_commit"] is None
     assert body["git_commit_short"] is None
     assert body["deployed_at"] is None
+
+
+async def test_system_status_reports_the_docker_env_var_commit_when_present(
+    client: AsyncClient, make_clinic_with_owner, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(deploy_info_module, "_DEPLOY_INFO_PATH", tmp_path / "deploy_info.json")
+    monkeypatch.setenv("GIT_COMMIT", "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec")
+    headers = await _owner_headers(client, make_clinic_with_owner)
+
+    response = await client.get("/api/v1/system/status", headers=headers)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["git_commit"] == "0cd8dc7c383d2c8a46d1552e1b14a997b01071ec"
+    assert body["git_commit_short"] == "0cd8dc7"

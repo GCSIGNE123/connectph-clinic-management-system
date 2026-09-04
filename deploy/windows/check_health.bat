@@ -2,8 +2,14 @@
 REM ---------------------------------------------------------------------------
 REM check_health.bat  -  Phase 2.6 Local Production Deployment
 REM
-REM Read-only health check. Prints a clear PASS/FAIL summary for:
-REM   - PostgreSQL (tcp reachability)
+REM Read-only health check, dual-mode - works on BOTH Server PC
+REM architectures (NSSM/manual portable-Postgres install, and the Docker
+REM install per docker-compose.prod.yml/deploy.cmd), auto-detected. Prints
+REM a clear PASS/FAIL summary for:
+REM   - PostgreSQL (tcp reachability on NSSM installs; `docker exec
+REM     connectph-postgres pg_isready` on Docker installs - see
+REM     docs/DOCKER_UPDATE_PROCEDURE.md for why the Docker container
+REM     publishes no host port to check directly)
 REM   - Backend      (/api/v1/health  - process up, no auth; also reports the
 REM                   deployed Git commit - see backend/app/core/deploy_info.py)
 REM   - Backend+DB   (/api/v1/ready   - DB reachable via SELECT 1, no auth)
@@ -30,14 +36,41 @@ echo  CONNECT.PH Clinic Platform - health check
 echo  %date% %time%
 echo ============================================================
 
-REM --- PostgreSQL -----------------------------------------------------------
+REM --- PostgreSQL -------------------------------------------------------------
+REM Dual-mode: this script is shared by both Server PC architectures.
+REM - NSSM/manual install: portable Postgres at %PG_BIN%\pg_isready.exe,
+REM   reachable on the host at %PG_PORT% (5433) - the original check.
+REM - Docker install (docker-compose.prod.yml): there is no portable
+REM   Postgres on this machine at all, and the container publishes NO host
+REM   port (`postgres.ports: !reset []`) - checking host port %PG_PORT%
+REM   would always fail here even though the database is perfectly healthy,
+REM   just reachable only via `docker exec` / the internal Compose network.
+REM   See docs/DOCKER_UPDATE_PROCEDURE.md for why. Detected by the absence
+REM   of the portable Postgres binary (a Docker install never has it) plus
+REM   the `docker` CLI being available.
 echo.
-"%PG_BIN%\pg_isready.exe" -p %PG_PORT% >nul 2>&1
-if errorlevel 1 (
-    echo [FAIL] PostgreSQL       - not accepting connections on port %PG_PORT%
-    set "OVERALL_OK=0"
+if exist "%PG_BIN%\pg_isready.exe" (
+    "%PG_BIN%\pg_isready.exe" -p %PG_PORT% >nul 2>&1
+    if errorlevel 1 (
+        echo [FAIL] PostgreSQL       - not accepting connections on port %PG_PORT%
+        set "OVERALL_OK=0"
+    ) else (
+        echo [ OK ] PostgreSQL       - accepting connections on port %PG_PORT%
+    )
 ) else (
-    echo [ OK ] PostgreSQL       - accepting connections on port %PG_PORT%
+    where docker >nul 2>&1
+    if errorlevel 1 (
+        echo [FAIL] PostgreSQL       - no portable Postgres found at %PG_BIN% and no `docker` CLI on PATH; cannot determine deployment architecture.
+        set "OVERALL_OK=0"
+    ) else (
+        docker exec connectph-postgres pg_isready -U connectph >nul 2>&1
+        if errorlevel 1 (
+            echo [FAIL] PostgreSQL       - Docker container "connectph-postgres" not running or not accepting connections
+            set "OVERALL_OK=0"
+        ) else (
+            echo [ OK ] PostgreSQL       - Docker container "connectph-postgres" accepting connections
+        )
+    )
 )
 
 REM --- Backend liveness -------------------------------------------------------

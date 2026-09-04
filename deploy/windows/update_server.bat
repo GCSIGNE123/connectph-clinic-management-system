@@ -4,9 +4,22 @@ REM update_server.bat  -  Phase 2.6+ Local Production Deployment: the ONE
 REM entry point for updating an already-installed clinic Server PC from one
 REM approved GitHub commit to the next.
 REM
-REM *** Run this ONLY on the real clinic Server PC, by a human, after the new
-REM     code has already been reviewed/approved on GitHub. Never on the Dev
-REM     PC as a substitute for `git pull` during development. ***
+REM *** SCOPED TO THE NSSM/MANUAL-WINDOWS-PROCESS ARCHITECTURE ONLY ***
+REM (portable Postgres under .devdb\, a backend\.venv, `next start`, three
+REM NSSM-registered Windows Services). The actual Canora Medical Clinic
+REM Server PC uses a DIFFERENT, Docker-based architecture instead
+REM (docker\docker-compose.prod.yml, containers, no backend\.venv) - for
+REM that machine, use docs\DOCKER_UPDATE_PROCEDURE.md and the repo-root
+REM `deploy.cmd`, never this script. If you are not certain which
+REM architecture a given Server PC actually runs, check for Docker Desktop
+REM and `docker ps` showing connectph-postgres/-backend/-frontend before
+REM assuming this script applies - see DOCKER_UPDATE_PROCEDURE.md's "Which
+REM updater do I actually run?" table.
+REM
+REM *** Run this ONLY on a real NSSM-architecture clinic Server PC, by a
+REM     human, after the new code has already been reviewed/approved on
+REM     GitHub. Never on the Dev PC as a substitute for `git pull` during
+REM     development. ***
 REM
 REM See docs\UPDATE_PROCEDURE.md for the full runbook (prerequisites, what
 REM this script refuses to do, failure recovery, and how production .env
