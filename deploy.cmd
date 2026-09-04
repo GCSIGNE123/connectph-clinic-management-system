@@ -97,7 +97,13 @@ set "LOG_DIR=%CMS_ROOT%\deploy\docker\logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
 set COMPOSE_FILES=-f docker\docker-compose.yml -f docker\docker-compose.prod.yml
-set ENV_FILE=--env-file .env
+REM Absolute path, not a relative "--env-file .env" - never rely on Compose's
+REM own automatic .env discovery (which depends on the current working
+REM directory a given `docker compose` invocation happens to have) or on
+REM this script's own CWD staying put for its entire run. `cd /d` above
+REM already guarantees CMS_ROOT is the repo root, so this is always correct
+REM regardless of how/where this script is later refactored or invoked from.
+set ENV_FILE=--env-file "%CMS_ROOT%\.env"
 
 REM Every `docker ...` invocation below is prefixed with `call` (matching
 REM this same file's pre-existing `call npm ci`/`call npm run build`
@@ -617,7 +623,9 @@ REM Two independent, read-only checks - never creates, renames, or deletes
 REM anything itself:
 REM   1. The volume named by POSTGRES_VOLUME_NAME/REDIS_VOLUME_NAME/
 REM      BACKEND_VAR_VOLUME_NAME (from .env) must already exist
-REM      (`docker volume ls`). docker-compose.prod.yml's `external: true`
+REM      (`docker volume inspect <name>` - an exact, single-volume lookup;
+REM      see below for why this replaced an earlier `docker volume ls` +
+REM      `findstr /x` approach). docker-compose.prod.yml's `external: true`
 REM      would also refuse at build/up time if it didn't - this check exists
 REM      to fail EARLIER, with a clearer message, before any build starts.
 REM   2. The currently RUNNING connectph-postgres container must actually be
@@ -628,40 +636,48 @@ REM      clinic's install, or a stale test volume) would pass check 1 while
 REM      still being catastrophically wrong. This is what actually answers
 REM      "is this the real clinic database", not just "does a volume with
 REM      this name exist somewhere on this machine".
+REM
+REM CONFIRMED BUG, FIXED - a real first-deployment run on the actual Canora
+REM Server PC failed here with a FALSE "volume does not exist", even though
+REM the volume genuinely existed and was correctly mounted. Root cause,
+REM reproduced on the Dev PC: `docker volume ls --format "{{.Name}}"` -
+REM like any Go/Linux-style CLI - writes LF-only line endings; cmd.exe's
+REM `>` redirection captures that verbatim (no LF->CRLF translation), and
+REM `findstr /X` (exact whole-line match) silently fails to match ANY line
+REM in an LF-only-terminated file - it matches fine with CRLF endings, and
+REM `findstr /C` (no `/X`, a substring match) also matches fine regardless
+REM of line endings, which is why this specific combination (`/X` + a
+REM Go-CLI's LF output) went undetected until real Docker Desktop output
+REM was involved - nothing on the Dev PC (no Docker CLI at all) could have
+REM produced this LF-only file to catch it earlier. `docker volume inspect
+REM <exact-name>` sidesteps the entire class of output-formatting fragility:
+REM no line-ending assumption, no multi-line list to parse - just a single
+REM exact lookup whose SUCCESS/FAILURE is the real answer, via errorlevel.
 REM See docker/docker-compose.prod.yml's header comment and
 REM docs/DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section.
 :check_volume_protection
 setlocal DisableDelayedExpansion
-set "VOL_LIST=%TEMP%\cms_docker_volumes_%RUN_TS%.txt"
-call docker volume ls --format "{{.Name}}" > "%VOL_LIST%" 2>>"%DETAIL_LOG%"
-if errorlevel 1 (
-    echo   [FAIL] Could not list Docker volumes - is Docker Desktop running?
-    del "%VOL_LIST%" >nul 2>&1
-    endlocal
-    exit /b 1
-)
-findstr /x /c:"%POSTGRES_VOLUME_NAME%" "%VOL_LIST%" >nul 2>&1
+call docker volume inspect "%POSTGRES_VOLUME_NAME%" >nul 2>>"%DETAIL_LOG%"
 if errorlevel 1 (
     echo.
     echo   [FAIL] Refusing to proceed.
     echo.
     echo   The configured production volume "%POSTGRES_VOLUME_NAME%"
-    echo   ^(POSTGRES_VOLUME_NAME in .env^) does not exist on this machine.
-    echo   Existing volumes are:
+    echo   ^(POSTGRES_VOLUME_NAME in .env^) does not exist on this machine
+    echo   ^(docker volume inspect could not find it - see %DETAIL_LOG%^).
+    echo   For reference, volumes that DO exist on this machine:
     echo.
-    type "%VOL_LIST%"
+    call docker volume ls
     echo.
     echo   This is never auto-created - a fresh, empty volume under this name
     echo   would silently look like a working database while containing none
     echo   of the real clinic's data. Verify POSTGRES_VOLUME_NAME in .env
-    echo   against `docker volume ls` and fix whichever one is wrong. See
+    echo   against the list above and fix whichever one is wrong. See
     echo   docs\DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section.
     echo   Nothing was built or restarted.
-    del "%VOL_LIST%" >nul 2>&1
     endlocal
     exit /b 1
 )
-del "%VOL_LIST%" >nul 2>&1
 echo   OK - configured volume "%POSTGRES_VOLUME_NAME%" exists.
 
 REM Cross-check: is the RUNNING connectph-postgres container actually using
@@ -698,6 +714,39 @@ if not "%ACTUAL_PG_MOUNT%"=="%POSTGRES_VOLUME_NAME%" (
     exit /b 1
 )
 echo   OK - connectph-postgres is confirmed running with volume "%POSTGRES_VOLUME_NAME%".
+
+REM Same existence check for the other two production volumes - parity with
+REM Postgres above. No running-container mount cross-check for these two
+REM (Redis' cache volume and the backend's /app/var volume are lower-stakes
+REM than the primary clinic database, and connectph-redis/connectph-backend
+REM don't need the same "which exact clinic" scrutiny a Postgres data
+REM volume does) - but a wrong or missing name must still fail closed here,
+REM before any build, exactly like Postgres.
+call docker volume inspect "%REDIS_VOLUME_NAME%" >nul 2>>"%DETAIL_LOG%"
+if errorlevel 1 (
+    echo.
+    echo   [FAIL] Refusing to proceed.
+    echo   The configured volume "%REDIS_VOLUME_NAME%" ^(REDIS_VOLUME_NAME in
+    echo   .env^) does not exist on this machine. See %DETAIL_LOG% and
+    echo   docs\DOCKER_UPDATE_PROCEDURE.md's "Volume identity" section.
+    echo   Nothing was built or restarted.
+    endlocal
+    exit /b 1
+)
+echo   OK - configured volume "%REDIS_VOLUME_NAME%" exists.
+
+call docker volume inspect "%BACKEND_VAR_VOLUME_NAME%" >nul 2>>"%DETAIL_LOG%"
+if errorlevel 1 (
+    echo.
+    echo   [FAIL] Refusing to proceed.
+    echo   The configured volume "%BACKEND_VAR_VOLUME_NAME%"
+    echo   ^(BACKEND_VAR_VOLUME_NAME in .env^) does not exist on this machine.
+    echo   See %DETAIL_LOG% and docs\DOCKER_UPDATE_PROCEDURE.md's "Volume
+    echo   identity" section. Nothing was built or restarted.
+    endlocal
+    exit /b 1
+)
+echo   OK - configured volume "%BACKEND_VAR_VOLUME_NAME%" exists.
 endlocal
 exit /b 0
 

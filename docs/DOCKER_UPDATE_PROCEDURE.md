@@ -86,15 +86,64 @@ used, via the `external: true` + `.env`-variable design above.
 preflight (step 8) adds a second, independent, read-only layer beyond
 Compose's own `external: true` refusal:
 
-1. Confirms the volume named by `POSTGRES_VOLUME_NAME` actually exists
-   (`docker volume ls`) — fails with a clear message, before any build
-   starts, if it doesn't. Never silently creates a replacement.
+1. Confirms each of `POSTGRES_VOLUME_NAME`/`REDIS_VOLUME_NAME`/
+   `BACKEND_VAR_VOLUME_NAME` actually exists via `docker volume inspect
+   <exact-name>` — a single exact lookup, not a list-then-search — fails
+   with a clear message, before any build starts, if it doesn't. Never
+   silently creates a replacement. (An earlier version of this check used
+   `docker volume ls` + `findstr /X`; that combination has a real,
+   confirmed bug — see "A real bug found on first deployment" below — and
+   was replaced with `docker volume inspect` specifically to eliminate it.)
 2. Cross-checks that the **currently running** `connectph-postgres`
-   container is actually mounted from that exact volume (`docker inspect`)
-   — existence alone isn't enough; a correctly-existing-but-wrong name
-   (e.g. a stale volume from testing, or another clinic's leftover) would
-   pass check 1 while still being catastrophically wrong. This is the
+   container is actually mounted from the configured Postgres volume
+   (`docker inspect`) — existence alone isn't enough; a correctly-existing-
+   but-wrong name (e.g. a stale volume from testing, or another clinic's
+   leftover) would pass check 1 while still being catastrophically wrong. This is the
    check that actually answers "is this the real clinic database."
+
+### A real bug found on first deployment
+
+The very first real run of the corrected `deploy.cmd` on the physical
+Canora Server PC failed at step 8 with a **false** "volume does not exist"
+— for `docker_postgres_data`, which genuinely existed and was genuinely
+the volume `connectph-postgres` was mounted from (independently confirmed
+via `docker volume ls` and `docker inspect` before this was reported).
+
+**Root cause, reproduced on the Dev PC**: the original check ran `docker
+volume ls --format "{{.Name}}" > file`, then `findstr /X /C:"<name>"
+file`. `docker volume ls` — like any Go/Linux-style CLI — writes LF-only
+line endings; `>` redirection in `cmd.exe` captures that verbatim with no
+LF→CRLF translation. `findstr /X` (exact whole-line match) silently fails
+to match **any** line in an LF-only-terminated file — confirmed by writing
+the identical content to two files, one CRLF- and one LF-terminated:
+`findstr /X` matched the CRLF file and reported no match at all against
+the LF file, while `findstr /C` (a substring match, no `/X`) matched both
+correctly regardless of line ending. Nothing on the Dev PC could have
+caught this via inline testing — there's no real Docker CLI there to
+produce genuine LF-terminated output; the earlier round's Dev-PC tests
+used a mocked `docker` command whose output happened not to expose this
+exact interaction.
+
+**Fix**: replaced the `volume ls` + `findstr /X` combination with `docker
+volume inspect <exact-name>` — an exact, single-volume lookup with no list
+to parse and no line-ending assumption at all; existence is simply
+"exited 0 or not." Re-tested on the Dev PC (this time exercising
+`:check_volume_protection` directly via a mocked `docker` CLI implementing
+`volume inspect`) against the exact real-server scenario — all three
+volumes present under their real names, `connectph-postgres` mounted from
+`docker_postgres_data` — and step 8 now passes correctly. Existence checks
+for `REDIS_VOLUME_NAME`/`BACKEND_VAR_VOLUME_NAME` were also added at the
+same time, for parity (the original check only verified Postgres).
+
+A second, related fix from the same investigation: every `docker ...`
+invocation in `deploy.cmd` is now prefixed with `call` (matching this
+file's pre-existing `call npm ci` convention) — defensively correct
+whether `docker` resolves to a real `.exe` (the normal case, and free to
+add `call` for) or ever a `.cmd`/`.bat` wrapper. And every `docker compose`
+invocation now passes `--env-file` with an **absolute** path
+(`%CMS_ROOT%\.env`) rather than a relative `.env` — never relying on
+Compose's own automatic `.env` discovery, which depends on the current
+working directory a given invocation happens to have.
 
 Both checks print the expected volume name before making any changes, and
 both refuse to proceed on any mismatch.
@@ -123,13 +172,15 @@ reviewed and pushed from the Dev PC.
    rebuild+restart whenever these disagree, even when git alone reports
    "already up to date". See "Repository state vs. running deployment
    state" below.
-7. Validates the merged production Compose configuration
-   (`docker compose --env-file .env -f docker/docker-compose.yml -f
-   docker/docker-compose.prod.yml config`).
-8. Runs the volume-identity preflight check: confirms the volume named by
-   `.env`'s `POSTGRES_VOLUME_NAME` exists (`docker volume ls`), then
-   cross-checks that the **running** `connectph-postgres` container is
-   actually mounted from that exact volume (`docker inspect`) — refuses to
+7. Validates the merged production Compose configuration (`docker compose
+   --env-file <repo-root>\.env -f docker/docker-compose.yml -f
+   docker/docker-compose.prod.yml config` — always the repo root's absolute
+   path, never relying on Compose's own `.env` auto-discovery).
+8. Runs the volume-identity preflight check: confirms all three configured
+   volumes exist (`docker volume inspect <name>`, one exact lookup each),
+   then cross-checks that the **running** `connectph-postgres` container is
+   actually mounted from the configured Postgres volume (`docker inspect`)
+   — refuses to
    proceed on either failure (see "Volume identity" above).
 9. Rebuilds **only** the backend and/or frontend image whose inputs
    actually changed (or that step 6 determined is already stale).
