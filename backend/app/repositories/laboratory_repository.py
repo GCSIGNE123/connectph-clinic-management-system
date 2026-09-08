@@ -50,6 +50,21 @@ class LaboratoryRepository:
         await self.session.refresh(lab_order, attribute_names=["order", "visit", "patient", "doctor", "template", "results", "attachments"])
         if lab_order.visit is not None:
             await self.session.refresh(lab_order.visit, attribute_names=["queue"])
+        if lab_order.template is not None:
+            # `refresh(..., attribute_names=["template"])` above only loads
+            # the `LaboratoryTemplate` row itself, not ITS OWN nested
+            # `parameters` relationship - same one-level-deep limitation as
+            # `visit.queue` above. Without this, a caller that reads
+            # `lab_order.template.parameters` outside an active async
+            # context (e.g. `_to_read`'s synchronous Pydantic validation in
+            # `build_sync_payload`, called right after this method returns
+            # - see `QueueService._create_queue_for_paid_lab_visit`) hits a
+            # `MissingGreenlet` error. Previously latent: a walk-in queue
+            # ticket essentially never auto-linked to a template at all
+            # (see `LaboratoryService._resolve_template_id`'s exact-match-
+            # only predecessor), so `lab_order.template` was always `None`
+            # here and this path was never exercised.
+            await self.session.refresh(lab_order.template, attribute_names=["parameters"])
         return lab_order
 
     async def get_by_id(self, laboratory_order_id: UUID, clinic_id: UUID) -> LaboratoryOrder | None:

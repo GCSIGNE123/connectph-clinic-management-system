@@ -62,7 +62,10 @@ async def _make_role_login(db_session: AsyncSession, *, clinic_id, role_name: st
     return email
 
 
-async def _setup(client: AsyncClient, headers: dict, *, department_code: str, department_name: str = "Laboratory") -> dict:
+async def _setup(
+    client: AsyncClient, headers: dict, *, department_code: str, department_name: str = "Laboratory",
+    service_code: str = "CBC1", service_name: str = "CBC, PLATELET",
+) -> dict:
     branch = (await client.post("/api/v1/branches", headers=headers, json={"name": "Main Branch", "code": "MAIN"})).json()
     department = (
         await client.post(
@@ -73,7 +76,7 @@ async def _setup(client: AsyncClient, headers: dict, *, department_code: str, de
         await client.post(
             "/api/v1/services", headers=headers,
             json={
-                "service_code": "CBC1", "service_name": "CBC, PLATELET", "default_price": "250.00",
+                "service_code": service_code, "service_name": service_name, "default_price": "250.00",
                 "department_id": department["id"],
             },
         )
@@ -314,3 +317,133 @@ async def test_non_laboratory_department_walk_in_queue_does_not_create_lab_order
 
     orders_resp = await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
     assert orders_resp.json() == []
+
+
+# --- Template auto-link resolver (real production bug: a Service named
+# "DENGUE RAPID TEST" never linked to the active template "DENGUE RAPID
+# TEST (DRT)" - `LaboratoryService._resolve_template_id`, shared by this
+# walk-in path and the doctor free-text Order path, fixes this) ---
+
+_DENGUE_PARAMETERS = [
+    {"parameter_name": "NS1", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+    {"parameter_name": "IgM", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+    {"parameter_name": "IgG", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+]
+
+
+async def _create_template(
+    client: AsyncClient, headers: dict, *, test_name: str, parameters: list | None = None
+) -> dict:
+    resp = await client.post(
+        "/api/v1/laboratory/templates", headers=headers,
+        json={"test_name": test_name, "default_price": "500.00", "parameters": parameters or []},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_walk_in_service_name_resolves_to_template_with_trailing_abbreviation(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """The exact real-world production bug: Service "DENGUE RAPID TEST"
+    must auto-link to active template "DENGUE RAPID TEST (DRT)" - not fall
+    back to template_id: None / generic Result Entry - and the template's
+    NS1/IgM/IgG Categorical parameters (Positive/Negative) must be intact
+    and reachable through that link."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    template = await _create_template(
+        client, owner_headers, test_name="DENGUE RAPID TEST (DRT)", parameters=_DENGUE_PARAMETERS
+    )
+    deps = await _setup(
+        client, owner_headers, department_code="LAB",
+        service_code="DRT1", service_name="DENGUE RAPID TEST",
+    )
+
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue = queue_resp.json()
+
+    orders = (
+        await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
+    ).json()
+    assert len(orders) == 1
+    lab_order = orders[0]
+    assert lab_order["template_id"] == template["id"]
+    template_params = lab_order["template"]["parameters"]
+    assert {p["parameter_name"] for p in template_params} == {"NS1", "IgM", "IgG"}
+    for param in template_params:
+        assert param["result_type"] == "Categorical"
+        assert set(param["options"]) == {"Positive", "Negative"}
+
+
+async def test_walk_in_exact_match_wins_over_a_parenthetical_stripped_candidate(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """When a template's name matches the Service name EXACTLY, that must
+    win outright, even if another active template would also match once
+    its own trailing parenthetical is stripped."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    exact_template = await _create_template(client, owner_headers, test_name="DENGUE RAPID TEST")
+    await _create_template(client, owner_headers, test_name="DENGUE RAPID TEST (DRT)")
+    deps = await _setup(
+        client, owner_headers, department_code="LAB",
+        service_code="DRT2", service_name="DENGUE RAPID TEST",
+    )
+
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue = queue_resp.json()
+
+    orders = (
+        await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
+    ).json()
+    assert orders[0]["template_id"] == exact_template["id"]
+
+
+async def test_walk_in_ambiguous_normalized_match_never_guesses(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """Two active templates that both strip down to the same normalized
+    name, with NEITHER matching the Service name exactly, must never be
+    auto-linked - the order is still created (worklist visibility is not
+    conditional on the template match), just with no template attached."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    await _create_template(client, owner_headers, test_name="DENGUE RAPID TEST (DRT)")
+    await _create_template(client, owner_headers, test_name="DENGUE RAPID TEST (RAPID)")
+    deps = await _setup(
+        client, owner_headers, department_code="LAB",
+        service_code="DRT3", service_name="DENGUE RAPID TEST",
+    )
+
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue = queue_resp.json()
+
+    orders = (
+        await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
+    ).json()
+    assert len(orders) == 1
+    assert orders[0]["template_id"] is None
+
+
+async def test_walk_in_unrelated_templates_are_never_selected(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    """An active template that shares no meaningful overlap with the
+    Service name must never be selected - the fix must not become
+    over-eager and start matching unrelated tests."""
+    _clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    await _create_template(client, owner_headers, test_name="CBC")
+    deps = await _setup(
+        client, owner_headers, department_code="LAB",
+        service_code="DRT4", service_name="DENGUE RAPID TEST",
+    )
+
+    queue_resp = await _create_paid_lab_queue(client, owner_headers, deps)
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue = queue_resp.json()
+
+    orders = (
+        await client.get(f"/api/v1/laboratory/orders?visit_id={queue['visit_id']}", headers=owner_headers)
+    ).json()
+    assert orders[0]["template_id"] is None

@@ -2359,6 +2359,58 @@ async def test_phase_4c_dengue_multi_parameter_results_persist_independently(
     assert all(r["interpretation"] is None for r in results.values())
 
 
+async def test_doctor_order_item_name_resolves_to_template_with_trailing_abbreviation(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """`create_from_order` (a doctor's free-text Order item name) uses the
+    same shared `LaboratoryService._resolve_template_id` as the walk-in
+    queue-ticket path (see test_walk_in_laboratory_queue.py's dedicated
+    coverage of the resolver's matching/ambiguity rules) - proven here by
+    an item name that only matches an active custom template once its
+    trailing "(DRT)" abbreviation is stripped, exactly the real production
+    bug (Service "DENGUE RAPID TEST" vs. template "DENGUE RAPID TEST
+    (DRT)"), reproduced here via the doctor free-text ordering path
+    instead of the Reception queue-ticket path."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    template_resp = await client.post(
+        "/api/v1/laboratory/templates", headers=owner_headers,
+        json={
+            "test_name": "DENGUE RAPID TEST (DRT)", "default_price": "500.00",
+            "parameters": [
+                {"parameter_name": "NS1", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+                {"parameter_name": "IgM", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+                {"parameter_name": "IgG", "result_type": "Categorical", "options": ["Positive", "Negative"]},
+            ],
+        },
+    )
+    assert template_resp.status_code == 201, template_resp.text
+    template = template_resp.json()
+
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    visit_id = queue["visit_id"]
+    doc_email, _doc_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor", doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "TestPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+
+    order = (
+        await client.post(
+            f"/api/v1/consultations/{opened['id']}/orders", headers=doc_headers,
+            # Deliberately without the "(DRT)" suffix - the exact mismatch
+            # that used to fall back to template_id: None / generic Result
+            # Entry.
+            json={"order_category": "Laboratory", "items": [{"item_name": "DENGUE RAPID TEST"}]},
+        )
+    ).json()
+
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_order = next(lo for lo in lab_orders if lo["order_id"] == order["id"])
+    assert lab_order["template_id"] == template["id"]
+
+
 async def test_phase_4c_no_interpretation_is_invented_for_qualitative_results(
     client: AsyncClient, make_clinic_with_owner, db_session
 ) -> None:

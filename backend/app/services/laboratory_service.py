@@ -16,6 +16,7 @@ place (`InvoiceService.update_item`) instead of adding a new one, so
 re-completing an order (e.g. after a correction) never double-charges.
 """
 
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -242,6 +243,34 @@ def build_sync_payload(lab_order: LaboratoryOrder) -> dict:
     return _to_read(lab_order).model_dump(mode="json")
 
 
+# --- Template name resolution (shared by create_from_order/create_from_queue_ticket) ---
+#
+# Real production bug: a Service/Order item named "DENGUE RAPID TEST" never
+# linked to the active template "DENGUE RAPID TEST (DRT)" because both call
+# sites used bare exact-match comparison - "DENGUE RAPID TEST" !=
+# "DENGUE RAPID TEST (DRT)" - silently falling back to generic Result Entry
+# (no structured parameters, no auto-priced template). A trailing
+# parenthetical abbreviation on the TEMPLATE name (the clinic's own
+# convention, e.g. "(DRT)", "(HAV)") is common enough that exact match alone
+# is not sufficient. `_resolve_template_id` below is the one shared
+# resolver both creation paths now call, so this only has to be right once.
+
+_TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _normalize_test_name(name: str) -> str:
+    return name.strip().lower()
+
+
+def _strip_one_trailing_parenthetical(normalized_name: str) -> str:
+    """Removes exactly one trailing parenthetical group from an already-
+    normalized name, e.g. "dengue rapid test (drt)" -> "dengue rapid test".
+    A name with no trailing parenthetical is returned unchanged. Only ever
+    strips one - "test (a) (b)" -> "test (a)" - matching "ONE trailing
+    parenthetical abbreviation" exactly, not an unbounded strip."""
+    return _TRAILING_PARENTHETICAL_RE.sub("", normalized_name).strip()
+
+
 class LaboratoryService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -292,6 +321,51 @@ class LaboratoryService:
                 detail=f"Cannot transition laboratory order from {lab_order.status.value} to {new_status.value}.",
             )
 
+    async def _resolve_template_id(self, clinic_id: UUID, name: str) -> UUID | None:
+        """Shared best-effort Laboratory-template resolver for a Service/Order
+        item name - used by both `create_from_order` (a doctor's free-text
+        Order item name) and `create_from_queue_ticket` (a walk-in queue
+        ticket's selected Service name), so this only has to be right once.
+        See the module-level comment above `_strip_one_trailing_parenthetical`
+        for the production bug this fixes.
+
+        Matching priority:
+          1. Exact, normalized (trimmed, case-insensitive) match against an
+             active template's `test_name`. Wins outright when unique.
+          2. Normalized match after stripping exactly one trailing
+             parenthetical abbreviation from BOTH sides (so it doesn't
+             matter which side happens to carry the "(ABBR)" - the real
+             production case has it on the template only, e.g. "DENGUE
+             RAPID TEST" vs. "DENGUE RAPID TEST (DRT)", but stripping both
+             sides is no more expensive and correctly handles the
+             already-equal case too).
+
+        Never guesses: only reached tier 2 if tier 1 found zero exact
+        matches, and each tier returns a template only when its own
+        candidate set has EXACTLY one match - two or more active templates
+        matching at the same tier means an ambiguous name, and this
+        returns `None` rather than picking arbitrarily. A missed auto-link
+        just falls back to generic Result Entry (no structured
+        parameters); a wrong auto-link would silently attach the wrong
+        parameter set/pricing to a result, which is the worse failure."""
+        templates = await self.repo.list_templates(clinic_id, active_only=True)
+        normalized_name = _normalize_test_name(name)
+
+        exact_matches = [t for t in templates if _normalize_test_name(t.test_name) == normalized_name]
+        if len(exact_matches) == 1:
+            return exact_matches[0].id
+        if len(exact_matches) > 1:
+            return None
+
+        stripped_name = _strip_one_trailing_parenthetical(normalized_name)
+        stripped_matches = [
+            t for t in templates
+            if _strip_one_trailing_parenthetical(_normalize_test_name(t.test_name)) == stripped_name
+        ]
+        if len(stripped_matches) == 1:
+            return stripped_matches[0].id
+        return None
+
     # --- Creation (attaches to an existing Phase 9 Laboratory-category Order) ---
 
     async def create_from_order(self, order: Order, *, clinic_id: UUID, actor_id: UUID | None) -> LaboratoryOrder:
@@ -318,16 +392,14 @@ class LaboratoryService:
             return existing
 
         test_type = order.items[0].item_name if order.items else "Laboratory Test"
-        template_id = None
-        # Best-effort match against an active template by exact name - lets
-        # the doctor's free-text item name auto-link to a configured
-        # template (pricing/turnaround/parameters) without requiring a
-        # separate "select template" step in the Phase 9 order-creation UI.
-        templates = await self.repo.list_templates(clinic_id, active_only=True)
-        for t in templates:
-            if t.test_name.strip().lower() == test_type.strip().lower():
-                template_id = t.id
-                break
+        # Best-effort match against an active template - lets the doctor's
+        # free-text item name auto-link to a configured template (pricing/
+        # turnaround/parameters) without requiring a separate "select
+        # template" step in the Phase 9 order-creation UI. See
+        # `_resolve_template_id`'s own docstring for the exact matching
+        # rules (exact match, then one-trailing-parenthetical-stripped
+        # match, never guessing between ambiguous candidates).
+        template_id = await self._resolve_template_id(clinic_id, test_type)
 
         return await self.repo.create_laboratory_order(
             clinic_id=clinic_id, order_id=order.id, branch_id=order.branch_id, visit_id=order.visit_id,
@@ -342,9 +414,9 @@ class LaboratoryService:
         the Laboratory department (no doctor, no consultation - so no
         Phase 9 Order for `create_from_order` above to attach to) creates a
         LaboratoryOrder for the queue's selected service, best-effort
-        linked to an active template by exact name match - the same
-        matching `create_from_order` already does for a doctor's free-text
-        order item. Called from `QueueService.create_queue` in the same
+        linked to an active template via `_resolve_template_id` - the same
+        shared resolver `create_from_order` already uses for a doctor's
+        free-text order item. Called from `QueueService.create_queue` in the same
         transaction as the queue ticket/visit themselves - not committed or
         sync-enqueued here, mirroring `create_from_order`'s own contract
         (see BUG-038: a lab order half-created outside its parent's
@@ -367,12 +439,10 @@ class LaboratoryService:
         `ORD-YYYYMMDD-NNNNNN` format/counter - one shared daily sequence
         across both origins, so numbers never collide), stored on
         `standalone_order_number` since there's no `Order` row to hold it."""
-        templates = await self.repo.list_templates(clinic_id, active_only=True)
-        template_id = None
-        for t in templates:
-            if t.test_name.strip().lower() == service_name.strip().lower():
-                template_id = t.id
-                break
+        # See `_resolve_template_id`'s own docstring for the exact matching
+        # rules - shared with `create_from_order` above so a Service name
+        # only has to auto-link correctly once.
+        template_id = await self._resolve_template_id(clinic_id, service_name)
 
         order_number = await OrderNumberGenerator(self.session).next_number(clinic_id)
 
