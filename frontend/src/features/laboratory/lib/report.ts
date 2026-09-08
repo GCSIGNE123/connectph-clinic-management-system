@@ -16,9 +16,9 @@ export interface LaboratoryReportRow {
   results: LaboratoryResult[];
   // The matching template parameter's configured Categorical choice list -
   // only ever populated for a templated order (an untemplated result has no
-  // parameter definition to read this from). Carried here purely so the
-  // report can decide compact-vs-full layout per row without re-fetching
-  // the template - see `isQualitativeCategoricalRow` below.
+  // parameter definition to read this from). Retained for callers that need
+  // template metadata; report layout is determined from the actual stored
+  // result values by `isQualitativeCategoricalRow` below.
   options?: string[] | null;
 }
 
@@ -49,8 +49,8 @@ export function buildReportRows(order: LaboratoryOrder): LaboratoryReportRow[] {
   // means no defined order/section to respect - list results exactly as
   // stored, one row each, no section grouping invented. `options` is
   // unknown here (no parameter definition available), so these rows never
-  // qualify for the compact categorical layout - they keep the existing
-  // full rendering, same as before this change.
+  // qualify for the compact categorical layout unless the stored result
+  // values themselves are a complete Positive/Negative set.
   return order.results.map((result) => ({
     parameterName: result.parameterName,
     section: null,
@@ -59,24 +59,27 @@ export function buildReportRows(order: LaboratoryOrder): LaboratoryReportRow[] {
   }));
 }
 
-/** Qualitative Positive/Negative (or any configured-options) Categorical
- * report layout signal - deliberately the EXACT SAME gate
- * `ResultEntryDialog`'s simplified data-entry UI already uses
- * (`resultType === "Categorical" && options.length > 0`), not a new rule
- * and not a test-name check. A Categorical parameter with no configured
- * options (e.g. Urinalysis's Color/Protein, still awaiting Administrator
- * configuration) does NOT qualify - it keeps the existing full-grid
- * report layout, since there is nothing indicating it's a simple
- * qualitative result until an Administrator configures it, matching the
- * result-entry side's own "never invent a constraint that wasn't
- * configured" rule. Every result on the row must agree (a `requiresSite`
- * row's multiple per-site results all share the same parameter/options). */
+/** Compact qualitative report layout for tests whose actual stored results
+ * are all categorical Positive/Negative values. This deliberately uses the
+ * RESULT VALUE, not merely `options` metadata, so other Categorical tests
+ * such as Blood Typing (A/B/AB/O) do not get mislabeled as a
+ * Positive/Negative report. It also fixes legacy/older templates that have
+ * Categorical results but no `options` array attached to the returned
+ * parameter metadata - the report format is based on what is actually
+ * printed (Positive/Negative), not on whether the configuration UI has a
+ * choice list.
+ *
+ * Every result in the row must be Categorical and resolve to exactly one of
+ * Positive or Negative (case-insensitive, surrounding whitespace ignored).
+ * A mixed row, a blank value, or any other categorical value remains on the
+ * normal five-column report layout. */
 export function isQualitativeCategoricalRow(row: LaboratoryReportRow): boolean {
-  return (
-    Boolean(row.options && row.options.length > 0) &&
-    row.results.length > 0 &&
-    row.results.every((r) => r.resultType === "Categorical")
-  );
+  if (row.results.length === 0) return false;
+  return row.results.every((result) => {
+    if (result.resultType !== "Categorical") return false;
+    const value = reportResultValue(result)?.trim().toLowerCase();
+    return value === "positive" || value === "negative";
+  });
 }
 
 /** Contiguous grouping by `section` - identical convention to
@@ -173,12 +176,11 @@ export function buildCategoryHeading(
  * rather than silently dropping it. */
 const SEX_LETTER: Record<string, string> = { Male: "M", Female: "F", Other: "O" };
 
-/** Client requirement: the report header's "Age / Sex" row, e.g.
- * "22 yrs / M". `age` is the backend's already-computed
+/** Client requirement: the report header's "Age / Sex" row, e.g. "22 yrs / M".
+ * `age` is the backend's already-computed
  * `LaboratoryOrderRead.patient_age` (see that field's own doc comment for
  * the "age as of today, from the patient's existing birth_date" convention
- * it follows - the same one `MedicalCertificateDetail.patient_age` already
- * established) - this function does no date math of its own, purely
+ * it follows - this function does no date math of its own, purely
  * formatting. `sex` is `patient_sex`, mapped through `SEX_LETTER` above.
  *
  * Missing-data handling (never fabricates either half): a present value
