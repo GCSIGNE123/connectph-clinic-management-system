@@ -17,6 +17,7 @@ from app.services.laboratory_interpretation import interpret_result
 NUMERIC = LaboratoryResultType.NUMERIC
 TEXT = LaboratoryResultType.TEXT
 CATEGORICAL = LaboratoryResultType.CATEGORICAL
+TITER = LaboratoryResultType.TITER
 LOW = LaboratoryInterpretation.LOW
 NORMAL = LaboratoryInterpretation.NORMAL
 HIGH = LaboratoryInterpretation.HIGH
@@ -26,6 +27,13 @@ ABNORMAL = LaboratoryInterpretation.ABNORMAL
 def _numeric(value, low=Decimal("12.0"), high=Decimal("16.0")):
     return interpret_result(
         result_type=NUMERIC, numeric_value=value, text_value=None,
+        range_low=low, range_high=high, expected_normal_text=None,
+    )
+
+
+def _titer(value, low=None, high=Decimal("200")):
+    return interpret_result(
+        result_type=TITER, numeric_value=None, text_value=value,
         range_low=low, range_high=high, expected_normal_text=None,
     )
 
@@ -129,6 +137,59 @@ class TestCategoricalInterpretation:
 
     def test_blank_categorical_value_returns_none(self):
         assert _categorical("   ") is None
+
+
+class TestTiterInterpretation:
+    """Titer results are free text in the clinic's own "1:N" ratio
+    notation (e.g. "1:400") - never a parseable plain number like Numeric.
+    Only the denominator (N) is compared against a configured threshold.
+    Unlike Numeric, EITHER bound alone is enough to interpret (real titer
+    reporting is almost always one-sided, e.g. ASO "< 1:200" with no
+    clinically meaningful floor)."""
+
+    def test_denominator_above_high_threshold_is_high(self):
+        assert _titer("1:400", high=Decimal("200")) == HIGH
+
+    def test_denominator_at_exact_high_threshold_is_normal(self):
+        assert _titer("1:200", high=Decimal("200")) == NORMAL
+
+    def test_denominator_below_high_threshold_is_normal(self):
+        assert _titer("1:100", high=Decimal("200")) == NORMAL
+
+    def test_denominator_below_low_threshold_is_low(self):
+        assert _titer("1:5", low=Decimal("10"), high=None) == LOW
+
+    def test_denominator_at_exact_low_threshold_is_normal(self):
+        assert _titer("1:10", low=Decimal("10"), high=None) == NORMAL
+
+    def test_only_high_threshold_configured_is_sufficient(self):
+        # Unlike Numeric, a single configured bound is enough - most real
+        # titer templates only ever set a ceiling.
+        assert _titer("1:400", low=None, high=Decimal("200")) == HIGH
+        assert _titer("1:100", low=None, high=Decimal("200")) == NORMAL
+
+    def test_only_low_threshold_configured_is_sufficient(self):
+        assert _titer("1:5", low=Decimal("10"), high=None) == LOW
+        assert _titer("1:50", low=Decimal("10"), high=None) == NORMAL
+
+    def test_missing_both_bounds_returns_none(self):
+        assert _titer("1:400", low=None, high=None) is None
+
+    def test_missing_text_value_returns_none_even_with_valid_range(self):
+        assert _titer(None) is None
+
+    def test_blank_text_value_returns_none(self):
+        assert _titer("   ") is None
+
+    def test_unparseable_value_returns_none_never_guesses(self):
+        assert _titer("Reactive") is None
+        assert _titer("Negative") is None
+        assert _titer("1/400") is None
+        assert _titer("400") is None
+
+    def test_whitespace_around_colon_is_tolerated(self):
+        assert _titer("1 : 400", high=Decimal("200")) == HIGH
+        assert _titer("1:  400", high=Decimal("200")) == HIGH
 
 
 class TestUnknownOrUnsupportedInput:

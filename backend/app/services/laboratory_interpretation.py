@@ -1,8 +1,10 @@
 """Pure, side-effect-free laboratory result interpretation (Feature 3).
 
 Computes BELOW/NORMAL/ABOVE (`LaboratoryInterpretation.LOW`/`NORMAL`/`HIGH`)
-for numeric results against a structured range, or NORMAL/ABNORMAL for
-qualitative (Text) results against an expected-normal value.
+for numeric results against a structured range, for Titer results (free
+text in "1:N" ratio notation) against a configured denominator threshold,
+or NORMAL/ABNORMAL for qualitative (Text) results against an
+expected-normal value.
 
 Never guesses: any missing input (either range bound absent, no
 expected-normal value configured, or no result value entered at all)
@@ -40,9 +42,28 @@ only partially configured (one of the two is None) or the result value is
 missing, matching this function's existing "never guess" contract.
 """
 
-from decimal import Decimal
+import re
+from decimal import Decimal, InvalidOperation
 
 from app.models.laboratory_result import LaboratoryInterpretation, LaboratoryResultType
+
+# Titer results are stored as free text in the clinic's own "1:N" ratio
+# notation (e.g. "1:400") - never as a parseable plain number, unlike
+# Numeric. Only the denominator (N) carries clinical meaning for
+# comparison against a configured threshold; a value that isn't exactly
+# "1:<number>" (whitespace around the colon tolerated) is never guessed
+# at - same "never guess" contract as every other branch below.
+_TITER_PATTERN = re.compile(r"^1\s*:\s*(\d+(?:\.\d+)?)$")
+
+
+def _parse_titer_denominator(text_value: str) -> Decimal | None:
+    match = _TITER_PATTERN.match(text_value.strip())
+    if not match:
+        return None
+    try:
+        return Decimal(match.group(1))
+    except InvalidOperation:  # pragma: no cover - regex already guarantees a valid decimal string
+        return None
 
 
 def interpret_result(
@@ -97,5 +118,27 @@ def interpret_result(
             if categorical_value.strip().lower() == expected_normal_text.strip().lower()
             else LaboratoryInterpretation.ABNORMAL
         )
+
+    if result_type == LaboratoryResultType.TITER:
+        # Titer thresholds are conventionally one-sided in real reporting
+        # (e.g. ASO "< 1:200", with no clinically meaningful floor - a
+        # titer can't be negative) - unlike Numeric above, EITHER bound
+        # alone is enough to interpret; only truly configuring neither
+        # returns None. A titer denominator can't itself be "below" a
+        # non-existent floor, so range_low here means "must be at least
+        # this concentrated" (rare in practice, but supported for
+        # symmetry) - most templates will only ever set range_high.
+        if text_value is None or not text_value.strip():
+            return None
+        if range_low is None and range_high is None:
+            return None
+        denominator = _parse_titer_denominator(text_value)
+        if denominator is None:
+            return None
+        if range_high is not None and denominator > range_high:
+            return LaboratoryInterpretation.HIGH
+        if range_low is not None and denominator < range_low:
+            return LaboratoryInterpretation.LOW
+        return LaboratoryInterpretation.NORMAL
 
     return None
