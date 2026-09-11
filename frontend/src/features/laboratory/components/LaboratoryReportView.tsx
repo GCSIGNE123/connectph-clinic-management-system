@@ -56,10 +56,22 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   // template actually seeded/configured in this codebase a test is
   // entirely one kind or the other, so in practice exactly one of the two
   // tables below renders.
+  // Fix (section-integrity defect found by the Phase 10 visual audit): group
+  // ALL rows - standard AND qualitative-matrix alike - by section BEFORE
+  // splitting each group's own rows into its standard table vs its matrix,
+  // rather than pre-filtering categorical rows out into one report-wide
+  // matrix rendered after every section. The old pre-filter approach lost a
+  // section's own heading entirely whenever every one of that section's rows
+  // happened to be Positive/Negative-valued (the section's row list went to
+  // zero after the filter), and visually severed a Positive/Negative
+  // parameter from the rest of its own section (it always re-appeared in one
+  // shared matrix at the very end of the report, regardless of which section
+  // it belonged to) - see LaboratoryReportView.test.tsx's "#2/#14" and "7"
+  // section-heading tests, and the audit's "Mixed Type Stress Panel"
+  // screenshot. Grouping first keeps every section's heading exactly where
+  // its rows say it belongs, and its own matrix rows immediately beneath it.
   const allRows = buildReportRows(order);
-  const categoricalRows = allRows.filter(isQualitativeCategoricalRow);
-  const standardRows = allRows.filter((row) => !isQualitativeCategoricalRow(row));
-  const groups = groupReportRowsBySection(standardRows);
+  const groups = groupReportRowsBySection(allRows);
   // Round 5: clinic contact line - bullet-joins only the fields that are
   // actually configured (never a fake placeholder, never a dangling "•"
   // for a missing field), sourced entirely from the existing clinic
@@ -78,7 +90,16 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   // to render (it already prints the parent test name as its own first
   // cell/row label) - a standard report has no equivalent adjacent
   // duplicate to guard against.
-  const categoryHeading = buildCategoryHeading(order.template?.testCategory, categoricalRows.length > 0 ? order.testType : null);
+  // The adjacent-label de-dup guard only matters when a matrix immediately
+  // follows the overall heading with nothing in between - i.e. the report's
+  // very first group has no section AND every one of its rows is a matrix
+  // row. A sectioned report never has this adjacency (a section heading
+  // always sits between the overall heading and any matrix), so it never
+  // needs the guard, regardless of how many matrix rows exist elsewhere.
+  const firstGroup = groups[0];
+  const firstGroupIsPureMatrix =
+    !!firstGroup && firstGroup.section === null && firstGroup.rows.length > 0 && firstGroup.rows.every(isQualitativeCategoricalRow);
+  const categoryHeading = buildCategoryHeading(order.template?.testCategory, firstGroupIsPureMatrix ? order.testType : null);
   // Client requirement: report-header "Age / Sex" row (e.g. "22 yrs / M"),
   // above Status in the right column - see `buildAgeSexLine`'s own doc
   // comment for the missing-data/formatting rules. Sourced entirely from
@@ -181,70 +202,74 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
       ) : null}
 
       <div className="mt-2 space-y-2.5">
-        {groups.map((group, groupIndex) => (
-          <div key={groupIndex}>
-            {group.section ? (
-              <h3 className="section-heading mb-0.5 mt-1.5 border-b border-slate-400 pb-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-800 first:mt-0 sm:text-[11px]">
-                {group.section}
-              </h3>
-            ) : null}
-            <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
-              <colgroup>
-                <col style={{ width: COLUMN_WIDTHS.test }} />
-                <col style={{ width: COLUMN_WIDTHS.result }} />
-                <col style={{ width: COLUMN_WIDTHS.unit }} />
-                <col style={{ width: COLUMN_WIDTHS.normalValues }} />
-                <col style={{ width: COLUMN_WIDTHS.flag }} />
-              </colgroup>
-              <thead>
-                {/* `whitespace-normal break-words` on every header cell:
-                    without it, a single unbreakable word like "NORMAL
-                    VALUES" simply overflows its `table-layout: fixed`
-                    column (browsers don't shrink the table to contain it,
-                    they let the text spill past the cell) - that overflow
-                    was the actual clipping bug, not the column width
-                    alone. Wrapping is the real fix. */}
-                <tr className="report-table-head bg-slate-800 text-white">
-                  <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
-                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
-                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
-                  <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Normal Values</th>
-                  <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Flag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.rows.map((row) =>
-                  row.results.map((result, resultIndex) => (
-                    <tr key={`${row.parameterName}-${resultIndex}`} className="report-row border-b border-border/60 last:border-0">
-                      <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">
-                        {row.parameterName}
-                        {result.site ? <span className="text-muted-foreground"> ({result.site})</span> : null}
-                      </td>
-                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
-                        {reportResultValue(result) ?? <span className="text-muted-foreground">-</span>}
-                      </td>
-                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
-                        {result.units ?? ""}
-                      </td>
-                      <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
-                        {result.normalRange ?? ""}
-                      </td>
-                      <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
-                        <FlagText value={result.interpretation} resultType={result.resultType} />
-                      </td>
+        {groups.map((group, groupIndex) => {
+          const standardRows = group.rows.filter((row) => !isQualitativeCategoricalRow(row));
+          const categoricalRows = group.rows.filter(isQualitativeCategoricalRow);
+          return (
+            <div key={groupIndex}>
+              {group.section ? (
+                <h3 className="section-heading mb-0.5 mt-1.5 border-b border-slate-400 pb-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-800 first:mt-0 sm:text-[11px]">
+                  {group.section}
+                </h3>
+              ) : null}
+              {standardRows.length > 0 ? (
+                <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: COLUMN_WIDTHS.test }} />
+                    <col style={{ width: COLUMN_WIDTHS.result }} />
+                    <col style={{ width: COLUMN_WIDTHS.unit }} />
+                    <col style={{ width: COLUMN_WIDTHS.normalValues }} />
+                    <col style={{ width: COLUMN_WIDTHS.flag }} />
+                  </colgroup>
+                  <thead>
+                    {/* `whitespace-normal break-words` on every header cell:
+                        without it, a single unbreakable word like "NORMAL
+                        VALUES" simply overflows its `table-layout: fixed`
+                        column (browsers don't shrink the table to contain it,
+                        they let the text spill past the cell) - that overflow
+                        was the actual clipping bug, not the column width
+                        alone. Wrapping is the real fix. */}
+                    <tr className="report-table-head bg-slate-800 text-white">
+                      <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
+                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
+                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Normal Values</th>
+                      <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Flag</th>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        ))}
-        {categoricalRows.length > 0 ? (
-          <QualitativeResultMatrix testLabel={order.testType} rows={categoricalRows} />
-        ) : null}
-        {groups.length === 0 && categoricalRows.length === 0 ? (
-          <p className="py-2 text-muted-foreground">No results entered yet.</p>
-        ) : null}
+                  </thead>
+                  <tbody>
+                    {standardRows.map((row) =>
+                      row.results.map((result, resultIndex) => (
+                        <tr key={`${row.parameterName}-${resultIndex}`} className="report-row border-b border-border/60 last:border-0">
+                          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">
+                            {row.parameterName}
+                            {result.site ? <span className="text-muted-foreground"> ({result.site})</span> : null}
+                          </td>
+                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
+                            {reportResultValue(result) ?? <span className="text-muted-foreground">-</span>}
+                          </td>
+                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
+                            {result.units ?? ""}
+                          </td>
+                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
+                            {result.normalRange ?? ""}
+                          </td>
+                          <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
+                            <FlagText value={result.interpretation} resultType={result.resultType} />
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              ) : null}
+              {categoricalRows.length > 0 ? (
+                <QualitativeResultMatrix testLabel={order.testType} rows={categoricalRows} />
+              ) : null}
+            </div>
+          );
+        })}
+        {allRows.length === 0 ? <p className="py-2 text-muted-foreground">No results entered yet.</p> : null}
       </div>
 
       <div className="report-notes mt-3 rounded-sm border border-border px-2 py-1.5 text-[9px] text-muted-foreground sm:text-[10px]">
@@ -258,7 +283,7 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
               separate "OTHERS" block) and only for a report that actually
               contains a qualitative Positive/Negative matrix - a purely
               quantitative report keeps exactly its prior two bullets. */}
-          {categoricalRows.length > 0 ? <li>Please refer to your doctor for interpretation of the results.</li> : null}
+          {allRows.some(isQualitativeCategoricalRow) ? <li>Please refer to your doctor for interpretation of the results.</li> : null}
         </ul>
       </div>
 
@@ -310,29 +335,46 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
  * for a bare Positive/Negative result, matching the clinic's own
  * paper-report sample. The underlying `interpretation` value is
  * untouched in the data (still computed and stored exactly as before) -
- * this component simply never reads it. A `requiresSite` parameter
- * (multiple results sharing one parameter name) is not a real-world
- * Positive/Negative case in this codebase's own templates, so only the
- * first result is shown per column; documented here rather than silently
- * dropped. */
+ * this component simply never reads it.
+ *
+ * Fix (site-drop defect found by the Phase 10 visual audit): a
+ * `requiresSite` parameter (e.g. KOH Mount) CAN carry multiple results
+ * under one `parameterName`, one per collection site - the old
+ * implementation silently kept only `row.results[0]`, so a second/third
+ * site's result (and every site label) never printed at all, with no
+ * visual indication a site was even collected. Each result now becomes
+ * its own column, labeled with its site the same way the standard
+ * five-column table already does (`parameterName` + a trailing
+ * `(site)` span) - a single-site row (`results.length === 1`, the
+ * overwhelming majority of real templates) renders byte-for-byte as
+ * before, since its "site" span is simply absent when `site` is null. */
 function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null | undefined; rows: LaboratoryReportRow[] }) {
+  const columns = rows.flatMap((row) =>
+    row.results.map((result, resultIndex) => ({
+      key: `${row.parameterName}-${resultIndex}`,
+      parameterName: row.parameterName,
+      site: result.site ?? null,
+      result,
+    }))
+  );
   const testColumnWidth = 30;
-  const resultColumnWidth = rows.length > 0 ? (100 - testColumnWidth) / rows.length : 0;
+  const resultColumnWidth = columns.length > 0 ? (100 - testColumnWidth) / columns.length : 0;
 
   return (
     <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
       <colgroup>
         <col style={{ width: `${testColumnWidth}%` }} />
-        {rows.map((row) => (
-          <col key={row.parameterName} style={{ width: `${resultColumnWidth}%` }} />
+        {columns.map((column) => (
+          <col key={column.key} style={{ width: `${resultColumnWidth}%` }} />
         ))}
       </colgroup>
       <thead>
         <tr className="report-table-head bg-slate-800 text-white">
           <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
-          {rows.map((row) => (
-            <th key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
-              {row.parameterName}
+          {columns.map((column) => (
+            <th key={column.key} className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
+              {column.parameterName}
+              {column.site ? <span> ({column.site})</span> : null}
             </th>
           ))}
         </tr>
@@ -340,9 +382,9 @@ function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null
       <tbody>
         <tr className="report-row border-b border-border/60 last:border-0">
           <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? "-"}</td>
-          {rows.map((row) => (
-            <td key={row.parameterName} className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
-              {reportResultValue(row.results[0]) ?? <span className="text-muted-foreground">-</span>}
+          {columns.map((column) => (
+            <td key={column.key} className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
+              {reportResultValue(column.result) ?? <span className="text-muted-foreground">-</span>}
             </td>
           ))}
         </tr>

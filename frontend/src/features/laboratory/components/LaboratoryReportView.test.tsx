@@ -321,12 +321,16 @@ describe("LaboratoryReportView", () => {
               turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
               parameters: [
                 param({ parameterName: "Color", resultType: "Text", section: "Physical Examination" }),
+                // A non-Positive/Negative Categorical value - Chemical
+                // Examination's own five-column table, not the matrix (see
+                // the "sectioned template renders section headers" test
+                // just below for the Positive/Negative-in-a-section case).
                 param({ parameterName: "Protein", resultType: "Categorical", section: "Chemical Examination" }),
               ],
             },
             results: [
               result({ parameterName: "Color", resultType: "Text", textValue: "Straw" }),
-              result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Negative" } }),
+              result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Trace" } }),
             ],
           })}
         />
@@ -684,17 +688,31 @@ describe("LaboratoryReportView", () => {
     });
   });
 
-  // --- HBsAg PDF Flag fix: a Categorical Positive/Negative result's
-  // `Abnormal`/`Normal` interpretation now maps to a distinct "A" flag
-  // (Categorical only) - separate from L/H (numeric direction, unchanged)
-  // and separate from Text's own still-blank `Abnormal` convention above.
+  // --- HBsAg PDF Flag fix: a Categorical result's `Abnormal`/`Normal`
+  // interpretation maps to a distinct "A" flag (Categorical only) -
+  // separate from L/H (numeric direction, unchanged) and separate from
+  // Text's own still-blank `Abnormal` convention above.
+  //
+  // Updated by the Phase 10 visual audit: a Categorical result whose VALUE
+  // is Positive/Negative now always renders through the qualitative matrix
+  // (`isQualitativeCategoricalRow` in report.ts, added by the later
+  // "Fix positive-negative lab report layout" change - deliberately
+  // value-based, not options-gated, so it also covers every shipped
+  // default template's Categorical parameters, which ship with no
+  // `options` configured - see laboratory_template.py's
+  // DEFAULT_LABORATORY_TEMPLATES docstring), and the matrix deliberately
+  // has no Flag column at all (see QualitativeResultMatrix's own doc
+  // comment) - so the 'A' flag can only ever reach the page for a
+  // Categorical result whose value is something OTHER than exactly
+  // "Positive"/"Negative" (e.g. an ABO blood type). These tests now use
+  // such a value to exercise the code path the flag actually reaches.
   describe("Laboratory Report print redesign - Categorical Positive/Negative Flag ('A')", () => {
-    it("1: a Categorical result with Abnormal interpretation (e.g. HBsAg Positive) renders 'A'", () => {
+    it("1: a Categorical result with Abnormal interpretation (e.g. an unexpected ABO group) renders 'A'", () => {
       render(
         <LaboratoryReportView
           order={order({
             template: null,
-            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })],
+            results: [result({ parameterName: "ABO Group", resultType: "Categorical", structuredValue: { value: "AB" }, interpretation: "Abnormal" })],
           })}
         />
       );
@@ -704,18 +722,18 @@ describe("LaboratoryReportView", () => {
     it("2: the 'A' flag carries the red/destructive color class, same urgency tier as 'L'", () => {
       render(
         <LaboratoryReportView
-          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })] })}
+          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "AB" }, interpretation: "Abnormal" })] })}
         />
       );
       expect(screen.getByText("A").className).toContain("text-destructive");
     });
 
-    it("3: a Categorical result with Normal interpretation (e.g. HBsAg Negative) renders blank, not 'A'", () => {
+    it("3: a Categorical result with Normal interpretation renders blank, not 'A'", () => {
       render(
         <LaboratoryReportView
           order={order({
             template: null,
-            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Negative" }, interpretation: "Normal" })],
+            results: [result({ parameterName: "ABO Group", resultType: "Categorical", structuredValue: { value: "O" }, interpretation: "Normal" })],
           })}
         />
       );
@@ -727,11 +745,25 @@ describe("LaboratoryReportView", () => {
     it("4: the FLAG column never prints the word 'Abnormal' for a Categorical result - only the single character 'A'", () => {
       render(
         <LaboratoryReportView
-          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })] })}
+          order={order({ results: [result({ resultType: "Categorical", structuredValue: { value: "AB" }, interpretation: "Abnormal" })] })}
         />
       );
       expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
       expect(screen.getByText("A")).toBeInTheDocument();
+    });
+
+    it("7: a Categorical Positive/Negative result's Abnormal interpretation stays on the underlying data but never prints 'A' - the matrix has no Flag column, matching the clinic's approved paper-report sample", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            template: null,
+            results: [result({ parameterName: "HBsAg", resultType: "Categorical", structuredValue: { value: "Positive" }, interpretation: "Abnormal" })],
+          })}
+        />
+      );
+      expect(screen.queryByText("A")).not.toBeInTheDocument();
+      expect(screen.queryByText("Abnormal")).not.toBeInTheDocument();
+      expect(screen.getByText("Positive")).toBeInTheDocument();
     });
 
     it("5: Numeric Low/High/Normal flags are unaffected by the Categorical 'A' addition", () => {
@@ -1011,7 +1043,14 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("H")).toBeInTheDocument();
     });
 
-    it("F: an unconfigured Categorical result (no options) keeps the existing full-grid layout, never the matrix", () => {
+    it("F: an unconfigured Categorical result (no options) with a Positive/Negative value STILL uses the matrix - most real default templates ship with no options configured", () => {
+      // See laboratory_template.py's DEFAULT_LABORATORY_TEMPLATES docstring:
+      // every shipped default Categorical parameter (Dengue's NS1/IgM/IgG,
+      // HBsAg, VDRL, ...) intentionally has `options: None` until an
+      // Administrator configures a real choice list - the matrix format
+      // must still trigger for these (proven live against the real app by
+      // the Phase 10 visual audit), so this is deliberately value-based,
+      // not options-gated.
       render(
         <LaboratoryReportView
           order={order({
@@ -1022,6 +1061,26 @@ describe("LaboratoryReportView", () => {
               parameters: [param({ parameterName: "Protein", resultType: "Categorical" })],
             },
             results: [result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Negative" } })],
+          })}
+        />
+      );
+      const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+      expect(headers).toEqual(["Test", "Protein"]);
+      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.getByText("Negative")).toBeInTheDocument();
+    });
+
+    it("F2: an unconfigured Categorical result with a non-Positive/Negative value keeps the existing full-grid layout, never the matrix", () => {
+      render(
+        <LaboratoryReportView
+          order={order({
+            testType: "Urinalysis",
+            template: {
+              id: "t-ua3", testName: "Urinalysis", testCategory: null, specimenType: null, defaultPrice: 0,
+              turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
+              parameters: [param({ parameterName: "Protein", resultType: "Categorical" })],
+            },
+            results: [result({ parameterName: "Protein", resultType: "Categorical", structuredValue: { value: "Trace" } })],
           })}
         />
       );
