@@ -151,6 +151,15 @@ export function reportResultValue(result: LaboratoryResult): string | null {
  * rather than printing the same text twice in a row. Callers building a
  * standard (non-matrix) report simply omit this argument - there is no
  * equivalent adjacent-duplicate risk there. */
+/** Medtech feedback (real A4 print review): these categories are already
+ * the complete, standard term the clinic itself uses - unlike every other
+ * category here (Hematology -> "HEMATOLOGY TEST", Blood Chemistry ->
+ * "BLOOD CHEMISTRY TEST", ...), which the medtech has NOT asked to change,
+ * the clinic doesn't write "Fecalysis Test" or "Urinalysis Test". An
+ * explicit, named exception list (not a name/pattern guess) so adding the
+ * next one stays a one-line, evidence-backed change. */
+const BARE_CATEGORY_HEADINGS = new Set(["FECALYSIS", "URINALYSIS"]);
+
 export function buildCategoryHeading(
   testCategory: string | null | undefined,
   adjacentLabel?: string | null
@@ -159,12 +168,157 @@ export function buildCategoryHeading(
   if (!trimmedCategory) return null;
 
   const upperCategory = trimmedCategory.toUpperCase();
-  const heading = upperCategory.endsWith("TEST") ? upperCategory : `${upperCategory} TEST`;
+  const heading = upperCategory.endsWith("TEST") || BARE_CATEGORY_HEADINGS.has(upperCategory)
+    ? upperCategory
+    : `${upperCategory} TEST`;
 
   const trimmedAdjacent = (adjacentLabel ?? "").trim().toUpperCase();
   if (trimmedAdjacent && heading === trimmedAdjacent) return null;
 
   return heading;
+}
+
+/** Per-clinic manual-report reference (2026-09): the clinic's own existing
+ * paper reports do NOT use one universal table for every test - Hematology
+ * uses a 5-column PARAMETER/RESULT/UNIT/REFERENCE/REMARKS table, while
+ * Blood Chemistry/Thyroid-PSA/Clotting-Bleeding-Time use a compact 3-column
+ * TEST/RESULT/REFERENCE table with the unit folded into the REFERENCE text
+ * instead of its own column, and a test with no configured unit/range at
+ * all (Stool Examination, Gram Stain) uses a bare TEST/RESULT table with no
+ * reference column at all. This is decided PER SECTION from the section's
+ * OWN actual result data - never a test-name/category string match beyond
+ * the one explicit "Hematology" signal below - so a future template needs
+ * zero code changes to render correctly, exactly like the rest of this
+ * module's existing convention.
+ *
+ * "detailed" requires BOTH the template's own `testCategory` containing
+ * "Hematology" AND at least one Numeric result in this section - the
+ * category alone is not enough (Clotting/Bleeding Time is also categorized
+ * "Hematology" but its results are Text, and the clinic's own manual
+ * report for it uses the compact 3-column layout, not the 5-column one -
+ * see the "compact" fallback below). A Numeric result with no configured
+ * unit still renders in "detailed" mode with a blank Unit cell (never
+ * fabricating one) - unit presence gates only that one cell's content, not
+ * which layout the whole section gets.
+ *
+ * "compact" is any section with at least one result carrying a
+ * `normalRange` or `units` value to show in a REFERENCE column.
+ *
+ * "plain" is a section where no result has anything to put in a REFERENCE
+ * column at all - matches the clinic's own Stool Examination/Gram Stain
+ * paper reports, which have no reference/unit column whatsoever. */
+export type SectionLayoutMode = "detailed" | "compact" | "plain";
+
+export function resolveSectionLayoutMode(testCategory: string | null | undefined, rows: LaboratoryReportRow[]): SectionLayoutMode {
+  const isHematologyCategory = /hematology/i.test(testCategory ?? "");
+  const hasNumericResult = rows.some((row) => row.results.some((r) => r.resultType === "Numeric"));
+  if (isHematologyCategory && hasNumericResult) return "detailed";
+
+  const isChemistryCategory = /chemistry/i.test(testCategory ?? "");
+  // A bare `units` value with no `normalRange` (e.g. Stool Exam's "PUS
+  // CELLS"/"RBC", configured with unit "/HPF" but no established range)
+  // only counts as reference evidence for Chemistry - the clinic's own
+  // Blood Chemistry paper reports print a bare unit like "mg/dL" even
+  // without a cutoff (see FBS/RBS's Glucose Random), but its Parasitology
+  // (Stool Exam) reports show no Reference column at all despite the same
+  // bare-unit configuration. Every other category needs a real range.
+  const hasRealRange = rows.some((row) => row.results.some((r) => !!r.normalRange?.trim()));
+  const hasBareUnit = rows.some((row) => row.results.some((r) => !!r.units?.trim()));
+  const hasAnyReference = hasRealRange || (isChemistryCategory && hasBareUnit);
+
+  // A genuine interpretation value (Low/High/Abnormal) must never silently
+  // disappear from the report just because its section isn't Hematology -
+  // e.g. an untemplated/ad-hoc Categorical result flagged Abnormal, or any
+  // future non-Chemistry category this project doesn't have a manual
+  // sample for yet. The one deliberate exception is Chemistry: the
+  // clinic's own paper Blood Chemistry/Thyroid-PSA reports never print a
+  // flag column at all (see this module's Blood-Chemistry reference note)
+  // - the interpretation stays computed and stored either way, it's simply
+  // never shown there, matching the clinic's own convention exactly.
+  const hasInterpretation = rows.some((row) => row.results.some((r) => !!r.interpretation));
+  if (hasInterpretation && !isChemistryCategory) return "detailed";
+
+  return hasAnyReference ? "compact" : "plain";
+}
+
+/** Medtech feedback (Trichomonas Vaginalis Mount / Gram Stain / Sputum
+ * Exam, real A4 print review): the clinic's own "Miscellaneous Report"
+ * family (KOH Mount, Gram Stain, Trichomonas, Sputum Exam, Fecal Occult
+ * Blood, Urinalysis, beta-HCG - everything actually categorized "Clinical
+ * Microscopy" in this project, confirmed against the live template data)
+ * shows a SPECIMEN column, unlike the genuinely different SEROLOGY/
+ * IMMUNOLOGY family (Dengue, HBsAg, VDRL, ...), which the clinic's own
+ * matrix-format samples never show one for. One shared check (never a
+ * test-name match) so both the single-row "plain" table and the single-row
+ * qualitative matrix apply the exact same rule. */
+export function isClinicalMicroscopyCategory(testCategory: string | null | undefined): boolean {
+  return /clinical microscopy/i.test(testCategory ?? "");
+}
+
+/** REFERENCE-column text for "compact" mode: the persisted `normalRange`
+ * text, with `units` appended only when `normalRange` doesn't already
+ * contain it (most of this project's Blood Chemistry-style templates
+ * already bake the unit into their `normalRange` string, e.g.
+ * "70-105 mg/dL" - appending again would duplicate it; a template that
+ * stores a bare numeric range with the unit only in its separate `units`
+ * field, e.g. Urinalysis's "0 - 5" + "/HPF", gets the unit appended so it
+ * is never silently dropped). Falls back to whichever of the two is
+ * actually present, and to "" (never invented) when neither is. */
+export function compactReferenceValue(result: LaboratoryResult): string {
+  const range = result.normalRange?.trim() ?? "";
+  const unit = result.units?.trim() ?? "";
+  if (range && unit) {
+    return range.toLowerCase().includes(unit.toLowerCase()) ? range : `${range} ${unit}`;
+  }
+  return range || unit;
+}
+
+const MALE_FEMALE_RANGE_RE = /^(male\s*:?\s*.+?)\s*\/\s*(female\s*:?\s*.+)$/i;
+
+/** Medtech feedback (Triglycerides, real A4 print review): a Male/Female
+ * range (e.g. "Male: 60-165 / Female: 40-140 mg/dL") must never print as
+ * one run-on line ("dli lng e one liner arun dli libog kitaon" - don't
+ * make it one line, it's confusing to read) - each sex gets its own line.
+ * Applies to every Blood-Chemistry-style test with this pattern (medtech:
+ * "Apply to all lab tests nga naay Male and Female reference"), detected
+ * from the stored text itself, never a test-name list. The unit is stored
+ * only once, trailing the Female segment (e.g. "...40-140 mg/dL") - it's
+ * stripped off first and then repeated on BOTH lines, matching the
+ * medtech's own handwritten example ("Male : 60-165 mg/dL" / "Female:
+ * 40-140 mg/dL"), rather than leaving the Male line's unit only implicit.
+ * Falls back to the existing single-line value for every other (non-M/F)
+ * range, so this is purely additive for the compact-mode reference cell. */
+export function compactReferenceLines(result: LaboratoryResult): string[] {
+  const range = result.normalRange?.trim() ?? "";
+  const unit = result.units?.trim() ?? "";
+  if (!range) return unit ? [unit] : [];
+
+  const rangeWithoutTrailingUnit =
+    unit && range.toLowerCase().endsWith(unit.toLowerCase()) ? range.slice(0, range.length - unit.length).trim() : range;
+
+  const match = rangeWithoutTrailingUnit.match(MALE_FEMALE_RANGE_RE);
+  if (match) {
+    const [, male, female] = match;
+    return unit ? [`${male.trim()} ${unit}`, `${female.trim()} ${unit}`] : [male.trim(), female.trim()];
+  }
+
+  return [compactReferenceValue(result)];
+}
+
+/** Working assumption (Stool Exam, 2026-09): a "plain" section (see
+ * `resolveSectionLayoutMode`) has no Reference column at all, but a result
+ * with a configured `units` value (e.g. PUS CELLS/RBC's "/HPF") must not
+ * silently lose that unit just because there's nowhere else to print it -
+ * the clinic's own manual report shows it appended to the result itself
+ * ("1-2 /HPF"), not in a separate column. Only ever called for "plain"
+ * mode - "detailed"/"compact" already have their own Unit/Reference cell
+ * for this. Skips appending if the raw value already contains the unit
+ * text, same de-dup convention as `compactReferenceValue`. */
+export function plainResultValue(result: LaboratoryResult): string | null {
+  const value = reportResultValue(result);
+  const unit = result.units?.trim() ?? "";
+  if (!value || !unit) return value;
+  return value.toLowerCase().includes(unit.toLowerCase()) ? value : `${value} ${unit}`;
 }
 
 /** Compact letter the report header displays for the backend's raw

@@ -36,7 +36,14 @@ function order(overrides: Partial<LaboratoryOrder> = {}): LaboratoryOrder {
     queueNumber: null, patientId: "patient-1", patientName: "Juan Dela Cruz", patientAge: null, patientSex: null, doctorId: "doc-1", doctorName: "Jose Rizal",
     templateId: "template-1",
     template: {
-      id: "template-1", testName: "CBC", testCategory: null, specimenType: null, defaultPrice: 0,
+      // 2026-09 (per-category report layout): defaults to "Hematology" so
+      // every existing test in this file that doesn't care about layout
+      // mode specifically keeps getting the original 5-column table
+      // ("detailed" mode - see `resolveSectionLayoutMode`) it was written
+      // against, matching this fixture's own "CBC" test name/real-world
+      // category. A test exercising a DIFFERENT category/layout overrides
+      // `template` (or just `testCategory`) itself, same as before.
+      id: "template-1", testName: "CBC", testCategory: "Hematology", specimenType: null, defaultPrice: 0,
       turnaroundTimeHours: null, isActive: true, createdAt: "2026-01-01T00:00:00Z",
       parameters: [param()],
     },
@@ -207,9 +214,12 @@ describe("LaboratoryReportView", () => {
       />
     );
     expect(screen.getByText("1:160")).toBeInTheDocument();
-    // #10/#11: both sites shown, independently, with their own value.
-    expect(screen.getByText("(Skin)")).toBeInTheDocument();
-    expect(screen.getByText("(Vaginal)")).toBeInTheDocument();
+    // #10/#11 (2026-09 update): a multi-site Categorical parameter now
+    // prints as the clinic's own manual-report format - one TEST row with
+    // a numbered SITE list and a correspondingly numbered RESULT list (see
+    // `SiteListResultTable`) - rather than one column per site.
+    expect(screen.getByText(/1\.\s*Skin/)).toBeInTheDocument();
+    expect(screen.getByText(/2\.\s*Vaginal/)).toBeInTheDocument();
     expect(screen.getByText("Positive")).toBeInTheDocument();
     expect(screen.getByText("Negative")).toBeInTheDocument();
   });
@@ -265,11 +275,11 @@ describe("LaboratoryReportView", () => {
   describe("Laboratory Report print redesign (five-column result table)", () => {
     it("1: renders all five required column headers", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      expect(screen.getByRole("columnheader", { name: "Test" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Parameter" })).toBeInTheDocument();
       expect(screen.getByRole("columnheader", { name: "Result" })).toBeInTheDocument();
       expect(screen.getByRole("columnheader", { name: "Unit" })).toBeInTheDocument();
-      expect(screen.getByRole("columnheader", { name: "Normal Values" })).toBeInTheDocument();
-      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Reference" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "FLAG" })).toBeInTheDocument();
     });
 
     it("2: Result and Unit are separate cells, not one combined string", () => {
@@ -305,13 +315,13 @@ describe("LaboratoryReportView", () => {
 
     it("6: a result with no interpretation leaves the Flag cell blank", () => {
       render(<LaboratoryReportView order={order({ results: [result({ interpretation: null })] })} />);
-      const flagHeader = screen.getByRole("columnheader", { name: "Flag" });
+      const flagHeader = screen.getByRole("columnheader", { name: "FLAG" });
       const table = flagHeader.closest("table") as HTMLTableElement;
       const dataRow = table.querySelectorAll("tbody tr")[0];
       expect(dataRow.children[4]).toHaveTextContent("");
     });
 
-    it("7: multiple laboratory sections each render their own five-column table", () => {
+    it("7: multiple laboratory sections each render their own result table, independently", () => {
       render(
         <LaboratoryReportView
           order={order({
@@ -337,9 +347,16 @@ describe("LaboratoryReportView", () => {
       );
       const headers = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
       expect(headers).toEqual(["Physical Examination", "Chemical Examination"]);
-      // Each section still uses the same five-column structure, not a
-      // different table shape per section.
-      expect(screen.getAllByRole("columnheader", { name: "Flag" })).toHaveLength(2);
+      // 2026-09 (per-category report layout): each section's mode is now
+      // resolved independently from its OWN data (see
+      // `resolveSectionLayoutMode`) - neither "Color" (Text) nor "Protein"
+      // (a non-Positive/Negative Categorical) has any unit/reference/
+      // interpretation configured here, so both correctly render the bare
+      // "plain" Test/Result table, not a fabricated 5-column one.
+      expect(screen.getAllByText("Color").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Straw").length).toBeGreaterThan(0);
+      expect(screen.getByText("Trace")).toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "FLAG" })).not.toBeInTheDocument();
     });
 
     it("8: prints the historical result's own persisted normal range, not one recalculated from the current template", () => {
@@ -364,7 +381,7 @@ describe("LaboratoryReportView", () => {
 
     it("10: the result table is styled to span the full available width (table-layout: fixed, width 100%)", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       expect(table.style.tableLayout).toBe("fixed");
       expect(table.className).toContain("w-full");
     });
@@ -393,12 +410,12 @@ describe("LaboratoryReportView", () => {
     it("3: columns render in the required left-to-right order Test/Result/Unit/Normal Values/Flag", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
     });
 
     it("8: uses compact table styling - a dense navy header band and tight row padding, not the airier first-pass spacing", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const headerRow = screen.getByRole("columnheader", { name: "Test" }).closest("tr") as HTMLTableRowElement;
+      const headerRow = screen.getByRole("columnheader", { name: "Parameter" }).closest("tr") as HTMLTableRowElement;
       expect(headerRow.className).toContain("bg-slate-800");
       expect(headerRow.className).toContain("text-white");
 
@@ -447,22 +464,30 @@ describe("LaboratoryReportView", () => {
   describe("Laboratory Report print redesign, round 3 (column/date clipping fix)", () => {
     it("1: the FLAG header renders the full word, not a truncated fragment", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const header = screen.getByRole("columnheader", { name: "Flag" });
-      expect(header).toHaveTextContent("Flag");
+      const header = screen.getByRole("columnheader", { name: "FLAG" });
+      expect(header).toHaveTextContent("FLAG");
       expect(screen.queryByText(/…/)).not.toBeInTheDocument(); // no ellipsis character anywhere
     });
 
     it("2/3: the five column widths sum to exactly 100% (fit within the report width, no forced overflow)", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       const widths = Array.from(table.querySelectorAll("colgroup col")).map(
         (col) => Number((col as HTMLElement).style.width.replace("%", ""))
       );
       expect(widths).toHaveLength(5);
       expect(widths.reduce((sum, w) => sum + w, 0)).toBe(100);
-      // FLAG only ever holds a single character, so it's deliberately the
-      // narrowest column now (round 4: Assessment -> Flag).
-      expect(widths[4]).toBeLessThanOrEqual(10);
+      // FLAG's CELL CONTENT is still just a single character (L/H/A), but
+      // its HEADER LABEL is the full word "FLAG" (formerly "REMARKS", at
+      // this same 8% width - the fix below predates the medtech's separate
+      // FLAG-vs-Remarks terminology feedback, and remains true either way)
+      // - at 8% this wrapped mid-word in an actual A4 print (found via a real
+      // print-pipeline PDF, not this test: jsdom has no visual layout, so
+      // it can't catch a purely visual line-wrap on its own - toHaveTextContent
+      // above only checks the DOM's text, not whether it visually fits on
+      // one line). 14% is the print-verified minimum; still comfortably
+      // the narrowest of the five columns.
+      expect(widths[4]).toBeLessThanOrEqual(14);
     });
 
     it("3: every header cell can wrap (whitespace-normal + break-words), the actual fix for a header word overflowing its fixed column", () => {
@@ -537,7 +562,7 @@ describe("LaboratoryReportView", () => {
 
     it("9: the table stays constrained to the report width (width: 100%, max-width: 100%, table-layout: fixed)", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       expect(table.className).toContain("w-full");
       expect(table.className).toContain("max-w-full");
       expect(table.style.tableLayout).toBe("fixed");
@@ -561,7 +586,7 @@ describe("LaboratoryReportView", () => {
   describe("Laboratory Report print redesign, round 4 (Assessment -> Flag)", () => {
     it("1: the printed header is exactly 'Flag', not 'Assessment'", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "FLAG" })).toBeInTheDocument();
       expect(screen.queryByRole("columnheader", { name: "Assessment" })).not.toBeInTheDocument();
     });
 
@@ -595,7 +620,7 @@ describe("LaboratoryReportView", () => {
 
     it("7: a Normal row's Flag cell contains no flag text at all", () => {
       render(<LaboratoryReportView order={order({ results: [result({ parameterName: "Hemoglobin", interpretation: "Normal" })] })} />);
-      const flagHeader = screen.getByRole("columnheader", { name: "Flag" });
+      const flagHeader = screen.getByRole("columnheader", { name: "FLAG" });
       const table = flagHeader.closest("table") as HTMLTableElement;
       const dataRow = screen.getByText("Hemoglobin").closest("tr") as HTMLTableRowElement;
       expect(table.contains(dataRow)).toBe(true);
@@ -637,21 +662,26 @@ describe("LaboratoryReportView", () => {
     it("11: the five columns remain exactly Test/Result/Unit/Normal Values/Flag", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
     });
 
-    it("12: an ad-hoc (non-template) result with no range/interpretation still prints, with a blank Flag rather than a fabricated one", () => {
+    it("12: an ad-hoc (non-template) result with no range/interpretation/unit at all prints on the bare 2-column layout, never a fabricated Flag/Reference/Unit cell", () => {
       render(
         <LaboratoryReportView
           order={order({
             template: null,
-            results: [result({ parameterName: "Ad-hoc Parameter", normalRange: null, interpretation: null })],
+            results: [result({ parameterName: "Ad-hoc Parameter", normalRange: null, interpretation: null, units: null })],
           })}
         />
       );
       const row = screen.getByText("Ad-hoc Parameter").closest("tr") as HTMLTableRowElement;
       expect(row).toBeInTheDocument();
-      expect(row.children[4]).toHaveTextContent("");
+      // 2026-09 (per-category report layout): a result with genuinely
+      // nothing configured (no unit, no reference, no interpretation) gets
+      // the "plain" 2-column Test/Result table - see
+      // `resolveSectionLayoutMode` - rather than a 5-column table with
+      // three fabricated-looking blank cells.
+      expect(row.children).toHaveLength(2);
     });
 
     it("13: historical persisted normal range/units continue to print unchanged under the Flag column", () => {
@@ -670,7 +700,7 @@ describe("LaboratoryReportView", () => {
 
     it("14: the table still fits the report width with zero forced overflow after rebalancing for the narrower Flag column", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       const widths = Array.from(table.querySelectorAll("colgroup col")).map(
         (col) => Number((col as HTMLElement).style.width.replace("%", ""))
       );
@@ -871,7 +901,7 @@ describe("LaboratoryReportView", () => {
         />
       );
       // No standard 5-column Flag header exists on a pure-matrix report.
-      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "FLAG" })).not.toBeInTheDocument();
       expect(screen.queryByText("L")).not.toBeInTheDocument();
       expect(screen.queryByText("H")).not.toBeInTheDocument();
       expect(screen.queryByText("A")).not.toBeInTheDocument();
@@ -931,8 +961,8 @@ describe("LaboratoryReportView", () => {
       expect(negatives).toHaveLength(3);
       // No Unit/Normal Values/Flag/Interpretation columns for this layout.
       expect(screen.queryByRole("columnheader", { name: "Unit" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("columnheader", { name: "Normal Values" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Reference" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "FLAG" })).not.toBeInTheDocument();
       expect(screen.queryByText("A")).not.toBeInTheDocument();
     });
 
@@ -959,11 +989,18 @@ describe("LaboratoryReportView", () => {
       expect(screen.getAllByText("S TYPHI TYPHOID")).toHaveLength(1);
       expect(screen.getAllByText("Positive")).toHaveLength(2);
       expect(screen.queryByRole("columnheader", { name: "Unit" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("columnheader", { name: "Normal Values" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "Reference" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("columnheader", { name: "FLAG" })).not.toBeInTheDocument();
     });
 
-    it("C: a single-parameter test (HBsAg-style) uses the parameter name itself as the column heading, not a generic 'Result'", () => {
+    it("C: a single-parameter test (HBsAg-style) uses 'Result' as the column heading - the TEST column already identifies the test", () => {
+      // Medtech feedback (real A4 print review): repeating the parameter
+      // name ("HBsAg") as the single column's own heading was redundant -
+      // the row's own TEST cell already says "HEPATITIS B ANTIGEN
+      // (HBSAG)" directly beside it. A genuine multi-component matrix
+      // (Dengue's NS1/IgM/IgG - see the next describe block) still needs
+      // each column's own parameter name to tell the components apart, so
+      // this only changes the single-column case.
       render(
         <LaboratoryReportView
           order={order({
@@ -978,8 +1015,8 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "HBsAg"]);
-      expect(screen.queryByText("Result")).not.toBeInTheDocument();
+      expect(headers).toEqual(["Test", "Result"]);
+      expect(screen.queryByText("HBsAg")).not.toBeInTheDocument();
       // "HEPATITIS B ANTIGEN (HBSAG)" appears exactly once - as the
       // matrix's own parent-test cell; "Test" appears exactly once too
       // (the matrix's own column heading), proving the header's own
@@ -1017,15 +1054,15 @@ describe("LaboratoryReportView", () => {
           order={order({ testType: "CBC", results: [result({ units: "g/dL", numericValue: 14 })] })}
         />
       );
-      // "Test" appears exactly once for a standard report now - only the
-      // unrelated five-column table's own "Test" column heading. The
-      // header's own InfoRow label used to also render "Test" (making
-      // this 2), but the client removed it from the header entirely, for
+      // The header's own InfoRow "Test" label was removed entirely, for
       // every report type, not just a matrix one - the test TYPE string
       // itself ("CBC") no longer appears anywhere in a standard report
       // (it's only ever shown via the result table's own parameter rows,
-      // which don't include the raw test type).
-      expect(screen.getAllByText("Test")).toHaveLength(1);
+      // which don't include the raw test type). This fixture's Hematology
+      // category renders "detailed" mode, whose first column header is
+      // "Parameter", not "Test" (see `StandardResultTable`) - so "Test"
+      // shouldn't appear anywhere at all here now.
+      expect(screen.queryByText("Test")).not.toBeInTheDocument();
       expect(screen.queryByText("CBC")).not.toBeInTheDocument();
       expect(screen.getByText("Hemoglobin")).toBeInTheDocument();
     });
@@ -1037,7 +1074,7 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
       expect(screen.getByText("g/dL")).toBeInTheDocument();
       expect(screen.getByText("12.0-16.0")).toBeInTheDocument();
       expect(screen.getByText("H")).toBeInTheDocument();
@@ -1065,8 +1102,9 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Protein"]);
-      expect(screen.queryByRole("columnheader", { name: "Flag" })).not.toBeInTheDocument();
+      // "Result" (not the parameter name "Protein") - see test "C" above.
+      expect(headers).toEqual(["Test", "Result"]);
+      expect(screen.queryByRole("columnheader", { name: "FLAG" })).not.toBeInTheDocument();
       expect(screen.getByText("Negative")).toBeInTheDocument();
     });
 
@@ -1084,9 +1122,15 @@ describe("LaboratoryReportView", () => {
           })}
         />
       );
+      // 2026-09 (per-category report layout): still the standard grid, not
+      // the matrix - but with nothing configured (no unit/reference/
+      // interpretation) and a non-Hematology category, this now renders
+      // the bare "plain" 2-column Test/Result table rather than a
+      // fabricated 5-column one - see `resolveSectionLayoutMode`.
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Test", "Result"]);
       expect(screen.getByText("Protein")).toBeInTheDocument();
+      expect(screen.getByText("Trace")).toBeInTheDocument();
     });
 
     it("G: interpretation remains available on the underlying result even though the matrix never prints it", () => {
@@ -1149,7 +1193,7 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByTestId("pathologist-signatory")).toHaveTextContent("Pathologist");
     });
 
-    it("also prints the 'refer to your doctor' note only for a qualitative matrix report, not for a purely quantitative one", () => {
+    it("prints the 'refer to your doctor' note on every report, qualitative matrix or purely quantitative (medtech feedback: real A4 print review)", () => {
       const { rerender } = render(
         <LaboratoryReportView
           order={order({
@@ -1165,7 +1209,7 @@ describe("LaboratoryReportView", () => {
       expect(screen.getByText("Please refer to your doctor for interpretation of the results.")).toBeInTheDocument();
 
       rerender(<LaboratoryReportView order={order({ results: [result()] })} />);
-      expect(screen.queryByText("Please refer to your doctor for interpretation of the results.")).not.toBeInTheDocument();
+      expect(screen.getByText("Please refer to your doctor for interpretation of the results.")).toBeInTheDocument();
     });
   });
 
@@ -1341,12 +1385,12 @@ describe("LaboratoryReportView", () => {
     it("12: the existing five-column result table is unaffected by the new header line", () => {
       render(<LaboratoryReportView order={order({ clinicAddress: "Some Address", results: [result()] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
     });
 
     it("13: table width still sums to 100% and carries no horizontal-overflow classes with the contact line present", () => {
       render(<LaboratoryReportView order={order({ clinicAddress: "Some Address", clinicPhone: "0917-000-0000", clinicEmail: "a@b.com", results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       const widths = Array.from(table.querySelectorAll("colgroup col")).map(
         (col) => Number((col as HTMLElement).style.width.replace("%", ""))
       );
@@ -1541,7 +1585,7 @@ describe("LaboratoryReportView", () => {
         />
       );
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
       expect(screen.getByText("L")).toBeInTheDocument();
     });
   });
@@ -1744,7 +1788,7 @@ describe("LaboratoryReportView", () => {
 
     it("6: the Flag column header is still exactly 'FLAG'", () => {
       render(<LaboratoryReportView order={order({ results: [result()] })} />);
-      expect(screen.getByRole("columnheader", { name: "Flag" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "FLAG" })).toBeInTheDocument();
     });
 
     it("7: existing H/L/blank logic is unchanged - only the color mapping changed", () => {
@@ -1801,7 +1845,7 @@ describe("LaboratoryReportView", () => {
           })}
         />
       );
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       const widths = Array.from(table.querySelectorAll("colgroup col")).map(
         (col) => Number((col as HTMLElement).style.width.replace("%", ""))
       );
@@ -1826,7 +1870,7 @@ describe("LaboratoryReportView", () => {
     it("preserves the existing five-column Flag table structure with a logo present", () => {
       render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png", results: [result({ interpretation: "Low" })] })} />);
       const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-      expect(headers).toEqual(["Test", "Result", "Unit", "Normal Values", "Flag"]);
+      expect(headers).toEqual(["Parameter", "Result", "Unit", "Reference", "FLAG"]);
       expect(screen.getByText("L")).toBeInTheDocument();
     });
   });
@@ -1870,7 +1914,7 @@ describe("LaboratoryReportView", () => {
 
     it("6: the table still fits the report width with zero forced overflow at the larger logo size", () => {
       render(<LaboratoryReportView order={order({ clinicLogoUrl: "/media/clinic-logo/clinic-1/logo-abc.png", results: [result()] })} />);
-      const table = screen.getByRole("columnheader", { name: "Test" }).closest("table") as HTMLTableElement;
+      const table = screen.getByRole("columnheader", { name: "Parameter" }).closest("table") as HTMLTableElement;
       const widths = Array.from(table.querySelectorAll("colgroup col")).map(
         (col) => Number((col as HTMLElement).style.width.replace("%", ""))
       );
@@ -1917,8 +1961,13 @@ describe("LaboratoryReportView - overall category heading", () => {
     expect(screen.getByText("BLOOD CHEMISTRY TEST")).toBeInTheDocument();
   });
 
-  it("no category heading renders when the template has no testCategory configured (matches every existing fixture in this file)", () => {
-    render(<LaboratoryReportView order={order()} />);
+  it("no category heading renders when the template has no testCategory configured", () => {
+    // 2026-09: the shared `order()` fixture now defaults `testCategory` to
+    // "Hematology" (see its own doc comment) so most of this file's tests
+    // keep the 5-column "detailed" layout they were written against - this
+    // test's whole point is the null-category case, so it overrides that
+    // default back to null itself rather than relying on the shared one.
+    render(<LaboratoryReportView order={order({ template: { ...order().template!, testCategory: null } })} />);
     expect(screen.queryByText(/TEST$/)).not.toBeInTheDocument();
   });
 

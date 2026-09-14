@@ -5,33 +5,33 @@ import {
   buildAgeSexLine,
   buildCategoryHeading,
   buildReportRows,
+  compactReferenceLines,
   groupReportRowsBySection,
+  isClinicalMicroscopyCategory,
   isQualitativeCategoricalRow,
+  plainResultValue,
   reportResultValue,
+  resolveSectionLayoutMode,
   type LaboratoryReportRow,
 } from "@/features/laboratory/lib/report";
 import { formatDateTime } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/api-url";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
-/** Med-tech-requested print redesign: five columns (TEST / RESULT / UNIT /
- * NORMAL VALUES / FLAG), Result and Unit split into separate cells
- * (previously one combined "14 g/dL" string), sized for the full width of
- * a Letter/Short-Bond page via `table-layout: fixed` + explicit column
- * percentages (`COLUMN_WIDTHS` below) rather than the narrow auto-sized
- * table this replaces. Every cell still reads directly off the persisted
- * `LaboratoryResult` (`units`/`normalRange`/`interpretation`) - never
- * recalculated from the current template, so historical results keep
- * printing exactly what was true when they were released, even if the
- * template's reference ranges change later.
+/** Every cell reads directly off the persisted `LaboratoryResult`
+ * (`units`/`normalRange`/`interpretation`) - never recalculated from the
+ * current template, so historical results keep printing exactly what was
+ * true when they were released, even if the template's reference ranges
+ * change later.
  *
- * Round 4 (Assessment -> Flag, matching the clinic's existing paper
- * report convention): the last column now prints a bare "L"/"H"/"A" (or
- * blank) instead of the full word/icon - see `FlagText`. FLAG only ever
- * holds a single character, so its column shrank from 19% to 8%; that
- * freed width went mostly to NORMAL VALUES (27% -> 35%), which is the
- * column most likely to hold a long persisted range string. */
-const COLUMN_WIDTHS = { test: "30%", result: "14%", unit: "13%", normalValues: "35%", flag: "8%" };
+ * 2026-09 (clinic manual-report reference): the report is no longer one
+ * universal table for every test - see `StandardResultTable` and
+ * `resolveSectionLayoutMode` for the three per-section layouts (Hematology
+ * 5-column "detailed", Blood-Chemistry-style 3-column "compact", and the
+ * bare 2-column "plain" for a test with no configured unit/range at all)
+ * this now dispatches to, matching the clinic's own existing paper reports
+ * for each test category instead of forcing every result into the same
+ * five columns. */
 
 /** Phase 4G: generic, template-driven read-only laboratory report body -
  * every field comes from the already-fetched `LaboratoryOrder` (via
@@ -203,8 +203,51 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
 
       <div className="mt-2 space-y-2.5">
         {groups.map((group, groupIndex) => {
-          const standardRows = group.rows.filter((row) => !isQualitativeCategoricalRow(row));
-          const categoricalRows = group.rows.filter(isQualitativeCategoricalRow);
+          // Working assumption (Blood Typing, 2026-09): a group can mix a
+          // qualifying Positive/Negative Categorical row (e.g. Rh Factor)
+          // with a NON-qualifying Categorical row (e.g. ABO Group's A/B/AB/O
+          // - see report.test.ts's "Blood Type" fixture, which deliberately
+          // asserts `isQualitativeCategoricalRow` stays false for it). Left
+          // to `isQualitativeCategoricalRow` alone, that would split the two
+          // sibling Categorical parameters into two visually mismatched
+          // tables (Rh Factor's matrix row is labeled with the overall
+          // `testType`, not "Rh Factor"). Detected purely from the row data
+          // (any Categorical row in the group that ISN'T qualifying) - a
+          // qualifying row only joins the matrix when every OTHER Categorical
+          // row in its own group also qualifies, keeping same-family
+          // Categorical parameters in one consistent table together. A
+          // non-Categorical sibling (e.g. Titer) never triggers this - see
+          // LaboratoryReportView.test.tsx's "#15" (Titer + multi-site
+          // Categorical), which still needs each row rendered independently.
+          const hasNonQualitativeCategorical = group.rows.some(
+            (row) => row.results.some((r) => r.resultType === "Categorical") && !isQualitativeCategoricalRow(row)
+          );
+          // Medtech feedback (Blood Typing, real A4 print review): ABO Group
+          // + Rh Factor must print as ONE combined line ("BLOOD TYPING" |
+          // "O POSITIVE"), not two separate PARAMETER rows - real-world
+          // blood typing is reported as a single combined designation, not
+          // per-antigen rows. Detected purely from the data: MORE THAN ONE
+          // row in the group (combining only makes sense for 2+ parameters -
+          // a lone non-Positive/Negative Categorical result, e.g. an
+          // unexpected/ad-hoc "ABO Group" with an Abnormal flag, still needs
+          // its own ordinary row so its interpretation keeps printing - see
+          // LaboratoryReportView.test.tsx's Categorical-Flag-'A' tests),
+          // every row is Categorical (never a name check), and the group
+          // already isn't matrix-eligible (`hasNonQualitativeCategorical`,
+          // same condition the fix above uses) - a group mixing Categorical
+          // with a genuinely different result type (e.g. Titer, see test
+          // "#15") never qualifies, so those rows still print independently.
+          const isCombinedCategoricalGroup =
+            hasNonQualitativeCategorical &&
+            group.rows.length > 1 &&
+            group.rows.every((row) => row.results.every((r) => r.resultType === "Categorical"));
+          const standardRows = isCombinedCategoricalGroup
+            ? []
+            : group.rows.filter((row) => !isQualitativeCategoricalRow(row) || hasNonQualitativeCategorical);
+          const categoricalRows = isCombinedCategoricalGroup
+            ? []
+            : group.rows.filter((row) => isQualitativeCategoricalRow(row) && !hasNonQualitativeCategorical);
+          const layoutMode = resolveSectionLayoutMode(order.template?.testCategory, standardRows);
           return (
             <div key={groupIndex}>
               {group.section ? (
@@ -212,60 +255,28 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
                   {group.section}
                 </h3>
               ) : null}
-              {standardRows.length > 0 ? (
-                <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
-                  <colgroup>
-                    <col style={{ width: COLUMN_WIDTHS.test }} />
-                    <col style={{ width: COLUMN_WIDTHS.result }} />
-                    <col style={{ width: COLUMN_WIDTHS.unit }} />
-                    <col style={{ width: COLUMN_WIDTHS.normalValues }} />
-                    <col style={{ width: COLUMN_WIDTHS.flag }} />
-                  </colgroup>
-                  <thead>
-                    {/* `whitespace-normal break-words` on every header cell:
-                        without it, a single unbreakable word like "NORMAL
-                        VALUES" simply overflows its `table-layout: fixed`
-                        column (browsers don't shrink the table to contain it,
-                        they let the text spill past the cell) - that overflow
-                        was the actual clipping bug, not the column width
-                        alone. Wrapping is the real fix. */}
-                    <tr className="report-table-head bg-slate-800 text-white">
-                      <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
-                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
-                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
-                      <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Normal Values</th>
-                      <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">Flag</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {standardRows.map((row) =>
-                      row.results.map((result, resultIndex) => (
-                        <tr key={`${row.parameterName}-${resultIndex}`} className="report-row border-b border-border/60 last:border-0">
-                          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">
-                            {row.parameterName}
-                            {result.site ? <span className="text-muted-foreground"> ({result.site})</span> : null}
-                          </td>
-                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
-                            {reportResultValue(result) ?? <span className="text-muted-foreground">-</span>}
-                          </td>
-                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
-                            {result.units ?? ""}
-                          </td>
-                          <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
-                            {result.normalRange ?? ""}
-                          </td>
-                          <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
-                            <FlagText value={result.interpretation} resultType={result.resultType} />
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              ) : null}
-              {categoricalRows.length > 0 ? (
-                <QualitativeResultMatrix testLabel={order.testType} rows={categoricalRows} />
-              ) : null}
+              {isCombinedCategoricalGroup ? (
+                <CombinedCategoricalRow testLabel={order.testType} rows={group.rows} />
+              ) : (
+                <>
+                  {standardRows.length > 0 ? (
+                    <StandardResultTable
+                      mode={layoutMode}
+                      rows={standardRows}
+                      specimenType={order.template?.specimenType ?? null}
+                      testCategory={order.template?.testCategory ?? null}
+                    />
+                  ) : null}
+                  {categoricalRows.length > 0 ? (
+                    <QualitativeResultMatrix
+                      testLabel={order.testType}
+                      rows={categoricalRows}
+                      specimenType={order.template?.specimenType ?? null}
+                      testCategory={order.template?.testCategory ?? null}
+                    />
+                  ) : null}
+                </>
+              )}
             </div>
           );
         })}
@@ -277,13 +288,11 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
         <ul className="list-disc space-y-0.5 pl-4">
           <li>This report is system-generated.</li>
           <li>Reference ranges may vary based on age, sex, and clinical condition.</li>
-          {/* Client sample's "OTHERS: Please refer to your doctor for
-              interpretation of the results." - added as one more bullet in
-              this ALREADY-EXISTING note box (reused, not duplicated as a
-              separate "OTHERS" block) and only for a report that actually
-              contains a qualitative Positive/Negative matrix - a purely
-              quantitative report keeps exactly its prior two bullets. */}
-          {allRows.some(isQualitativeCategoricalRow) ? <li>Please refer to your doctor for interpretation of the results.</li> : null}
+          {/* Medtech feedback (real A4 print review): all three note bullets
+              on every report, not just ones with a qualitative Positive/
+              Negative matrix - a purely quantitative report (CBC, Blood
+              Chemistry, ...) gets the "refer to your doctor" line too now. */}
+          <li>Please refer to your doctor for interpretation of the results.</li>
         </ul>
       </div>
 
@@ -320,6 +329,206 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
   );
 }
 
+/** Per-clinic manual-report reference table for non-categorical results -
+ * see `resolveSectionLayoutMode`'s own doc comment for exactly which mode
+ * a section gets and why. "detailed" is the prior 5-column table (kept
+ * byte-for-byte, just extracted here), used only for a genuine Hematology
+ * panel like CBC. "compact" is the clinic's own Blood Chemistry/Thyroid-
+ * PSA/Clotting-Bleeding-Time 3-column TEST/RESULT/REFERENCE layout - no
+ * Unit column, no Flag/Remarks column, `compactReferenceValue` folds the
+ * unit into the REFERENCE cell when the range text doesn't already contain
+ * it. "plain" drops the REFERENCE column entirely for a test with no
+ * unit/range configured on any of its results at all (Stool Examination,
+ * Gram Stain) - matching those tests' own paper reports, which have no
+ * such column either. */
+// Widths tuned so every header word fits on one line at real print width -
+// "flag" was 8% (only wide enough for ~4 characters at this font size),
+// which wrapped "REMARKS" mid-word in an actual A4 print (confirmed via a
+// real print-pipeline PDF, not just the narrow on-screen preview box -
+// see the medtech screenshot this was reported from). "reference" had
+// substantial unused slack at 35% (its own header, "REFERENCE", is barely
+// shorter than "REMARKS" and fits comfortably well under 35%), so this
+// only redistributes existing width - still sums to exactly 100%.
+// One shared shape (rather than 4 differently-keyed object literals) so
+// `widths` below has a single consistent type - the four modes' widths
+// otherwise form a union type that TypeScript correctly refuses to read
+// `.unit`/`.reference`/`.flag`/`.specimen` off of (not every mode's literal
+// has those keys), a real type error `tsc --noEmit` catches even though it
+// silently passed through the dev server and test runner (both strip types
+// without full type-checking). Each unused key is simply omitted per mode.
+interface ColumnWidths {
+  test: string;
+  result: string;
+  unit?: string;
+  reference?: string;
+  flag?: string;
+  specimen?: string;
+}
+
+const DETAILED_COLUMN_WIDTHS: ColumnWidths = { test: "28%", result: "14%", unit: "13%", reference: "31%", flag: "14%" };
+const COMPACT_COLUMN_WIDTHS: ColumnWidths = { test: "38%", result: "22%", reference: "40%" };
+const PLAIN_COLUMN_WIDTHS: ColumnWidths = { test: "45%", result: "55%" };
+// Medtech feedback (Gram Stain/Sputum Exam, real A4 print review): a
+// single-parameter "plain" test (a free-text finding with no unit/range at
+// all) must show its specimen, per the clinic's own "Miscellaneous" report
+// family (TEST | SPECIMEN | RESULT). Only ever added for a SINGLE-row plain
+// group (see `showSpecimen` below) - a multi-row plain test like Stool
+// Exam (7 parameters under one specimen) keeps its existing plain TEST |
+// RESULT columns unchanged, matching that family's own separate spec.
+const PLAIN_WITH_SPECIMEN_COLUMN_WIDTHS: ColumnWidths = { test: "28%", specimen: "27%", result: "45%" };
+
+function StandardResultTable({
+  mode,
+  rows,
+  specimenType,
+  testCategory,
+}: {
+  mode: "detailed" | "compact" | "plain";
+  rows: LaboratoryReportRow[];
+  specimenType?: string | null;
+  testCategory?: string | null;
+}) {
+  const testHeader = mode === "detailed" ? "Parameter" : "Test";
+  const showSpecimen =
+    mode === "plain" && rows.length === 1 && !!specimenType?.trim() && isClinicalMicroscopyCategory(testCategory);
+  // Medtech feedback (ALP/OGTT, real A4 print review): a compact-mode
+  // table with NO row carrying a real configured `normalRange` (only a
+  // bare unit, e.g. ALP's "U/L" or OGTT's "mg/dL" with no established
+  // cutoff at all) must not label that column "REFERENCE" - there is no
+  // reference being shown, only a unit ("*unit lng na ibutang sir kay wala
+  // mi reference value"). A table with at least one real range (e.g.
+  // FBS/RBS's Glucose Fasting) keeps the "REFERENCE" label even if a
+  // sibling row in the same table has no range of its own.
+  const hasAnyRealRange = rows.some((row) => row.results.some((r) => !!r.normalRange?.trim()));
+  const referenceHeaderText = mode === "compact" && !hasAnyRealRange ? "Unit" : "Reference";
+  const widths =
+    mode === "detailed"
+      ? DETAILED_COLUMN_WIDTHS
+      : mode === "compact"
+        ? COMPACT_COLUMN_WIDTHS
+        : showSpecimen
+          ? PLAIN_WITH_SPECIMEN_COLUMN_WIDTHS
+          : PLAIN_COLUMN_WIDTHS;
+
+  return (
+    <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: widths.test }} />
+        {showSpecimen ? <col style={{ width: widths.specimen }} /> : null}
+        <col style={{ width: widths.result }} />
+        {mode === "detailed" ? <col style={{ width: widths.unit }} /> : null}
+        {mode !== "plain" ? <col style={{ width: widths.reference }} /> : null}
+        {mode === "detailed" ? <col style={{ width: widths.flag }} /> : null}
+      </colgroup>
+      <thead>
+        {/* `whitespace-normal break-words` on every header cell: without it,
+            a single unbreakable word like "REFERENCE" simply overflows its
+            `table-layout: fixed` column (browsers don't shrink the table to
+            contain it, they let the text spill past the cell) - that
+            overflow was the actual clipping bug, not the column width
+            alone. Wrapping is the real fix. */}
+        <tr className="report-table-head bg-slate-800 text-white">
+          <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">{testHeader}</th>
+          {showSpecimen ? (
+            <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Specimen</th>
+          ) : null}
+          <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
+          {mode === "detailed" ? (
+            <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Unit</th>
+          ) : null}
+          {mode !== "plain" ? (
+            <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
+              {referenceHeaderText}
+            </th>
+          ) : null}
+          {mode === "detailed" ? (
+            // Medtech feedback (real A4 print review): this column's cell
+            // content is an auto-computed Low/High/Abnormal indicator (see
+            // `FlagText` below), never free-text remarks - "FLAG" is the
+            // correct label for that, not "Remarks" (reverted from an
+            // earlier terminology guess made against the manual-report
+            // photo, since the medtech's own direct review of the actual
+            // print output takes priority over that guess).
+            <th className="whitespace-normal break-words py-1 pl-1 pr-2 text-center font-semibold uppercase tracking-wide">FLAG</th>
+          ) : null}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) =>
+          row.results.map((result, resultIndex) => (
+            <tr key={`${row.parameterName}-${resultIndex}`} className="report-row border-b border-border/60 last:border-0">
+              <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">
+                {row.parameterName}
+                {result.site ? <span className="text-muted-foreground"> ({result.site})</span> : null}
+              </td>
+              {showSpecimen ? (
+                <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">{specimenType}</td>
+              ) : null}
+              <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
+                {(mode === "plain" ? plainResultValue(result) : reportResultValue(result)) ?? (
+                  <span className="text-muted-foreground">-</span>
+                )}
+              </td>
+              {mode === "detailed" ? (
+                <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">{result.units ?? ""}</td>
+              ) : null}
+              {mode !== "plain" ? (
+                <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">
+                  {mode === "compact"
+                    ? compactReferenceLines(result).map((line, lineIndex) => <div key={lineIndex}>{line}</div>)
+                    : (result.normalRange ?? "")}
+                </td>
+              ) : null}
+              {mode === "detailed" ? (
+                <td className="whitespace-normal break-words py-1 pl-1 pr-2 text-center align-top">
+                  <FlagText value={result.interpretation} resultType={result.resultType} />
+                </td>
+              ) : null}
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+/** Medtech feedback (Blood Typing, real A4 print review): when every row in
+ * a group is Categorical but the group isn't matrix-eligible (see
+ * `isCombinedCategoricalGroup` above), the clinic wants ONE combined line -
+ * the overall test name and every value joined together ("BLOOD TYPING" |
+ * "O POSITIVE") - not one row per antigen/parameter. Values join in
+ * `display_order` (the order `rows`/`row.results` already carry), so ABO
+ * Group always prints before Rh Factor without a name-specific check. */
+function CombinedCategoricalRow({ testLabel, rows }: { testLabel: string | null | undefined; rows: LaboratoryReportRow[] }) {
+  const combinedValue = rows
+    .flatMap((row) => row.results.map((result) => reportResultValue(result)))
+    .filter((value): value is string => !!value)
+    .join(" ");
+
+  return (
+    <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: "30%" }} />
+        <col style={{ width: "70%" }} />
+      </colgroup>
+      <thead>
+        <tr className="report-table-head bg-slate-800 text-white">
+          <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+          <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="report-row border-b border-border/60 last:border-0">
+          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? "-"}</td>
+          <td className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
+            {combinedValue || <span className="text-muted-foreground">-</span>}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
 /** Qualitative Positive/Negative matrix - client reference format: the
  * parent test name as the first cell/row label ("DENGUE RAPID TEST"),
  * then one column per Categorical parameter, parameter names as the
@@ -348,7 +557,71 @@ export function LaboratoryReportView({ order }: { order: LaboratoryOrder }) {
  * `(site)` span) - a single-site row (`results.length === 1`, the
  * overwhelming majority of real templates) renders byte-for-byte as
  * before, since its "site" span is simply absent when `site` is null. */
-function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null | undefined; rows: LaboratoryReportRow[] }) {
+/** Per-clinic manual-report reference: a `requiresSite` test with more than
+ * one collected site (KOH Mount is the only one seeded so far) is NOT
+ * printed as one column per site on the clinic's own paper report - it's a
+ * single TEST row with a numbered SITE list and a correspondingly numbered
+ * RESULT list beneath it (see the clinic's own "KOH MOUNT / 1. ABDOMEN 2.
+ * LEFT TRUNK / NEGATIVE NEGATIVE" sample). Detected purely from the data
+ * (exactly one row, with more than one result, all carrying a site) so any
+ * future multi-site test gets this layout automatically without a
+ * test-name check; a single-site `requiresSite` test (`results.length ===
+ * 1`) still goes through the ordinary matrix below unchanged. */
+function isMultiSiteRow(rows: LaboratoryReportRow[]): boolean {
+  return rows.length === 1 && rows[0].results.length > 1 && rows[0].results.every((r) => !!r.site);
+}
+
+function SiteListResultTable({ testLabel, row }: { testLabel: string | null | undefined; row: LaboratoryReportRow }) {
+  return (
+    <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: "30%" }} />
+        <col style={{ width: "40%" }} />
+        <col style={{ width: "30%" }} />
+      </colgroup>
+      <thead>
+        <tr className="report-table-head bg-slate-800 text-white">
+          <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+          <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Site</th>
+          <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="report-row border-b border-border/60 last:border-0">
+          <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? row.parameterName}</td>
+          <td className="whitespace-normal break-words px-1 py-1 align-top">
+            {row.results.map((result, index) => (
+              <div key={`site-${index}`}>
+                {index + 1}. {result.site}
+              </div>
+            ))}
+          </td>
+          <td className="whitespace-normal break-words px-1 py-1 align-top">
+            {row.results.map((result, index) => (
+              <div key={`result-${index}`}>{reportResultValue(result) ?? <span className="text-muted-foreground">-</span>}</div>
+            ))}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function QualitativeResultMatrix({
+  testLabel,
+  rows,
+  specimenType,
+  testCategory,
+}: {
+  testLabel: string | null | undefined;
+  rows: LaboratoryReportRow[];
+  specimenType?: string | null;
+  testCategory?: string | null;
+}) {
+  if (isMultiSiteRow(rows)) {
+    return <SiteListResultTable testLabel={testLabel} row={rows[0]} />;
+  }
+
   const columns = rows.flatMap((row) =>
     row.results.map((result, resultIndex) => ({
       key: `${row.parameterName}-${resultIndex}`,
@@ -357,13 +630,24 @@ function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null
       result,
     }))
   );
-  const testColumnWidth = 30;
-  const resultColumnWidth = columns.length > 0 ? (100 - testColumnWidth) / columns.length : 0;
+  // Medtech feedback (Trichomonas Vaginalis Mount, real A4 print review):
+  // a single-parameter matrix (Trichomonas, HBsAg, Fecal Occult Blood, ...)
+  // in the "Clinical Microscopy" family needs a SPECIMEN column too - see
+  // `isClinicalMicroscopyCategory`'s own doc comment for why this is the
+  // right data-driven signal (matches this project's real category data,
+  // never a test-name check). A genuinely multi-component matrix (Dengue's
+  // NS1/IgM/IgG) never qualifies both because it's a different category
+  // (SEROLOGY/IMMUNOLOGY) AND because `columns.length` is never 1 for it.
+  const showSpecimen = columns.length === 1 && !!specimenType?.trim() && isClinicalMicroscopyCategory(testCategory);
+  const testColumnWidth = showSpecimen ? 25 : 30;
+  const specimenColumnWidth = showSpecimen ? 25 : 0;
+  const resultColumnWidth = columns.length > 0 ? (100 - testColumnWidth - specimenColumnWidth) / columns.length : 0;
 
   return (
     <table className="w-full max-w-full border-collapse" style={{ tableLayout: "fixed" }}>
       <colgroup>
         <col style={{ width: `${testColumnWidth}%` }} />
+        {showSpecimen ? <col style={{ width: `${specimenColumnWidth}%` }} /> : null}
         {columns.map((column) => (
           <col key={column.key} style={{ width: `${resultColumnWidth}%` }} />
         ))}
@@ -371,9 +655,19 @@ function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null
       <thead>
         <tr className="report-table-head bg-slate-800 text-white">
           <th className="whitespace-normal break-words py-1 pl-2 pr-1 text-left font-semibold uppercase tracking-wide">Test</th>
+          {showSpecimen ? (
+            <th className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">Specimen</th>
+          ) : null}
           {columns.map((column) => (
             <th key={column.key} className="whitespace-normal break-words px-1 py-1 text-center font-semibold uppercase tracking-wide">
-              {column.parameterName}
+              {/* Medtech feedback (HBsAg, real A4 print review): a
+                  single-component matrix must say "Result", not repeat the
+                  parameter name (the TEST column/heading already identifies
+                  the test) - a genuine multi-component matrix (Dengue's
+                  NS1/IgM/IgG) still needs each column's own parameter name
+                  to tell the components apart, so this only applies when
+                  there's exactly one column. */}
+              {columns.length === 1 ? "Result" : column.parameterName}
               {column.site ? <span> ({column.site})</span> : null}
             </th>
           ))}
@@ -382,6 +676,9 @@ function QualitativeResultMatrix({ testLabel, rows }: { testLabel: string | null
       <tbody>
         <tr className="report-row border-b border-border/60 last:border-0">
           <td className="whitespace-normal break-words py-1 pl-2 pr-1 align-top">{testLabel ?? "-"}</td>
+          {showSpecimen ? (
+            <td className="whitespace-normal break-words px-1 py-1 text-center align-top text-muted-foreground">{specimenType}</td>
+          ) : null}
           {columns.map((column) => (
             <td key={column.key} className="whitespace-normal break-words px-1 py-1 text-center align-top font-medium">
               {reportResultValue(column.result) ?? <span className="text-muted-foreground">-</span>}

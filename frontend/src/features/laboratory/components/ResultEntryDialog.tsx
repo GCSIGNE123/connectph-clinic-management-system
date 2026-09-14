@@ -240,6 +240,40 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
     setRows((prev) => [...prev, emptyRow()]);
   }
 
+  /** Working assumption (KOH Mount, 2026-09): a `requiresSite` parameter
+   * (e.g. KOH Mount's "Result") needs to collect MORE than one specimen
+   * site under the SAME order - the clinic's own manual report combines
+   * multiple sites onto one printed sheet (see `SiteListResultTable` in
+   * LaboratoryReportView.tsx, which already renders this correctly once
+   * the data exists). `addRow`/`emptyRow` can't be reused for this: a
+   * fresh ad-hoc row always defaults to `resultType: "Numeric"` and the
+   * Type selector never offers "Categorical" for a row that didn't start
+   * out that way (see the Type `<Select>` below), so the medtech had no
+   * way to add a second Positive/Negative site result at all. This clones
+   * the SOURCE row's template-derived metadata (name/type/options/section/
+   * requiresSite/unit/range) - never a blank ad-hoc row - so the new row
+   * keeps the exact same structured entry the first site got, just with a
+   * blank site/value for the medtech to fill in. Inserted immediately
+   * after its source row so same-parameter sites stay visually grouped. */
+  function addSiteRow(index: number) {
+    setRows((prev) => {
+      const source = prev[index];
+      const clone: RowState = {
+        ...source,
+        numericValue: null,
+        textValue: null,
+        structuredValue: null,
+        site: null,
+        remarks: "",
+        interpretation: null,
+        manualOverride: false,
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, clone);
+      return next;
+    });
+  }
+
   function removeRow(index: number) {
     setRows((prev) => prev.filter((_, i) => i !== index));
   }
@@ -346,13 +380,18 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
                         // here too so a Categorical+requiresSite parameter
                         // doesn't lose this existing behavior just because
                         // it also qualifies for the simplified layout.
-                        <div>
-                          <label className="text-xs text-muted-foreground">Site</label>
-                          <Input
-                            value={row.site ?? ""}
-                            onChange={(e) => updateRow(index, { site: e.target.value || null })}
-                            placeholder="e.g. Skin, Vaginal, Nail"
-                          />
+                        <div className="flex items-end gap-2">
+                          <div className="flex-1">
+                            <label className="text-xs text-muted-foreground">Site</label>
+                            <Input
+                              value={row.site ?? ""}
+                              onChange={(e) => updateRow(index, { site: e.target.value || null })}
+                              placeholder="e.g. Skin, Vaginal, Nail"
+                            />
+                          </div>
+                          <Button type="button" variant="outline" size="sm" onClick={() => addSiteRow(index)}>
+                            + Add site
+                          </Button>
                         </div>
                       )}
                       <div>
@@ -466,13 +505,18 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
                       // Mount) - never a test-specific branch. No site
                       // vocabulary is pre-filled; the technician enters the
                       // actual specimen site as free text.
-                      <div className="col-span-6 sm:col-span-3">
-                        <label className="text-xs text-muted-foreground">Site</label>
-                        <Input
-                          value={row.site ?? ""}
-                          onChange={(e) => updateRow(index, { site: e.target.value || null })}
-                          placeholder="e.g. Skin, Vaginal, Nail"
-                        />
+                      <div className="col-span-6 flex items-end gap-1 sm:col-span-3">
+                        <div className="flex-1">
+                          <label className="text-xs text-muted-foreground">Site</label>
+                          <Input
+                            value={row.site ?? ""}
+                            onChange={(e) => updateRow(index, { site: e.target.value || null })}
+                            placeholder="e.g. Skin, Vaginal, Nail"
+                          />
+                        </div>
+                        <Button type="button" variant="outline" size="sm" onClick={() => addSiteRow(index)}>
+                          + Site
+                        </Button>
                       </div>
                     )}
                     <div className={row.requiresSite ? "col-span-12 sm:col-span-5" : "col-span-9 sm:col-span-8"}>

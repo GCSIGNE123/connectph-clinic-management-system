@@ -3,6 +3,7 @@ import {
   buildAgeSexLine,
   buildCategoryHeading,
   buildReportRows,
+  compactReferenceLines,
   groupReportRowsBySection,
   isQualitativeCategoricalRow,
   reportResultValue,
@@ -192,10 +193,46 @@ describe("buildCategoryHeading", () => {
     expect(buildCategoryHeading("Serology", "Serology Test")).toBeNull();
   });
   it("still renders when adjacent label differs", () => expect(buildCategoryHeading("Serology", "Dengue Rapid Test")).toBe("SEROLOGY TEST"));
+  it("renders Fecalysis bare, without a TEST suffix (medtech feedback: Stool Exam)", () => {
+    expect(buildCategoryHeading("Fecalysis")).toBe("FECALYSIS");
+    expect(buildCategoryHeading("fecalysis")).toBe("FECALYSIS");
+  });
+  it("renders Urinalysis bare, without a TEST suffix (medtech feedback: real A4 print review)", () => {
+    expect(buildCategoryHeading("Urinalysis")).toBe("URINALYSIS");
+    expect(buildCategoryHeading("urinalysis")).toBe("URINALYSIS");
+  });
+  it("still appends TEST for every other category (Fecalysis/Urinalysis are the named exceptions)", () => {
+    expect(buildCategoryHeading("Parasitology")).toBe("PARASITOLOGY TEST");
+    expect(buildCategoryHeading("Clinical Microscopy")).toBe("CLINICAL MICROSCOPY TEST");
+  });
   it("renders normally with empty adjacent label", () => {
     expect(buildCategoryHeading("Hematology", "")).toBe("HEMATOLOGY TEST");
     expect(buildCategoryHeading("Hematology", "   ")).toBe("HEMATOLOGY TEST");
     expect(buildCategoryHeading("Hematology", null)).toBe("HEMATOLOGY TEST");
+  });
+});
+
+describe("compactReferenceLines", () => {
+  it("splits a Male/Female range into two lines, repeating the trailing unit on both (medtech feedback: Triglycerides)", () => {
+    expect(compactReferenceLines(result({ normalRange: "Male: 60-165 / Female: 40-140 mg/dL", units: "mg/dL" }))).toEqual([
+      "Male: 60-165 mg/dL",
+      "Female: 40-140 mg/dL",
+    ]);
+  });
+  it("still repeats the unit on both lines when only the Female segment carried it in the stored text (SGPT/ALT)", () => {
+    expect(compactReferenceLines(result({ normalRange: "Male: <49 / Female: <34 U/L", units: "U/L" }))).toEqual([
+      "Male: <49 U/L",
+      "Female: <34 U/L",
+    ]);
+  });
+  it("returns a single line for a non-Male/Female range, same text as compactReferenceValue", () => {
+    expect(compactReferenceLines(result({ normalRange: "70-105 mg/dL", units: "mg/dL" }))).toEqual(["70-105 mg/dL"]);
+  });
+  it("returns just the unit as a single line when there is no range at all (medtech feedback: ALP/OGTT)", () => {
+    expect(compactReferenceLines(result({ normalRange: null, units: "U/L" }))).toEqual(["U/L"]);
+  });
+  it("returns an empty array when neither range nor unit is configured", () => {
+    expect(compactReferenceLines(result({ normalRange: null, units: null }))).toEqual([]);
   });
 });
 
