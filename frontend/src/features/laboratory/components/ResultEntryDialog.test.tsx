@@ -135,15 +135,18 @@ describe("ResultEntryDialog", () => {
     renderWithClient(<ResultEntryDialog order={staleOrder} open onOpenChange={() => {}} />);
 
     expect(getOrder).toHaveBeenCalledWith("lab-1");
+    // Medtech feedback (real A4 print review): Normal Range is no longer a
+    // freely retypeable input for a template parameter - it's a read-only
+    // line mirroring exactly what the printout would show.
     await waitFor(() => {
-      expect(screen.getByDisplayValue("13.0000-17.0000")).toBeInTheDocument();
+      expect(screen.getByText("Normal Range: 13.0000-17.0000")).toBeInTheDocument();
     });
   });
 
   it("falls back to the passed-in order's own range while the fresh fetch is in flight", () => {
     getOrder.mockReturnValue(new Promise(() => {})); // never resolves during this test
     renderWithClient(<ResultEntryDialog order={labOrder()} open onOpenChange={() => {}} />);
-    expect(screen.getByDisplayValue("12.0-16.0")).toBeInTheDocument();
+    expect(screen.getByText("Normal Range: 12.0-16.0")).toBeInTheDocument();
   });
 
   describe("Phase 4H: reopening a partially-completed templated order", () => {
@@ -236,15 +239,37 @@ describe("ResultEntryDialog", () => {
       expect(screen.getByText("Microscopic Examination")).toBeInTheDocument();
 
       // All 5 parameters render in template order, saved value included.
-      // Color/Protein are configured/unconfigured-options Categorical
-      // respectively (Color simplified - heading, not an editable Parameter
-      // input; Protein unconfigured - still the full grid), Specific
-      // Gravity/RBC/Bacteria are Numeric/Text (full grid, unaffected).
+      // Every one of them is a template parameter, so every one renders as
+      // a fixed heading (never a retypeable Parameter input) - Color/
+      // Protein via the Categorical branches (configured/unconfigured
+      // options respectively), Specific Gravity/RBC/Bacteria via the
+      // locked Numeric/Text layout.
       expect(screen.getByText("Color")).toBeInTheDocument();
-      const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
-      expect(paramInputs.map((i) => i.value)).toEqual(["Specific Gravity", "Protein", "RBC", "Bacteria"]);
+      expect(screen.getByText("Specific Gravity")).toBeInTheDocument();
+      expect(screen.getByText("Protein")).toBeInTheDocument();
+      expect(screen.getByText("RBC")).toBeInTheDocument();
+      expect(screen.getByText("Bacteria")).toBeInTheDocument();
       expect(screen.getByDisplayValue("Straw")).toBeInTheDocument();
     });
+  });
+
+  it("a configured-options Categorical row left unselected is silently excluded from submission, not sent as an invalid/empty value (medtech feedback: Urinalysis microscopic findings must be genuinely optional)", async () => {
+    const order = urinalysisOrder();
+    getOrder.mockResolvedValue(order);
+    enterResults.mockResolvedValue(order);
+    renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+    await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+    // Fill only RBC - leave Color (configured-options Categorical) unselected.
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    await userEvent.type(numberInputs[0] as HTMLInputElement, "2");
+    await userEvent.click(screen.getByRole("button", { name: /save results/i }));
+
+    await waitFor(() => expect(enterResults).toHaveBeenCalled());
+    const [, submitted] = enterResults.mock.calls[enterResults.mock.calls.length - 1] as [string, Array<Record<string, unknown>>];
+    const names = submitted.map((r) => r.parameterName);
+    expect(names).not.toContain("Color");
+    expect(names).toContain("RBC");
   });
 
   describe("Phase 4I: optimistic-concurrency guard on save", () => {
@@ -369,12 +394,15 @@ describe("ResultEntryDialog", () => {
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
-      // ABO Group/Rh Factor are configured-options Categorical (simplified
-      // layout, no editable Parameter input); the added Text "Remarks"
-      // parameter still uses the full grid, unchanged.
-      expect(screen.getAllByPlaceholderText("e.g. Hemoglobin").length).toBe(1);
+      // ABO Group/Rh Factor are configured-options Categorical, and the
+      // added Text "Remarks" parameter is also template-defined - all
+      // three render as fixed headings (never an editable Parameter
+      // input), each with its own type-appropriate Value control.
       expect(screen.getByText("ABO Group")).toBeInTheDocument();
       expect(screen.getByText("Rh Factor")).toBeInTheDocument();
+      // "Remarks" is also every row's own field label, so disambiguate to
+      // the parameter heading specifically (a <p>, not a <label>).
+      expect(screen.getByText("Remarks", { selector: "p" })).toBeInTheDocument();
       expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0); // the Text row's Textarea still renders
     });
   });
@@ -383,22 +411,21 @@ describe("ResultEntryDialog", () => {
     it("#1/#2/#3: groups parameters by section, in first-appearance order, preserving parameter order within each section", async () => {
       const order = urinalysisOrder();
       getOrder.mockResolvedValue(order);
-      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      const { container } = renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
 
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
       const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
       expect(headings).toEqual(["Physical Examination", "Chemical Examination", "Microscopic Examination"]);
 
-      // Parameter-name inputs appear in template display_order, not
-      // re-sorted. Color is a configured-options Categorical parameter, so
-      // it renders via the simplified layout (a heading, not an editable
-      // Parameter input) - the remaining Numeric/unconfigured-Categorical/
-      // Text parameters still use the full grid, unaffected.
-      expect(screen.getByText("Color")).toBeInTheDocument();
-      const paramInputs = screen.getAllByPlaceholderText("e.g. Hemoglobin") as HTMLInputElement[];
-      expect(paramInputs.map((i) => i.value)).toEqual([
-        "Specific Gravity", "Protein", "RBC", "Bacteria",
-      ]);
+      // Every parameter is template-defined, so every one renders as a
+      // fixed heading (never an editable Parameter input) in template
+      // display_order, not re-sorted - Color via the Categorical branch,
+      // the rest via the locked Numeric/Text/unconfigured-Categorical
+      // layout. Both share the same heading markup (a <p class="...
+      // font-semibold ...">), so querying that class captures all 5 in
+      // document order.
+      const paramHeadings = Array.from(container.querySelectorAll("p.font-semibold")).map((p) => p.textContent);
+      expect(paramHeadings).toEqual(["Color", "Specific Gravity", "Protein", "RBC", "Bacteria"]);
     });
 
     it("#4/#5: Numeric parameters render a numeric input, and a configured range is displayed in Normal Range", async () => {
@@ -409,7 +436,9 @@ describe("ResultEntryDialog", () => {
 
       const numberInputs = document.querySelectorAll('input[type="number"]');
       expect(numberInputs.length).toBeGreaterThanOrEqual(2); // Specific Gravity + RBC
-      expect(screen.getByDisplayValue("1.005-1.030")).toBeInTheDocument();
+      // Medtech feedback: Normal Range is a read-only line now, not an
+      // editable input - it only appears when the template configured one.
+      expect(screen.getByText("Normal Range: 1.005-1.030")).toBeInTheDocument();
     });
 
     it("#6: an existing Numeric Urinalysis result reloads its saved value, not blank", async () => {
@@ -464,6 +493,55 @@ describe("ResultEntryDialog", () => {
       const [, submitted] = enterResults.mock.calls[enterResults.mock.calls.length - 1] as [string, Array<Record<string, unknown>>];
       expect(submitted.some((r) => r.parameterName === "Protein")).toBe(false);
       expect(submitted.some((r) => r.parameterName === "Color")).toBe(true);
+    });
+
+    it("medtech feedback (real A4 print review): a Unit line only appears for a parameter the template actually configured one for - never an empty editable Units box for a value that could never appear on the printout", async () => {
+      const order = urinalysisOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+      // RBC has unit "/hpf" configured - its Unit line renders.
+      expect(screen.getByText("Unit: /hpf")).toBeInTheDocument();
+      // Specific Gravity (normalRange but no unit) and Bacteria (neither)
+      // never had a unit configured - no "Unit:" line for either, so only
+      // ONE Unit line exists in the whole dialog, and no stray editable
+      // "Units" input anywhere.
+      expect(screen.getAllByText(/^Unit:/)).toHaveLength(1);
+      // "Units" (plural, no colon) is the old generic grid's editable-input
+      // label - it must never appear for a template-locked row.
+      expect(screen.queryByText("Units")).not.toBeInTheDocument();
+    });
+
+    it("medtech feedback: a template parameter's name is a fixed heading, never a retypeable input - applies to Numeric and Text alike", async () => {
+      const order = urinalysisOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+
+      // Numeric (Specific Gravity, RBC) and Text (Bacteria) parameter names
+      // are plain text, not form controls.
+      for (const name of ["Specific Gravity", "RBC", "Bacteria"]) {
+        const heading = screen.getByText(name);
+        expect(heading.tagName).toBe("P");
+      }
+      expect(screen.queryByPlaceholderText("e.g. Hemoglobin")).not.toBeInTheDocument();
+    });
+
+    it("medtech feedback: a templated order has no '+ Add parameter' escape hatch - every field the test needs already has a row", async () => {
+      const order = urinalysisOrder();
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.queryByRole("button", { name: /add parameter/i })).not.toBeInTheDocument();
+    });
+
+    it("an untemplated order (no template matched) keeps the free-form '+ Add parameter' entry, since there is nothing else to enter from", async () => {
+      const order = labOrder({ templateId: null, template: null, results: [] });
+      getOrder.mockResolvedValue(order);
+      renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
+      await waitFor(() => expect(getOrder).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: /add parameter/i })).toBeInTheDocument();
     });
 
     it("#12: a previously-saved Categorical value reloads into the correct selected option", async () => {
@@ -699,13 +777,14 @@ describe("ResultEntryDialog", () => {
       });
     }
 
-    it("Titer appears as a valid Type and the Type selector is locked (template-configured, not freely selectable)", async () => {
+    it("Titer's type is fully template-locked - no Type selector renders at all for a template parameter (medtech feedback: no generic entering of results)", async () => {
       const order = titerOrder();
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
-      expect(screen.getByRole("option", { name: "Titer" })).toBeInTheDocument();
-      expect(screen.getByDisplayValue("Titer")).toBeDisabled();
+      expect(screen.getByText("VDRL Titer")).toBeInTheDocument();
+      expect(screen.queryByText("Type")).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "Titer" })).not.toBeInTheDocument();
     });
 
     it("a Titer value can be entered and is included in the submitted payload without being nulled", async () => {
@@ -715,8 +794,8 @@ describe("ResultEntryDialog", () => {
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
 
-      const row = screen.getByDisplayValue("VDRL Titer").closest(".grid") as HTMLElement;
-      const textarea = within(row).getAllByRole("textbox")[1];
+      const row = screen.getByText("VDRL Titer").closest(".space-y-3") as HTMLElement;
+      const textarea = within(row).getAllByRole("textbox")[0]; // Value control (Remarks is the other textbox in this row)
       await userEvent.type(textarea, "1:160");
       await userEvent.click(screen.getByRole("button", { name: /save results/i }));
 
@@ -765,16 +844,16 @@ describe("ResultEntryDialog", () => {
       });
     }
 
-    it("Microscopy appears as a valid, locked Type and renders a free-text control - no invented option list", async () => {
+    it("Microscopy's type is fully template-locked and renders a free-text control - no Type selector, no invented option list", async () => {
       const order = microscopyOrder();
       getOrder.mockResolvedValue(order);
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
-      expect(screen.getByRole("option", { name: "Microscopy" })).toBeInTheDocument();
-      expect(screen.getByDisplayValue("Microscopy")).toBeDisabled();
-      const row = screen.getByDisplayValue("Findings").closest(".grid") as HTMLElement;
+      expect(screen.queryByRole("option", { name: "Microscopy" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Type")).not.toBeInTheDocument();
+      const row = screen.getByText("Findings").closest(".space-y-3") as HTMLElement;
       const textboxesInRow = within(row).getAllByRole("textbox");
-      expect(textboxesInRow.length).toBeGreaterThanOrEqual(2); // Parameter input + free-text Value control
+      expect(textboxesInRow.length).toBeGreaterThanOrEqual(1); // the free-text Value control
     });
 
     it("a Microscopy value can be entered, submits without being nulled, and does not use structuredValue", async () => {
@@ -784,8 +863,8 @@ describe("ResultEntryDialog", () => {
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
 
-      const row = screen.getByDisplayValue("Findings").closest(".grid") as HTMLElement;
-      const textarea = within(row).getAllByRole("textbox")[1];
+      const row = screen.getByText("Findings").closest(".space-y-3") as HTMLElement;
+      const textarea = within(row).getAllByRole("textbox")[0]; // Value control (Remarks is the other textbox in this row)
       await userEvent.type(textarea, "Gram-positive cocci in clusters");
       await userEvent.click(screen.getByRole("button", { name: /save results/i }));
 
@@ -955,7 +1034,7 @@ describe("ResultEntryDialog", () => {
       expect(screen.getByText("Abnormal")).toBeInTheDocument();
     });
 
-    it("an options-less Categorical parameter (production-realistic, no admin configuration yet) keeps the full grid, not the simplified layout", async () => {
+    it("an options-less Categorical parameter (production-realistic, no admin configuration yet) still gets the locked, template-driven layout - a disabled warning control, never a fabricated choice list or a retypeable Parameter name", async () => {
       const order = hbsagOrder({
         template: {
           ...hbsagOrder().template!,
@@ -966,7 +1045,7 @@ describe("ResultEntryDialog", () => {
       renderWithClient(<ResultEntryDialog order={order} open onOpenChange={() => {}} />);
       await waitFor(() => expect(getOrder).toHaveBeenCalled());
       expect(screen.getByRole("option", { name: "No options configured" })).toBeInTheDocument();
-      expect(screen.getByDisplayValue("HBsAg")).toBeInTheDocument(); // Parameter input still editable in the fallback grid
+      expect(screen.getByText("HBsAg")).toBeInTheDocument(); // fixed heading, still template-locked (no options doesn't mean generic)
     });
   });
 });

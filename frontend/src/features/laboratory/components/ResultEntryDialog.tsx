@@ -35,6 +35,16 @@ type RowState = LaboratoryResultInput & {
   options: string[] | null;
   section: string | null;
   requiresSite: boolean;
+  // Medtech feedback (real A4 print review): the entry screen must never
+  // offer "generic" entry (a freely retypeable Parameter name / Type) for a
+  // parameter the template already defines - that risks a typo silently
+  // orphaning the result (buildReportRows matches by exact parameter name)
+  // or a mismatched type the report can't render. True for every row built
+  // from an actual `order.template.parameters` entry (see `rowFromResult`/
+  // `initialRows` below); false only for a genuinely ad-hoc row - an
+  // untemplated order's own results, or a brand-new "+ Add parameter" row,
+  // neither of which has a template definition to lock to.
+  isTemplateParameter: boolean;
 };
 
 function emptyRow(): RowState {
@@ -42,7 +52,7 @@ function emptyRow(): RowState {
     parameterName: "", resultType: "Numeric", numericValue: null, textValue: null,
     normalRange: "", units: "", interpretation: null, remarks: "",
     rangeLow: null, rangeHigh: null, expectedNormalText: null, structuredValue: null, site: null,
-    manualOverride: false, options: null, section: null, requiresSite: false,
+    manualOverride: false, options: null, section: null, requiresSite: false, isTemplateParameter: false,
   };
 }
 
@@ -79,6 +89,7 @@ function rowFromResult(r: LaboratoryResult, p?: LaboratoryTemplateParameter): Ro
     options: p?.options ?? null,
     section: p?.section ?? null,
     requiresSite: p?.requiresSite ?? false,
+    isTemplateParameter: Boolean(p),
   };
 }
 
@@ -136,6 +147,7 @@ function initialRows(order: LaboratoryOrder | null): RowState[] {
           options: p.options ?? null,
           section: p.section ?? null,
           requiresSite: p.requiresSite ?? false,
+          isTemplateParameter: true,
         });
       }
     }
@@ -178,9 +190,20 @@ function groupBySection(rows: RowState[]): { section: string | null; rows: { row
  * has actually configured `options` for that parameter - see Phase 4B's
  * "options-less categorical parameters" rule: never fabricate choices, and
  * never let the technician submit a value for a parameter that has none
- * configured. */
+ * configured.
+ *
+ * A configured-options Categorical row is also excluded when nothing has
+ * been selected yet ("Select..." left as-is) - these parameters are meant
+ * to be genuinely optional (e.g. Urinalysis microscopic findings like
+ * Calcium Oxalate: FEW/MODERATE/MANY only when something was actually
+ * seen), and the backend's `_validate_categorical_value` rejects any
+ * submitted value that isn't one of the configured options, including an
+ * empty one - so an unselected row must never be submitted at all, exactly
+ * like a blank Text/Numeric row is already silently skipped. */
 function isSubmittableCategorical(row: RowState): boolean {
-  return row.resultType !== "Categorical" || Boolean(row.options && row.options.length > 0);
+  if (row.resultType !== "Categorical") return true;
+  if (!row.options || row.options.length === 0) return false;
+  return Boolean(row.structuredValue?.value);
 }
 
 export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDialogProps) {
@@ -318,6 +341,13 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
     }
   }
 
+  // Medtech feedback: a templated order's Enter Results screen must only
+  // ever show the parameters the template itself defines - no free-form
+  // "+ Add parameter" escape hatch for a test that already has a complete,
+  // structured set of fields. Untemplated orders (no template matched)
+  // keep it, since there's nothing else to enter from.
+  const isTemplatedOrder = Boolean(order.template && order.template.parameters.length > 0);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
@@ -401,6 +431,110 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
                     </div>
                   );
                 }
+                // Medtech feedback (real A4 print review): every OTHER
+                // template-defined parameter (Numeric/Text/Titer/Microscopy,
+                // or a Categorical with no options configured) gets this
+                // same locked-down treatment as the Categorical branch
+                // above - a fixed parameter name (never retypeable, since a
+                // typo here would silently orphan the result: the report
+                // matches by exact name), no Type selector (the template's
+                // own `resultType` is the only source of truth), and a Unit/
+                // Normal Range line that only appears when the template
+                // actually configured one - exactly mirroring what
+                // `compactReferenceValue`/`plainResultValue`/the detailed
+                // Unit column would ever print for it, never an empty
+                // editable box for a value that could never appear on the
+                // printout. Manual Interpretation override IS kept (unlike
+                // the Categorical branch) - flagging a Numeric/Text result
+                // Low/High/Abnormal is a clinical judgment call on THIS
+                // result, not "generic" test configuration.
+                if (row.isTemplateParameter) {
+                  return (
+                    <div key={index} className="space-y-3 rounded-md border border-border p-3">
+                      <p className="text-sm font-semibold text-foreground">{row.parameterName}</p>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Value</label>
+                        {row.resultType === "Numeric" ? (
+                          <Input
+                            type="number" step="any"
+                            value={row.numericValue ?? ""}
+                            onChange={(e) => updateRow(index, { numericValue: e.target.value === "" ? null : Number(e.target.value) })}
+                          />
+                        ) : row.resultType === "Categorical" ? (
+                          categoricalConfigured ? (
+                            <Select
+                              value={(row.structuredValue?.value as string | undefined) ?? ""}
+                              onChange={(e) => updateRow(index, { structuredValue: e.target.value ? { value: e.target.value } : null })}
+                            >
+                              <option value="">Select...</option>
+                              {(row.options ?? []).map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </Select>
+                          ) : (
+                            <Select value="" disabled aria-label={`${row.parameterName || "Parameter"} - no options configured`}>
+                              <option value="">No options configured</option>
+                            </Select>
+                          )
+                        ) : (
+                          <Textarea value={row.textValue ?? ""} onChange={(e) => updateRow(index, { textValue: e.target.value })} rows={1} />
+                        )}
+                      </div>
+                      {row.units ? <p className="text-sm text-muted-foreground">Unit: {row.units}</p> : null}
+                      {row.normalRange ? (
+                        <p className="text-sm text-muted-foreground">Normal Range: {row.normalRange}</p>
+                      ) : null}
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="text-sm text-muted-foreground">
+                          Suggested: <InterpretationBadge value={row.interpretation} />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground">Interpretation</label>
+                          <Select
+                            value={row.interpretation ?? ""}
+                            onChange={(e) =>
+                              updateRow(index, {
+                                interpretation: (e.target.value || null) as LaboratoryResultInput["interpretation"],
+                                manualOverride: true,
+                              })
+                            }
+                          >
+                            <option value="">-</option>
+                            <option value="Normal">Normal</option>
+                            <option value="Low">Low</option>
+                            <option value="High">High</option>
+                            <option value="Abnormal">Abnormal</option>
+                          </Select>
+                        </div>
+                      </div>
+                      {row.requiresSite && (
+                        <div className="flex items-end gap-2">
+                          <div className="flex-1">
+                            <label className="text-xs text-muted-foreground">Site</label>
+                            <Input
+                              value={row.site ?? ""}
+                              onChange={(e) => updateRow(index, { site: e.target.value || null })}
+                              placeholder="e.g. Skin, Vaginal, Nail"
+                            />
+                          </div>
+                          <Button type="button" variant="outline" size="sm" onClick={() => addSiteRow(index)}>
+                            + Add site
+                          </Button>
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-xs text-muted-foreground">Remarks</label>
+                        <Input value={row.remarks ?? ""} onChange={(e) => updateRow(index, { remarks: e.target.value })} />
+                      </div>
+                    </div>
+                  );
+                }
+                // Genuinely ad-hoc row - an untemplated order's own result,
+                // or a brand-new "+ Add parameter" row on one - with no
+                // template definition to lock to, so the full free-form grid
+                // (editable name/type/units/range) remains, unchanged.
                 return (
                   <div key={index} className="grid grid-cols-12 gap-2 rounded-md border border-border p-3">
                     <div className="col-span-12 sm:col-span-3">
@@ -533,9 +667,11 @@ export function ResultEntryDialog({ order, open, onOpenChange }: ResultEntryDial
               })}
             </div>
           ))}
-          <Button type="button" variant="outline" size="sm" onClick={addRow}>
-            + Add parameter
-          </Button>
+          {!isTemplatedOrder && (
+            <Button type="button" variant="outline" size="sm" onClick={addRow}>
+              + Add parameter
+            </Button>
+          )}
 
           <div className="space-y-2 border-t border-border pt-4">
             <p className="text-sm font-medium">Result Image</p>
