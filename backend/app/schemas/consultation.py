@@ -58,7 +58,14 @@ class SoapNoteSubjectiveObjectiveUpsert(BaseModel):
     Subjective section plus Objective/vitals. Assessment and Plan are
     deliberately absent from this schema; they can only be reached via the
     full `SoapNoteUpsert`/`save_soap` path, gated by
-    `require_consultation_edit_role` (Doctor/Owner/Administrator only)."""
+    `require_consultation_edit_role` (Doctor/Owner/Administrator only).
+
+    Task #6: `extra="forbid"` - any key outside this allowlist (Assessment/Plan,
+    physical_examination, clinical_findings, unknown keys) is rejected with a
+    422 instead of being silently dropped, and physical examination / clinical
+    findings are no longer part of the Receptionist/Nurse scope (Doctor-only)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     chief_complaint: str | None = None
     history_of_present_illness: str | None = None
@@ -77,8 +84,6 @@ class SoapNoteSubjectiveObjectiveUpsert(BaseModel):
     oxygen_saturation: float | None = None
     pain_score: int | None = None
     head_circumference_cm: float | None = None
-    physical_examination: str | None = None
-    clinical_findings: str | None = None
 
 
 class SoapNoteSubjectiveObjectiveRead(SoapNoteSubjectiveObjectiveUpsert):

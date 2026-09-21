@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,14 +17,27 @@ vi.mock("@/lib/api-client", () => ({
 let mockOrders: Order[] = [];
 let mockProcedures: Procedure[] = [];
 let mockReferrals: Referral[] = [];
+const mockCreateOrderMutate = vi.fn();
 vi.mock("@/features/clinical-orders/hooks/use-clinical-orders", () => ({
   useOrdersForConsultation: () => ({ data: mockOrders, isLoading: false }),
   useProceduresForConsultation: () => ({ data: mockProcedures, isLoading: false }),
   useReferralsForConsultation: () => ({ data: mockReferrals, isLoading: false }),
-  useCreateOrder: () => ({ mutate: vi.fn(), isPending: false }),
+  useCreateOrder: () => ({ mutate: mockCreateOrderMutate, isPending: false }),
   useUpdateOrderStatus: () => ({ mutate: vi.fn() }),
   useCreateProcedure: () => ({ mutate: vi.fn(), isPending: false }),
   useCreateReferral: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+// Task #3: the Laboratory catalog picker's authoritative source - see
+// ClinicalOrdersTab's own module note on why this is Laboratory Templates,
+// not the Services catalog.
+const mockLabTemplates = [
+  { id: "tpl-cbc", testName: "CBC", testCategory: "Hematology", specimenType: "Whole Blood", defaultPrice: 350, turnaroundTimeHours: 4, isActive: true, parameters: [], createdAt: "2026-08-19T00:00:00Z" },
+  { id: "tpl-uri", testName: "Urinalysis", testCategory: "Chemistry", specimenType: "Urine", defaultPrice: 100, turnaroundTimeHours: 2, isActive: true, parameters: [], createdAt: "2026-08-19T00:00:00Z" },
+  { id: "tpl-fbs", testName: "FBS", testCategory: "Chemistry", specimenType: "Blood", defaultPrice: 80, turnaroundTimeHours: 2, isActive: true, parameters: [], createdAt: "2026-08-19T00:00:00Z" },
+];
+vi.mock("@/features/laboratory/hooks/use-laboratory", () => ({
+  useLaboratoryTemplates: () => ({ data: mockLabTemplates, isLoading: false }),
 }));
 
 function buildOrder(overrides: Partial<Order> = {}): Order {
@@ -225,5 +238,133 @@ describe("ClinicalOrdersTab - Doctor Workspace Configuration (Lab Requests toggl
     expect(screen.getByRole("option", { name: "Radiology" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Vaccination" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
+  });
+});
+
+// Task #3: Laboratory Requests searchable multi-select, replacing the old
+// single free-text "Item / test name" field for the Laboratory category
+// only. Options come from `useLaboratoryTemplates` (mocked above) - CBC,
+// Urinalysis, FBS - matching the client's exact acceptance scenario.
+describe("ClinicalOrdersTab - Laboratory Requests searchable multi-select (Task #3)", () => {
+  beforeEach(() => {
+    mockCreateOrderMutate.mockReset();
+    mockOrders = [];
+    mockProcedures = [];
+    mockReferrals = [];
+  });
+
+  function labSearchInput() {
+    return screen.getByPlaceholderText("Search laboratory test…");
+  }
+
+  it("1: loads the laboratory catalog (from Laboratory Templates) for the Doctor role and shows it on search", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    expect(screen.getByRole("button", { name: "CBC" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Urinalysis" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "FBS" })).toBeInTheDocument();
+  });
+
+  it("2: search filters the catalog by typed text", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    await user.type(labSearchInput(), "uri");
+    expect(screen.getByRole("button", { name: "Urinalysis" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "CBC" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "FBS" })).not.toBeInTheDocument();
+  });
+
+  it("3: doctor can select one lab item, which appears in the selected list", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    await user.click(screen.getByRole("button", { name: "CBC" }));
+    expect(screen.getByText("CBC")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+  });
+
+  it("4: doctor can select multiple lab items (CBC, Urinalysis, FBS)", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    for (const name of ["CBC", "Urinalysis", "FBS"]) {
+      await user.click(labSearchInput());
+      await user.click(screen.getByRole("button", { name }));
+    }
+    const selectedRows = screen.getAllByRole("button", { name: "Remove" });
+    expect(selectedRows).toHaveLength(3);
+  });
+
+  it("5: the same test cannot be selected twice - it drops out of the searchable options once selected", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    await user.click(screen.getByRole("button", { name: "CBC" }));
+    await user.click(labSearchInput());
+    expect(screen.queryByRole("button", { name: "CBC" })).not.toBeInTheDocument();
+    // Still selected exactly once, not duplicated.
+    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+  });
+
+  it("6: doctor can remove a selected item before submission, and it becomes selectable again", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    await user.click(screen.getByRole("button", { name: "CBC" }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    await user.click(labSearchInput());
+    expect(screen.getByRole("button", { name: "CBC" })).toBeInTheDocument();
+  });
+
+  it("7 & 8: submitting once with CBC + Urinalysis + FBS selected sends ONE createOrder call with three OrderItems, not three separate Orders", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    for (const name of ["CBC", "Urinalysis", "FBS"]) {
+      await user.click(labSearchInput());
+      await user.click(screen.getByRole("button", { name }));
+    }
+    await user.click(screen.getByRole("button", { name: "Create Order" }));
+
+    expect(mockCreateOrderMutate).toHaveBeenCalledTimes(1);
+    const payload = mockCreateOrderMutate.mock.calls[0][0];
+    expect(payload.orderCategory).toBe("Laboratory");
+    expect(payload.items).toEqual([{ itemName: "CBC" }, { itemName: "Urinalysis" }, { itemName: "FBS" }]);
+  });
+
+  it("10: a single laboratory request still works (existing single-item behavior unchanged)", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    await user.click(labSearchInput());
+    await user.click(screen.getByRole("button", { name: "CBC" }));
+    await user.click(screen.getByRole("button", { name: "Create Order" }));
+
+    expect(mockCreateOrderMutate).toHaveBeenCalledTimes(1);
+    expect(mockCreateOrderMutate.mock.calls[0][0].items).toEqual([{ itemName: "CBC" }]);
+  });
+
+  it("11: Create Order is disabled with nothing selected, and Radiology's free-text single-item flow is unaffected", async () => {
+    const user = userEvent.setup();
+    renderTab({ canEdit: true });
+    expect(screen.getByRole("button", { name: "Create Order" })).toBeDisabled();
+
+    await user.selectOptions(screen.getByDisplayValue("Laboratory"), "Radiology");
+    // Laboratory's searchable picker is gone; the old free-text field is back.
+    expect(screen.queryByPlaceholderText("Search laboratory test…")).not.toBeInTheDocument();
+    const itemInput = screen.getByPlaceholderText("e.g. Chest X-Ray");
+    await user.type(itemInput, "Chest X-Ray");
+    await user.click(screen.getByRole("button", { name: "Create Order" }));
+
+    expect(mockCreateOrderMutate).toHaveBeenCalledTimes(1);
+    const payload = mockCreateOrderMutate.mock.calls[0][0];
+    expect(payload.orderCategory).toBe("Radiology");
+    expect(payload.items).toEqual([{ itemName: "Chest X-Ray", examType: null, bodyPart: null, clinicalIndication: null }]);
+  });
+
+  it("12: create controls remain hidden entirely when canEdit is false (existing role/permission gating unchanged)", () => {
+    renderTab({ canEdit: false });
+    expect(screen.queryByPlaceholderText("Search laboratory test…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Order" })).not.toBeInTheDocument();
   });
 });

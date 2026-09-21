@@ -183,6 +183,10 @@ class PatientSearchParams(BaseModel):
     branch_id: UUID | None = None
     gender: Gender | None = None
     status: PatientStatus | None = None
+    # Patient-list YAKAP view (Task #5): filters on the patient's STANDING
+    # `Patient.is_yakap_beneficiary`, never on a per-visit queue classification.
+    # None = all patients, True = YAKAP only, False = non-YAKAP (Regular) only.
+    is_yakap_beneficiary: bool | None = None
     age_min: int | None = Field(default=None, ge=0, le=150)
     age_max: int | None = Field(default=None, ge=0, le=150)
     registered_from: date | None = None

@@ -22,6 +22,7 @@ import {
   FileClock,
   ClipboardCheck,
   Receipt,
+  FileBarChart,
   FlaskConical,
   Syringe,
   Monitor,
@@ -43,6 +44,8 @@ import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
  * nav item is hidden entirely for other roles so a Doctor/Cashier/etc.
  * session never even sees a link to a page it can't use. */
 const ANALYTICS_ROLES = new Set(["Owner", "Administrator"]);
+// Task #4: YAKAP Billing Report - same roles as the backend `require_billing_manage_role` gate.
+const YAKAP_REPORT_ROLES = new Set(["Owner", "Administrator", "Cashier"]);
 
 /** TV Displays / TV Info Panel management is Owner/Administrator/Receptionist
  * - front-desk staff operate the waiting-room screens day to day, unlike
@@ -124,9 +127,17 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
   const pathname = usePathname();
   const { data: currentUser } = useCurrentUser();
   const canSeeAnalytics = Boolean(currentUser && ANALYTICS_ROLES.has(currentUser.role ?? ""));
-  const navItems = canSeeAnalytics
-    ? [...NAV_ITEMS, { label: "Owner Dashboard", href: "/analytics", icon: BarChart3 }]
+  const canSeeYakapReport = Boolean(currentUser && YAKAP_REPORT_ROLES.has(currentUser.role ?? ""));
+  const baseNavItems = canSeeYakapReport
+    ? NAV_ITEMS.flatMap((item) =>
+        item.href === "/billing"
+          ? [item, { label: "YAKAP Billing Report", href: "/billing/yakap-report", icon: FileBarChart }]
+          : [item]
+      )
     : NAV_ITEMS;
+  const navItems = canSeeAnalytics
+    ? [...baseNavItems, { label: "Owner Dashboard", href: "/analytics", icon: BarChart3 }]
+    : baseNavItems;
   // TV Displays / TV Info Panel: Owner/Administrator/Receptionist - see
   // `require_tv_display_manage_role` in the backend for the same gate.
   const canSeeTvDisplays = Boolean(currentUser && TV_DISPLAY_MANAGE_ROLES.has(currentUser.role ?? ""));

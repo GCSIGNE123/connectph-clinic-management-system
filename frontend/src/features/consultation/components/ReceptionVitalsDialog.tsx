@@ -3,12 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { consultationApi } from "@/features/consultation/api/consultation-api";
+import {
+  EMPTY_INTAKE,
+  IntakeSubjectiveFields,
+  IntakeVitalInput,
+  changedIntakePayload,
+  hasAnyIntakeValue,
+  intakeFromNote,
+  type IntakeKey,
+  type IntakeValues,
+} from "@/features/consultation/components/intake-fields";
 import { ApiError } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
-import { cn } from "@/lib/utils";
 
 /**
  * Phase 20 (items 3-5): lets a Receptionist (performing Nurse-type duties)
@@ -20,6 +27,14 @@ import { cn } from "@/lib/utils";
  * in `api/v1/consultations.py`). Assessment/Plan and completing/signing the
  * consultation remain reachable only from the Doctor Workspace consultation
  * page (Doctor/Owner/Administrator only).
+ *
+ * Task #6: the form now covers the full approved pre-entry scope - the seven
+ * Subjective fields (Chief complaint reuses the Task #2 suggestions) plus all
+ * vitals incl. pain score and head circumference - via the fields shared with
+ * `PreQueueVitalsStep`. Physical examination / clinical findings and all
+ * Assessment/Plan fields are Doctor-only and not offered. A save sends ONLY
+ * the fields this user changed since the form loaded, so it cannot overwrite
+ * something the Doctor entered in the meantime.
  *
  * Phase 22: "Save" replaced with "Save and Close" - see
  * `PreQueueVitalsStep` for the sibling pre-queue flow, which mirrors this
@@ -52,14 +67,10 @@ export function ReceptionVitalsDialog({
   const [error, setError] = useState<string | null>(null);
   const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
 
-  const [chiefComplaint, setChiefComplaint] = useState("");
-  const [bloodPressure, setBloodPressure] = useState("");
-  const [pulseRate, setPulseRate] = useState("");
-  const [respiratoryRate, setRespiratoryRate] = useState("");
-  const [temperature, setTemperature] = useState("");
-  const [heightCm, setHeightCm] = useState("");
-  const [weightKg, setWeightKg] = useState("");
-  const [oxygenSaturation, setOxygenSaturation] = useState("");
+  const [values, setValues] = useState<IntakeValues>(EMPTY_INTAKE);
+  // What the server had when the form loaded - the diff base for the save payload.
+  const baselineRef = useRef<IntakeValues>(EMPTY_INTAKE);
+  const setField = (key: IntakeKey, value: string) => setValues((v) => ({ ...v, [key]: value }));
 
   const fieldRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -68,6 +79,8 @@ export function ReceptionVitalsDialog({
       setConsultationId(null);
       setError(null);
       setInvalidFields(new Set());
+      setValues(EMPTY_INTAKE);
+      baselineRef.current = EMPTY_INTAKE;
       return;
     }
     setLoading(true);
@@ -76,16 +89,9 @@ export function ReceptionVitalsDialog({
       .then(async (consultation) => {
         setConsultationId(consultation.id);
         const note = await consultationApi.getSubjectiveObjective(consultation.id);
-        if (note) {
-          setChiefComplaint(note.chiefComplaint ?? "");
-          setBloodPressure(note.bloodPressure ?? "");
-          setPulseRate(note.pulseRate != null ? String(note.pulseRate) : "");
-          setRespiratoryRate(note.respiratoryRate != null ? String(note.respiratoryRate) : "");
-          setTemperature(note.temperature != null ? String(note.temperature) : "");
-          setHeightCm(note.heightCm != null ? String(note.heightCm) : "");
-          setWeightKg(note.weightKg != null ? String(note.weightKg) : "");
-          setOxygenSaturation(note.oxygenSaturation != null ? String(note.oxygenSaturation) : "");
-        }
+        const loaded = intakeFromNote(note);
+        baselineRef.current = loaded;
+        setValues(loaded);
       })
       .catch((err) => {
         // BUG-024: this used to swallow the real backend error (e.g. "Visit
@@ -102,15 +108,10 @@ export function ReceptionVitalsDialog({
 
   const handleSaveAndClose = async () => {
     if (!consultationId) return;
-    // All vitals/chief complaint fields are optional - a receptionist/nurse
-    // may legitimately only have one reading at hand (e.g. just a
-    // temperature). Only reject the save if EVERY field is empty, since an
-    // empty note is not a meaningful save.
-    const hasAnyValue = [
-      chiefComplaint, bloodPressure, pulseRate, respiratoryRate,
-      temperature, heightCm, weightKg, oxygenSaturation,
-    ].some((v) => v.trim() !== "");
-    if (!hasAnyValue) {
+    // Every field is optional - a receptionist/nurse may legitimately only have
+    // one reading or note at hand (e.g. just a temperature). Only reject the save
+    // if EVERY field is empty, since an empty note is not a meaningful save.
+    if (!hasAnyIntakeValue(values)) {
       setError("Enter at least one vital sign or chief complaint before saving.");
       return;
     }
@@ -118,16 +119,7 @@ export function ReceptionVitalsDialog({
     setSaving(true);
     setError(null);
     try {
-      await consultationApi.saveSubjectiveObjective(consultationId, {
-        chiefComplaint: chiefComplaint || null,
-        bloodPressure: bloodPressure || null,
-        pulseRate: pulseRate ? Number(pulseRate) : null,
-        respiratoryRate: respiratoryRate ? Number(respiratoryRate) : null,
-        temperature: temperature ? Number(temperature) : null,
-        heightCm: heightCm ? Number(heightCm) : null,
-        weightKg: weightKg ? Number(weightKg) : null,
-        oxygenSaturation: oxygenSaturation ? Number(oxygenSaturation) : null,
-      });
+      await consultationApi.saveSubjectiveObjective(consultationId, changedIntakePayload(baselineRef.current, values));
       toast({ title: "Vitals saved successfully.", variant: "success", durationMs: 3000 });
       onSaved?.();
       onOpenChange(false);
@@ -154,9 +146,18 @@ export function ReceptionVitalsDialog({
     }
   }
 
+  const vital = (key: IntakeKey) => ({
+    value: values[key],
+    onChange: (v: string) => setField(key, v),
+    invalid: invalidFields.has(key),
+    inputRef: (el: HTMLInputElement | null) => {
+      fieldRefs.current[key] = el;
+    },
+  });
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md" onClose={() => onOpenChange(false)}>
+      <DialogContent className="max-w-2xl" onClose={() => onOpenChange(false)}>
         <div onKeyDown={handleKeyDown}>
           <DialogHeader>
             <DialogTitle>Enter Vitals / Chief Complaint{patientName ? ` — ${patientName}` : ""}</DialogTitle>
@@ -165,87 +166,25 @@ export function ReceptionVitalsDialog({
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Chief complaint</label>
-                <Textarea rows={2} value={chiefComplaint} onChange={(e) => setChiefComplaint(e.target.value)} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Blood pressure</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.bloodPressure = el; }}
-                    value={bloodPressure}
-                    onChange={(e) => setBloodPressure(e.target.value)}
-                    placeholder="120/80"
-                    className={cn(invalidFields.has("bloodPressure") && "border-destructive")}
-                  />
+            <div className="space-y-4">
+              <section aria-label="Subjective / patient history" className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground">Subjective / patient history</h3>
+                <IntakeSubjectiveFields values={values} onChange={setField} />
+              </section>
+              <section aria-label="Vitals" className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground">Vitals</h3>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <IntakeVitalInput label="Blood pressure" placeholder="120/80" type="text" {...vital("bloodPressure")} />
+                  <IntakeVitalInput label="Pulse rate (bpm)" {...vital("pulseRate")} />
+                  <IntakeVitalInput label="Respiratory rate" {...vital("respiratoryRate")} />
+                  <IntakeVitalInput label="Temperature (°C)" step="0.1" {...vital("temperature")} />
+                  <IntakeVitalInput label="Height (cm)" step="0.1" {...vital("heightCm")} />
+                  <IntakeVitalInput label="Weight (kg)" step="0.1" {...vital("weightKg")} />
+                  <IntakeVitalInput label="O2 saturation (%)" step="0.1" {...vital("oxygenSaturation")} />
+                  <IntakeVitalInput label="Pain score (0-10)" min={0} max={10} {...vital("painScore")} />
+                  <IntakeVitalInput label="Head circumference (cm)" step="0.1" {...vital("headCircumferenceCm")} />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Pulse rate (bpm)</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.pulseRate = el; }}
-                    type="number"
-                    value={pulseRate}
-                    onChange={(e) => setPulseRate(e.target.value)}
-                    className={cn(invalidFields.has("pulseRate") && "border-destructive")}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Respiratory rate</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.respiratoryRate = el; }}
-                    type="number"
-                    value={respiratoryRate}
-                    onChange={(e) => setRespiratoryRate(e.target.value)}
-                    className={cn(invalidFields.has("respiratoryRate") && "border-destructive")}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Temperature (°C)</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.temperature = el; }}
-                    type="number"
-                    step="0.1"
-                    value={temperature}
-                    onChange={(e) => setTemperature(e.target.value)}
-                    className={cn(invalidFields.has("temperature") && "border-destructive")}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Height (cm)</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.heightCm = el; }}
-                    type="number"
-                    step="0.1"
-                    value={heightCm}
-                    onChange={(e) => setHeightCm(e.target.value)}
-                    className={cn(invalidFields.has("heightCm") && "border-destructive")}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Weight (kg)</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.weightKg = el; }}
-                    type="number"
-                    step="0.1"
-                    value={weightKg}
-                    onChange={(e) => setWeightKg(e.target.value)}
-                    className={cn(invalidFields.has("weightKg") && "border-destructive")}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">O2 saturation (%)</label>
-                  <Input
-                    ref={(el) => { fieldRefs.current.oxygenSaturation = el; }}
-                    type="number"
-                    step="0.1"
-                    value={oxygenSaturation}
-                    onChange={(e) => setOxygenSaturation(e.target.value)}
-                    className={cn(invalidFields.has("oxygenSaturation") && "border-destructive")}
-                  />
-                </div>
-              </div>
+              </section>
               {error ? <p className="text-xs text-destructive">{error}</p> : null}
             </div>
           )}

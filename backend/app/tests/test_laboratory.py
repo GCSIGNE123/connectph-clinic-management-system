@@ -398,6 +398,232 @@ async def test_two_orders_same_test_name_get_distinct_invoice_items(client: Asyn
     assert len(lab_items) == 2
 
 
+# --- Task #9: late lab charge after the patient already paid ---
+
+
+async def _complete_lab_only(client, lab_id, lab_headers) -> dict:
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/collect", headers=lab_headers)
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/start-processing", headers=lab_headers)
+    resp = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/results", headers=lab_headers,
+        json={"results": [{"parameter_name": "Hemoglobin", "result_type": "Numeric", "numeric_value": 14.0}]},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _pay_consultation_invoice(client, db_session, ctx, amount) -> dict:
+    invoice = await client.post(f"/api/v1/consultations/{ctx['consultation_id']}/invoice", headers=ctx["owner_headers"])
+    assert invoice.status_code == 200, invoice.text
+    invoice_id = invoice.json()["id"]
+    cashier_email, _u = await _make_role_login(db_session, clinic_id=ctx["clinic"].id, role_name="Cashier")
+    token = await _login(client, cashier_email, "TestPass123!")
+    pay = await client.post(
+        f"/api/v1/invoices/{invoice_id}/payments", headers={"Authorization": f"Bearer {token}"},
+        json={"payments": [{"payment_method": "Cash", "amount": amount}]},
+    )
+    assert pay.status_code == 200, pay.text
+    return pay.json()
+
+
+async def test_late_lab_charge_reopens_a_fully_paid_invoice(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """The consultation fee was paid in full BEFORE the doctor-ordered lab
+    finished. The lab charge must still be billed: the invoice reopens as
+    Partially Paid with only the new charge outstanding."""
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_price="350.00")
+    paid = await _pay_consultation_invoice(client, db_session, ctx, 300)
+    assert paid["status"] == "Paid"
+
+    result = await _complete_lab_only(client, ctx["lab_order"]["id"], ctx["lab_headers"])
+    assert result["invoice_item_id"] is not None
+
+    invoice = (await client.get(f"/api/v1/visits/{ctx['visit_id']}/invoice", headers=ctx["owner_headers"])).json()
+    lab_items = [i for i in invoice["items"] if i["item_type"] == "Laboratory"]
+    assert len(lab_items) == 1 and float(lab_items[0]["unit_price"]) == 350.0
+    assert invoice["status"] == "PartiallyPaid"
+    assert float(invoice["amount_paid"]) == 300.0
+    assert float(invoice["balance_due"]) == 350.0
+
+
+async def test_late_lab_charge_is_added_to_a_partially_paid_invoice_once(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session, template_price="350.00")
+    partial = await _pay_consultation_invoice(client, db_session, ctx, 100)
+    assert partial["status"] == "PartiallyPaid"
+
+    lab_id = ctx["lab_order"]["id"]
+    await _complete_lab_only(client, lab_id, ctx["lab_headers"])
+    # Re-submitting results must not add a second line.
+    again = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/results", headers=ctx["lab_headers"],
+        json={"results": [{"parameter_name": "Hemoglobin", "result_type": "Numeric", "numeric_value": 15.0}]},
+    )
+    assert again.status_code == 200, again.text
+
+    invoice = (await client.get(f"/api/v1/visits/{ctx['visit_id']}/invoice", headers=ctx["owner_headers"])).json()
+    assert len([i for i in invoice["items"] if i["item_type"] == "Laboratory"]) == 1
+    assert invoice["status"] == "PartiallyPaid"
+    assert float(invoice["balance_due"]) == 550.0
+
+
+# --- Multiple lab OrderItems in one Order (migration 0044 bug fix) ---
+
+
+async def _setup_multi_item_lab_order(client: AsyncClient, make_clinic_with_owner, db_session, *, prices: dict[str, str]):
+    """Like `_setup_with_lab_order`, but creates one priced template per
+    entry in `prices` and submits ALL of them as items on a single Clinical
+    Order (the exact scenario `create_from_order` used to drop past the
+    first item). The Medical Certificate service is priced at 0 so the
+    auto-created Consultation Fee invoice line does not muddy lab-total
+    assertions."""
+    clinic, _owner, owner_headers = await _owner_headers(client, make_clinic_with_owner)
+    deps = await _setup_queue_deps(client, owner_headers)
+    svc_resp = await client.put(
+        f"/api/v1/services/{deps['service_id']}", headers=owner_headers, json={"default_price": "0.00"}
+    )
+    assert svc_resp.status_code == 200, svc_resp.text
+
+    for test_name, price in prices.items():
+        resp = await client.post(
+            "/api/v1/laboratory/templates", headers=owner_headers,
+            json={
+                "test_name": test_name, "test_category": "General", "specimen_type": "Blood",
+                "default_price": price, "turnaround_time_hours": 2, "parameters": _DEFAULT_TEMPLATE_PARAMETERS,
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+    queue = (await client.post("/api/v1/queues", headers=owner_headers, json=_queue_payload(deps))).json()
+    visit_id = queue["visit_id"]
+
+    doc_email, _doc_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Doctor", doctor_id=deps["doctor_id"])
+    doc_token = await _login(client, doc_email, "TestPass123!")
+    doc_headers = {"Authorization": f"Bearer {doc_token}"}
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/call", headers=doc_headers)
+    await client.post(f"/api/v1/doctor-workspace/visits/{visit_id}/start-consultation", headers=doc_headers)
+    opened = (await client.post(f"/api/v1/visits/{visit_id}/consultation/open", headers=doc_headers)).json()
+    cid = opened["id"]
+
+    order_resp = await client.post(
+        f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+        json={"order_category": "Laboratory", "priority": "Routine", "items": [{"item_name": name} for name in prices]},
+    )
+    assert order_resp.status_code == 200, order_resp.text
+    order = order_resp.json()
+
+    lab_email, _lab_user = await _make_role_login(db_session, clinic_id=clinic.id, role_name="Laboratory")
+    lab_token = await _login(client, lab_email, "TestPass123!")
+    lab_headers = {"Authorization": f"Bearer {lab_token}"}
+
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_orders = [lo for lo in lab_orders if lo["order_id"] == order["id"]]
+
+    return {
+        "clinic": clinic, "owner_headers": owner_headers, "doc_headers": doc_headers, "lab_headers": lab_headers,
+        "visit_id": visit_id, "order": order, "lab_orders": lab_orders,
+    }
+
+
+async def _complete_lab_order(client: AsyncClient, lab_id: str, lab_headers: dict) -> dict:
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/collect", headers=lab_headers)
+    await client.post(f"/api/v1/laboratory/orders/{lab_id}/start-processing", headers=lab_headers)
+    result = await client.post(
+        f"/api/v1/laboratory/orders/{lab_id}/results", headers=lab_headers,
+        json={"results": [{"parameter_name": "Hemoglobin", "result_type": "Numeric", "numeric_value": 14.0}]},
+    )
+    assert result.status_code == 200, result.text
+    return result.json()
+
+
+async def test_multiple_lab_order_items_bill_correctly_with_no_duplicates(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """CBC 200 + Urinalysis 100 + FBS 80, submitted as 3 items on ONE
+    Clinical Order, must all reach the lab worklist and, once each is
+    completed, bill correctly: total 380, one invoice line item per test,
+    no duplicates."""
+    ctx = await _setup_multi_item_lab_order(
+        client, make_clinic_with_owner, db_session, prices={"CBC": "200.00", "Urinalysis": "100.00", "FBS": "80.00"}
+    )
+    assert len(ctx["lab_orders"]) == 3, "No laboratory request may disappear silently"
+
+    for lab_order in ctx["lab_orders"]:
+        completed = await _complete_lab_order(client, lab_order["id"], ctx["lab_headers"])
+        assert completed["invoice_item_id"] is not None
+
+    invoice = (await client.get(f"/api/v1/visits/{ctx['visit_id']}/invoice", headers=ctx["owner_headers"])).json()
+    lab_items = [i for i in invoice["items"] if i["item_type"] == "Laboratory"]
+    assert len(lab_items) == 3, "No duplicate/missing billing items across the 3 fanned-out LaboratoryOrders"
+    assert {i["description"] for i in lab_items} == {"CBC", "Urinalysis", "FBS"}
+    assert sorted(float(i["unit_price"]) for i in lab_items) == [80.0, 100.0, 200.0]
+    assert float(invoice["grand_total"]) == 380.0
+
+
+async def test_partial_completion_of_multi_item_lab_order(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Completing only one of several fanned-out LaboratoryOrders must bill
+    just that one - the still-Requested sibling must not appear on the
+    invoice yet, and completing it afterward must add its own line item
+    without disturbing the first."""
+    ctx = await _setup_multi_item_lab_order(
+        client, make_clinic_with_owner, db_session, prices={"CBC": "200.00", "Urinalysis": "100.00"}
+    )
+    cbc_order = next(lo for lo in ctx["lab_orders"] if lo["test_type"] == "CBC")
+    urinalysis_order = next(lo for lo in ctx["lab_orders"] if lo["test_type"] == "Urinalysis")
+
+    await _complete_lab_order(client, cbc_order["id"], ctx["lab_headers"])
+
+    invoice = (await client.get(f"/api/v1/visits/{ctx['visit_id']}/invoice", headers=ctx["owner_headers"])).json()
+    lab_items = [i for i in invoice["items"] if i["item_type"] == "Laboratory"]
+    assert len(lab_items) == 1
+    assert lab_items[0]["description"] == "CBC"
+
+    still_requested = await client.get(f"/api/v1/laboratory/orders/{urinalysis_order['id']}", headers=ctx["owner_headers"])
+    assert still_requested.json()["status"] == "Requested"
+
+    await _complete_lab_order(client, urinalysis_order["id"], ctx["lab_headers"])
+    invoice = (await client.get(f"/api/v1/visits/{ctx['visit_id']}/invoice", headers=ctx["owner_headers"])).json()
+    lab_items = [i for i in invoice["items"] if i["item_type"] == "Laboratory"]
+    assert len(lab_items) == 2
+    assert {i["description"] for i in lab_items} == {"CBC", "Urinalysis"}
+    assert float(invoice["grand_total"]) == 300.0
+
+
+async def test_historical_laboratory_order_without_order_item_id_remains_readable(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Migration 0044 backward-compatibility: a LaboratoryOrder row created
+    before `order_item_id` existed (simulated here directly at the model
+    level, exactly like the 271 pre-existing Dev-DB rows the migration left
+    untouched) must remain fully readable via the API with `order_item_id`
+    simply null - not an error, not a dropped record."""
+    from app.models.laboratory_order import LaboratoryOrder, LaboratoryOrderStatus
+
+    ctx = await _setup_with_lab_order(client, make_clinic_with_owner, db_session)
+
+    historical = LaboratoryOrder(
+        clinic_id=ctx["clinic"].id,
+        order_id=ctx["order"]["id"],
+        order_item_id=None,
+        branch_id=ctx["deps"]["branch_id"],
+        visit_id=ctx["visit_id"],
+        patient_id=ctx["deps"]["patient_id"],
+        doctor_id=ctx["deps"]["doctor_id"],
+        test_type="Pre-Migration Test",
+        status=LaboratoryOrderStatus.REQUESTED,
+    )
+    db_session.add(historical)
+    await db_session.commit()
+    await db_session.refresh(historical)
+
+    resp = await client.get(f"/api/v1/laboratory/orders/{historical.id}", headers=ctx["owner_headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["order_item_id"] is None
+    assert body["test_type"] == "Pre-Migration Test"
+    assert body["order_id"] == ctx["order"]["id"]
+
+
 # --- Templates ---
 
 async def test_template_crud_administrator_only(client: AsyncClient, make_clinic_with_owner, db_session) -> None:

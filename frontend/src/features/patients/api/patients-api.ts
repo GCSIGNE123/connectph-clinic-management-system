@@ -165,6 +165,7 @@ function toQueryString(params: PatientListParams): string {
   if (params.branchId) search.set("branch_id", params.branchId);
   if (params.gender) search.set("gender", params.gender);
   if (params.status) search.set("status", params.status);
+  if (params.isYakapBeneficiary !== undefined) search.set("is_yakap_beneficiary", String(params.isYakapBeneficiary));
   if (params.ageMin !== undefined) search.set("age_min", String(params.ageMin));
   if (params.ageMax !== undefined) search.set("age_max", String(params.ageMax));
   if (params.registeredFrom) search.set("registered_from", params.registeredFrom);

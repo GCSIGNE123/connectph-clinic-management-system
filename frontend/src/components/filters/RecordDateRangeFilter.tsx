@@ -19,6 +19,9 @@ export interface RecordDateRangeFilterProps {
   /** Initial preset - defaults to "all" (no filter), matching every
    * existing list endpoint's own "omitted = unfiltered" behavior. */
   defaultPreset?: RecordDateRangePreset;
+  /** Resolve "Today/This Week/This Month" in this IANA timezone instead of
+   * UTC (Billing passes the clinic timezone - invoice dates are clinic-local). */
+  timeZone?: string;
 }
 
 /**
@@ -29,7 +32,7 @@ export interface RecordDateRangeFilterProps {
  * custom presets apply immediately on selection - only Custom needs an
  * extra step since it has two fields to fill in first).
  */
-export function RecordDateRangeFilter({ onApply, defaultPreset = "all" }: RecordDateRangeFilterProps) {
+export function RecordDateRangeFilter({ onApply, defaultPreset = "all", timeZone }: RecordDateRangeFilterProps) {
   const [preset, setPreset] = useState<RecordDateRangePreset>(defaultPreset);
   const [customFrom, setCustomFrom] = useState<string | undefined>(undefined);
   const [customTo, setCustomTo] = useState<string | undefined>(undefined);
@@ -41,7 +44,7 @@ export function RecordDateRangeFilter({ onApply, defaultPreset = "all" }: Record
     setCustomTo(next.end);
     setError(null);
     if (next.preset !== "custom") {
-      onApply(resolveRecordDateRange(next.preset));
+      onApply(resolveRecordDateRange(next.preset, undefined, undefined, timeZone));
     }
   }
 

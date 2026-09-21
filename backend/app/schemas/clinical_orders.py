@@ -112,6 +112,7 @@ class PrescriptionItemCreate(BaseModel):
     generic_name: str | None = None
     brand_name: str | None = None
     strength: str | None = None
+    dosage_form: str | None = None
     dosage: str | None = None
     frequency: str | None = None
     duration: str | None = None
@@ -129,6 +130,7 @@ class PrescriptionItemRead(BaseModel):
     generic_name: str | None = None
     brand_name: str | None = None
     strength: str | None = None
+    dosage_form: str | None = None
     dosage: str | None = None
     frequency: str | None = None
     duration: str | None = None

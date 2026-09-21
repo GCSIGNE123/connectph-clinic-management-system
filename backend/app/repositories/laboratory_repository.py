@@ -28,6 +28,7 @@ from app.models.visit import Visit
 def _order_options():
     return (
         selectinload(LaboratoryOrder.order),
+        selectinload(LaboratoryOrder.order_item),
         selectinload(LaboratoryOrder.visit).selectinload(Visit.queue),
         selectinload(LaboratoryOrder.patient),
         selectinload(LaboratoryOrder.doctor),
@@ -47,7 +48,9 @@ class LaboratoryRepository:
         lab_order = LaboratoryOrder(**fields)
         self.session.add(lab_order)
         await self.session.flush()
-        await self.session.refresh(lab_order, attribute_names=["order", "visit", "patient", "doctor", "template", "results", "attachments"])
+        await self.session.refresh(
+            lab_order, attribute_names=["order", "order_item", "visit", "patient", "doctor", "template", "results", "attachments"]
+        )
         if lab_order.visit is not None:
             await self.session.refresh(lab_order.visit, attribute_names=["queue"])
         if lab_order.template is not None:
@@ -75,10 +78,23 @@ class LaboratoryRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def get_by_order_id(self, order_id: UUID, clinic_id: UUID) -> LaboratoryOrder | None:
+    async def get_by_order_item_id(self, order_item_id: UUID, clinic_id: UUID) -> LaboratoryOrder | None:
+        """BUG fix (migration 0044): replaces the old `get_by_order_id` -
+        since a single Order can now produce multiple LaboratoryOrder rows
+        (one per OrderItem), a lookup keyed by `order_id` alone could match
+        more than one row and `scalar_one_or_none()` would raise. Keyed by
+        `order_item_id` instead, which is still guaranteed unique (see the
+        model's own `unique=True` / `ix_laboratory_orders_order_item_id`),
+        so this remains a safe single-row lookup - used by
+        `LaboratoryService.create_from_order`'s per-item idempotency
+        check."""
         stmt = (
             select(LaboratoryOrder)
-            .where(LaboratoryOrder.order_id == order_id, LaboratoryOrder.clinic_id == clinic_id, LaboratoryOrder.is_deleted.is_(False))
+            .where(
+                LaboratoryOrder.order_item_id == order_item_id,
+                LaboratoryOrder.clinic_id == clinic_id,
+                LaboratoryOrder.is_deleted.is_(False),
+            )
             .options(*_order_options())
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()

@@ -86,6 +86,13 @@ class PrescriptionItem(UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, LegacyM
     generic_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     brand_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     strength: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Task #8: e.g. "Tablet", "Capsule", "Suspension" - sourced from the
+    # Medicine catalog's own `dosage_form` when a catalog entry is selected
+    # in the prescription UI, snapshotted here (never re-joined) like every
+    # other field on this row. Nullable/additive (migration 0045) - every
+    # prescription written before this column existed has NULL here and
+    # remains fully valid.
+    dosage_form: Mapped[str | None] = mapped_column(String(50), nullable=True)
     dosage: Mapped[str | None] = mapped_column(String(100), nullable=True)
     frequency: Mapped[str | None] = mapped_column(String(100), nullable=True)
     duration: Mapped[str | None] = mapped_column(String(100), nullable=True)

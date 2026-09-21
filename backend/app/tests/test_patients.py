@@ -346,3 +346,137 @@ async def test_unauthenticated_patient_requests_rejected(client: AsyncClient) ->
     create_response = await client.post("/api/v1/patients", json=_patient_payload())
     assert create_response.status_code == 401
     assert create_response.json()["detail"] == "Not authenticated"
+
+
+# --- Task #5: patient-list YAKAP view / filter ------------------------------
+# The filter is `?is_yakap_beneficiary=true|false` on GET /patients, keyed on
+# the patient's STANDING `Patient.is_yakap_beneficiary` (never on a per-visit
+# `Queue.visit_classification`), applied server-side so search/pagination/total
+# all stay correct.
+
+
+async def _seed_yakap_mix(client: AsyncClient, headers) -> None:
+    """3 YAKAP + 2 Regular patients, all with a shared 'Yk' surname stem so a
+    single search term matches both types."""
+    for i, yakap in enumerate([True, True, True, False, False]):
+        response = await client.post(
+            "/api/v1/patients",
+            headers=headers,
+            json=_patient_payload(
+                first_name=f"Yk{'Y' if yakap else 'R'}{i}",
+                last_name="Filtertest",
+                mobile_number=f"+63918000{i:04d}",
+                email=f"yk{i}@example.com",
+                birth_date=f"199{i}-02-02",
+                is_yakap_beneficiary=yakap,
+            ),
+        )
+        assert response.status_code == 201, response.text
+
+
+async def test_patient_list_all_returns_both_types(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers)
+
+    body = (await client.get("/api/v1/patients", headers=headers)).json()
+    assert body["total"] == 5
+    assert {p["is_yakap_beneficiary"] for p in body["items"]} == {True, False}
+
+
+async def test_patient_list_yakap_filter_returns_only_yakap(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers)
+
+    response = await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "true"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+    assert all(p["is_yakap_beneficiary"] is True for p in body["items"])
+
+
+async def test_patient_list_regular_filter_returns_only_non_yakap(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers)
+
+    response = await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "false"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 2
+    assert all(p["is_yakap_beneficiary"] is False for p in body["items"])
+
+
+async def test_patient_list_yakap_filter_combines_with_search(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers)
+
+    # 'Filtertest' matches all 5; the filter must narrow it by type.
+    both = (await client.get("/api/v1/patients", headers=headers, params={"q": "Filtertest"})).json()
+    assert both["total"] == 5
+    yakap = (
+        await client.get("/api/v1/patients", headers=headers, params={"q": "Filtertest", "is_yakap_beneficiary": "true"})
+    ).json()
+    assert yakap["total"] == 3 and all(p["is_yakap_beneficiary"] for p in yakap["items"])
+    regular = (
+        await client.get("/api/v1/patients", headers=headers, params={"q": "Filtertest", "is_yakap_beneficiary": "false"})
+    ).json()
+    assert regular["total"] == 2 and not any(p["is_yakap_beneficiary"] for p in regular["items"])
+    # A search that only matches a Regular patient returns nothing under the YAKAP filter.
+    none = (
+        await client.get("/api/v1/patients", headers=headers, params={"q": "YkR3", "is_yakap_beneficiary": "true"})
+    ).json()
+    assert none["total"] == 0 and none["items"] == []
+
+
+async def test_patient_list_yakap_filter_paginates_server_side(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers)
+
+    page1 = (
+        await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "true", "limit": 2, "offset": 0})
+    ).json()
+    page2 = (
+        await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "true", "limit": 2, "offset": 2})
+    ).json()
+    # total counts the FILTERED set (not all 5), pages contain only YAKAP rows, no overlap.
+    assert page1["total"] == page2["total"] == 3
+    assert len(page1["items"]) == 2 and len(page2["items"]) == 1
+    ids = [p["id"] for p in page1["items"] + page2["items"]]
+    assert len(set(ids)) == 3
+    assert all(p["is_yakap_beneficiary"] for p in page1["items"] + page2["items"])
+
+
+async def test_patient_list_yakap_filter_empty_result(client: AsyncClient, make_clinic_with_owner) -> None:
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    response = await client.post("/api/v1/patients", headers=headers, json=_patient_payload())  # Regular
+    assert response.status_code == 201
+
+    body = (await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "true"})).json()
+    assert body["total"] == 0 and body["items"] == []
+
+
+async def test_patient_list_yakap_filter_is_tenant_scoped_and_role_gated(
+    client: AsyncClient, make_clinic_with_owner
+) -> None:
+    _clinic_a, headers_a = await _owner_headers(client, make_clinic_with_owner)
+    await _seed_yakap_mix(client, headers_a)
+    _clinic_b, headers_b = await _owner_headers(client, make_clinic_with_owner)
+
+    # Another clinic never sees clinic A's YAKAP patients through the filter.
+    body = (await client.get("/api/v1/patients", headers=headers_b, params={"is_yakap_beneficiary": "true"})).json()
+    assert body["total"] == 0
+    # Unauthenticated access is still rejected with the filter present.
+    assert (await client.get("/api/v1/patients", params={"is_yakap_beneficiary": "true"})).status_code in (401, 403)
+
+
+async def test_patient_edit_can_still_toggle_yakap_flag(client: AsyncClient, make_clinic_with_owner) -> None:
+    """The filter is read-only over the existing field: editing the flag still works
+    and is reflected in the filtered list."""
+    _clinic, headers = await _owner_headers(client, make_clinic_with_owner)
+    created = (await client.post("/api/v1/patients", headers=headers, json=_patient_payload())).json()["patient"]
+    assert created["is_yakap_beneficiary"] is False
+
+    updated = await client.put(f"/api/v1/patients/{created['id']}", headers=headers, json={"is_yakap_beneficiary": True})
+    assert updated.status_code == 200, updated.text
+    body = (await client.get("/api/v1/patients", headers=headers, params={"is_yakap_beneficiary": "true"})).json()
+    assert [p["id"] for p in body["items"]] == [created["id"]]

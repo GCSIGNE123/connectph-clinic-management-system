@@ -25,6 +25,15 @@ import { Role } from "@/types";
 
 const PAGE_SIZE = 10;
 
+/** Patient-list "Patient type" view (Task #5). Maps to the STANDING patient field
+ * `is_yakap_beneficiary` - deliberately NOT the per-visit queue classification. */
+type PatientTypeFilter = "" | "regular" | "yakap";
+const PATIENT_TYPE_TO_YAKAP: Record<PatientTypeFilter, boolean | undefined> = {
+  "": undefined,
+  regular: false,
+  yakap: true,
+};
+
 const MANAGE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist, Role.Doctor, Role.Nurse]);
 const ARCHIVE_ROLES = new Set<Role>([Role.Owner, Role.Administrator, Role.Receptionist]);
 
@@ -42,6 +51,7 @@ export default function PatientsPage() {
   const debouncedSearch = useDebouncedValue(searchInput, 350);
   const [gender, setGender] = useState<PatientGender | "">("");
   const [status, setStatus] = useState<PatientStatus | "">(PatientStatus.Active);
+  const [patientType, setPatientType] = useState<PatientTypeFilter>("");
   const [sort, setSort] = useState<PatientSortOption>("newest");
   const [dateRange, setDateRange] = useState<{ dateFrom?: string; dateTo?: string }>({});
   const [page, setPage] = useState(1);
@@ -57,14 +67,17 @@ export default function PatientsPage() {
       search: debouncedSearch || undefined,
       gender: gender || undefined,
       status: status || undefined,
+      isYakapBeneficiary: PATIENT_TYPE_TO_YAKAP[patientType],
       sort,
       registeredFrom: dateRange.dateFrom,
       registeredTo: dateRange.dateTo,
       page,
       pageSize: PAGE_SIZE,
     }),
-    [debouncedSearch, gender, status, sort, dateRange, page]
+    [debouncedSearch, gender, status, patientType, sort, dateRange, page]
   );
+
+  const patientTypeLabel = patientType === "yakap" ? "YAKAP " : patientType === "regular" ? "Regular " : "";
 
   const { data, isLoading, isFetching, isError, error } = usePatients(params);
   const patients = data?.data ?? [];
@@ -130,6 +143,20 @@ export default function PatientsPage() {
         </Select>
 
         <Select
+          aria-label="Filter by patient type"
+          className="w-full sm:w-44"
+          value={patientType}
+          onChange={(e) => {
+            setPatientType(e.target.value as PatientTypeFilter);
+            setPage(1);
+          }}
+        >
+          <option value="">All Patients</option>
+          <option value="regular">Regular Patients</option>
+          <option value="yakap">YAKAP Patients</option>
+        </Select>
+
+        <Select
           aria-label="Filter by status"
           className="w-full sm:w-40"
           value={status}
@@ -175,8 +202,12 @@ export default function PatientsPage() {
         canArchive={canArchive}
         emptyMessage={
           debouncedSearch
-            ? `No patients match "${debouncedSearch}".`
-            : "No patients have been added to this clinic yet."
+            ? `No ${patientTypeLabel}patients match "${debouncedSearch}".`
+            : patientType === "yakap"
+              ? "No YAKAP patients found."
+              : patientType === "regular"
+                ? "No Regular patients found."
+                : "No patients have been added to this clinic yet."
         }
         onView={(patient) => router.push(`/patients/${patient.id}`)}
         onEdit={(patient) => {

@@ -236,3 +236,90 @@ describe("ConsultationPage - Doctor Workspace Configuration (per-field SOAP chec
     expect(screen.queryByText("Family history")).not.toBeInTheDocument();
   });
 });
+
+// Task #7: patient address in the consultation Patient Summary card. The
+// address was already fully modeled and returned by `usePatient()` before
+// this task - these tests cover only the new display/formatting logic
+// (`formatPatientAddress`), not any new data fetching.
+describe("ConsultationPage - Patient Summary address (Task #7)", () => {
+  beforeEach(() => {
+    useVisit.mockReturnValue({
+      data: { id: "visit-1", visitNumber: "VIS-1", patientId: "patient-1", queueNumber: null, timeline: [] },
+      isLoading: false,
+    });
+    useCurrentUser.mockReturnValue({ data: { role: "Doctor" } });
+    useOpenConsultation.mockReturnValue({ data: buildConsultation(), isLoading: false, isError: false });
+  });
+
+  it("1: a full address (all fields present) displays every component joined together", () => {
+    usePatient.mockReturnValue({
+      data: {
+        id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male",
+        addressLine: "45 Rizal St.", barangay: "Brgy. Punta", city: "Ormoc City", province: "Leyte", zipCode: "6541",
+      },
+    });
+    renderPage();
+    expect(screen.getByText("45 Rizal St., Brgy. Punta, Ormoc City, Leyte, 6541")).toBeInTheDocument();
+  });
+
+  it("2: an address with only some fields present displays cleanly - no stray commas, no missing-field placeholders", () => {
+    usePatient.mockReturnValue({
+      data: {
+        id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male",
+        addressLine: null, barangay: "Brgy. Punta", city: "Ormoc City", province: "Leyte", zipCode: null,
+      },
+    });
+    renderPage();
+    expect(screen.getByText("Brgy. Punta, Ormoc City, Leyte")).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/,\s*,/)).not.toBeInTheDocument();
+  });
+
+  it("3: a missing address (no fields at all) displays gracefully, not blank and not fabricated", () => {
+    usePatient.mockReturnValue({
+      data: { id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male" },
+    });
+    renderPage();
+    const addressLabel = screen.getByText("Address");
+    expect(addressLabel.nextElementSibling).toHaveTextContent("Not recorded");
+  });
+
+  it("4: patient name/age/sex display is unaffected by the new address field", () => {
+    usePatient.mockReturnValue({
+      data: {
+        id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male",
+        addressLine: "45 Rizal St.", barangay: "Brgy. Punta", city: "Ormoc City", province: "Leyte", zipCode: "6541",
+      },
+    });
+    renderPage();
+    expect(screen.getByText("Juan Dela Cruz")).toBeInTheDocument();
+    expect(screen.getByText(/Male/)).toBeInTheDocument();
+  });
+
+  it("5: the rest of the consultation UI (tab switching) remains functional with the address field present", async () => {
+    usePatient.mockReturnValue({
+      data: {
+        id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male",
+        addressLine: "45 Rizal St.", barangay: "Brgy. Punta", city: "Ormoc City", province: "Leyte", zipCode: "6541",
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: "Orders" }));
+    expect(screen.getByTestId("clinical-orders-tab")).toBeInTheDocument();
+  });
+
+  it("6: no new API/data-fetching hook is introduced - the address reuses the same usePatient(patientId) call already on this page", () => {
+    usePatient.mockClear();
+    usePatient.mockReturnValue({
+      data: {
+        id: "patient-1", firstName: "Juan", lastName: "Dela Cruz", birthDate: "1990-01-01", gender: "Male",
+        addressLine: "45 Rizal St.", barangay: "Brgy. Punta", city: "Ormoc City", province: "Leyte", zipCode: "6541",
+      },
+    });
+    renderPage();
+    expect(usePatient).toHaveBeenCalledTimes(1);
+    expect(usePatient).toHaveBeenCalledWith("patient-1");
+  });
+});

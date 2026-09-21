@@ -183,6 +183,12 @@ class LaboratoryOrderRead(BaseModel):
     # None for a walk-in Laboratory queue ticket with no linked Order - see
     # `LaboratoryService.create_from_queue_ticket`.
     order_id: UUID | None = None
+    # Which specific OrderItem this LaboratoryOrder was created from (BUG
+    # fix, migration 0044) - lets a client distinguish multiple
+    # LaboratoryOrders that share the same order_id (a Clinical Order with
+    # several lab OrderItems). None for the same cases order_id is None,
+    # plus any LaboratoryOrder created before this column existed.
+    order_item_id: UUID | None = None
     order_number: str | None = None
     visit_id: UUID
     visit_number: str | None = None

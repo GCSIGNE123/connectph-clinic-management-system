@@ -4,6 +4,28 @@ Human-readable, per-version summary of what shipped. For full detail see [`FEATU
 
 ---
 
+## Post-RC1 — Tasks #1-#9: Canora clinic requests (release candidate change set; DEV-accepted, NOT yet deployed to production)
+
+**As of 2026-09-21.** Nine clinic requests, each accepted on the DEV environment; nothing here has been deployed. Version stays `1.7.0-rc1` (no bump has accompanied any Post-RC1 change set). Detail and live acceptance tables are in [`FEATURES.md`](FEATURES.md); test evidence in [`TESTING.md`](TESTING.md).
+
+- **#1 Multiple lab tests in one order, billed correctly** (BUG-040): a Doctor order with several lab items now creates one laboratory order per item, each billed once. Migration `0044_laboratory_order_item_fk`.
+- **#2 Doctor SOAP autosuggest**: clinic-learned suggestions (plus a few static starters) for the main SOAP fields and ICD-10 code/description. No migration.
+- **#3 Doctor laboratory request multi-select**: one order can include several tests chosen from the laboratory templates (BUG-041).
+- **#4 YAKAP Billing Report**: Billing -> YAKAP Report with weekly/monthly/yearly/custom periods, summary totals, search and CSV export. No migration.
+- **#5 Patient list YAKAP / Regular filter.** No migration.
+- **#6 Receptionist/Nurse SOAP pre-entry**: the 7 Subjective fields and all vitals from the Queue and the pre-queue step, with server-side rejection (422) of Doctor-only fields, Chief complaint suggestions for those roles, and changed-fields-only saves. Fixes BUG-043 (SOAP null-padding that could overwrite stored values on autosave and reception saves). No migration.
+- **#7 Patient address** shown in the Doctor consultation view.
+- **#8 Prescription searchable dropdowns** with a dosage-form field. Migration `0045_prescription_item_dosage_form`.
+- **#9 Billing**: every completed patient gets a bill, newest first, with clinic-timezone (Manila) date filtering.
+
+**Operational notes**
+- **Migrations** `0044` and `0045` (both additive, nullable) apply during deployment via `deploy.cmd`, after its automatic pre-migration backup. Verify production's current Alembic revision is `0043` before deploying.
+- **Task #9 historical backfill is DEV-only and must NOT run on production automatically.** `backend/scripts/task9_billing_backfill.py` (dry-run by default) re-dated invoices and created bills for old completed visits on DEV. Running it on production needs the clinic's explicit confirmation that those historical visits are billable and were not already paid elsewhere (back-filled bills appear as unpaid). The script is not part of the release scope.
+- **Task #1**: the production Urinalysis PUS CELLS/RBC numeric->text change was already completed separately (see `release/`); do not re-run it.
+- DEV test data (medicines from Task #8 testing, SOAP test values, the Pilot clinic's empty SOAP note and duplicate consultation from Task #6) is not seed data and is not migrated.
+- **Known open bugs, unrelated to this change set**: BUG-042 (two stale consultation tests: completion now goes straight to Signed) and BUG-044 (pre-existing check-then-create race in `open_consultation` that can create two consultation rows for one visit).
+
+---
 ## Post-RC1 — Phase 2.7: YAKAP Patient Classification + Receptionist Queue Control
 
 **As of 2026-08-11.** Distinguishes PhilHealth YAKAP beneficiaries from Regular/walk-in patients, and makes the Receptionist the explicit queue controller. `Patient.is_yakap_beneficiary` (standing beneficiary status, patient profile) and `Queue.visit_classification` (per-encounter classification, queue ticket, pre-filled from the patient flag but independently editable) are two deliberately separate, additive fields - not a queue prefix, not a merge of the two concepts. Existing A/B/L/R queue numbering, multi-doctor/multi-department TV Display grouping, and destination-aware announcements are completely untouched. Reception Queue gained a Classification column, an All/YAKAP/Regular filter, and row-level Call/Re-announce actions (reusing the Call/Re-announce mechanism already built for the prior Reception Queue Workflow Improvements release) - the receptionist explicitly chooses who is called next; there is no automatic YAKAP-first prioritization. The public TV Display now shows a YAKAP/REGULAR badge alongside the existing queue number/doctor/room, while continuing to never expose the patient's name (only the pre-existing privacy-safe initials). Live-verified end-to-end with a real Receptionist session: two real patients (one YAKAP, one Regular), two queue tickets with plain sequential numbers, a deliberate out-of-order call (Regular called before YAKAP), correct destination announcements, correct TV Display updates with no patient name exposed, and a clean Re-announce with no duplicate ticket. See `docs/FEATURES.md`/`docs/TESTING.md` for full detail, `docs/DATABASE.md`/`docs/API.md` for schema/endpoint detail. No cloud dependency introduced or exercised - fully functional against the local clinic server alone.

@@ -131,7 +131,7 @@ async def _setup_doctor_and_consultation(client, make_clinic_with_owner, db_sess
 # --- Order creation, per category, with correct numbering ---
 
 async def test_create_laboratory_order(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
-    _clinic, _owner_headers, doc_headers, _deps, _visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+    _clinic, owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
 
     resp = await client.post(
         f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
@@ -142,6 +142,62 @@ async def test_create_laboratory_order(client: AsyncClient, make_clinic_with_own
     assert body["order_category"] == "Laboratory"
     assert body["order_number"].startswith("ORD-")
     assert len(body["items"]) == 2
+
+    # BUG regression (migration 0044 / LaboratoryService.create_from_order):
+    # previously only `order.items[0]` ever became a LaboratoryOrder, so the
+    # second item ("Urinalysis") silently never reached the lab worklist.
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_orders = [lo for lo in lab_orders if lo["order_id"] == body["id"]]
+    assert len(lab_orders) == 2, "Both lab OrderItems must produce their own LaboratoryOrder"
+    assert {lo["test_type"] for lo in lab_orders} == {"CBC", "Urinalysis"}
+
+
+async def test_single_laboratory_item_creates_exactly_one_laboratory_order(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
+    """Existing single-item behavior must remain unchanged by the multi-item fan-out fix."""
+    _clinic, owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    resp = await client.post(
+        f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+        json={"order_category": "Laboratory", "priority": "Routine", "items": [{"item_name": "CBC"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    order = resp.json()
+
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_orders = [lo for lo in lab_orders if lo["order_id"] == order["id"]]
+    assert len(lab_orders) == 1
+    assert lab_orders[0]["test_type"] == "CBC"
+    assert lab_orders[0]["order_item_id"] == order["items"][0]["id"]
+
+
+async def test_three_laboratory_items_create_three_correctly_mapped_laboratory_orders(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """3 lab OrderItems in one Clinical Order -> 3 LaboratoryOrders, each
+    pointing at the exact OrderItem it was created from (migration 0044's
+    `order_item_id`), with no two LaboratoryOrders sharing the same one."""
+    _clinic, owner_headers, doc_headers, _deps, visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    resp = await client.post(
+        f"/api/v1/consultations/{cid}/orders", headers=doc_headers,
+        json={
+            "order_category": "Laboratory", "priority": "Routine",
+            "items": [{"item_name": "CBC"}, {"item_name": "Urinalysis"}, {"item_name": "FBS"}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    order = resp.json()
+    assert len(order["items"]) == 3
+
+    lab_orders = (await client.get(f"/api/v1/laboratory/orders?visit_id={visit_id}", headers=owner_headers)).json()
+    lab_orders = [lo for lo in lab_orders if lo["order_id"] == order["id"]]
+    assert len(lab_orders) == 3, "No laboratory request may disappear silently"
+    assert {lo["test_type"] for lo in lab_orders} == {"CBC", "Urinalysis", "FBS"}
+
+    order_item_ids = {item["id"] for item in order["items"]}
+    lab_order_item_ids = {lo["order_item_id"] for lo in lab_orders}
+    assert lab_order_item_ids == order_item_ids, "Each LaboratoryOrder must map back to the exact OrderItem it came from"
+    assert len(lab_order_item_ids) == 3, "order_item_id must be unique per LaboratoryOrder"
 
 
 async def test_create_radiology_order_with_imaging_fields(client: AsyncClient, make_clinic_with_owner, db_session) -> None:
@@ -233,6 +289,29 @@ async def test_create_prescription_with_many_items(client: AsyncClient, make_cli
     assert len(body["prescription"]["items"]) == 6, "Prescriptions must support unlimited (6+) line items"
     assert body["warnings"] == []
     assert body["prescription"]["prescription_number"].startswith("RX-")
+
+
+async def test_prescription_item_dosage_form_persists_and_is_backward_compatible(
+    client: AsyncClient, make_clinic_with_owner, db_session
+) -> None:
+    """Task #8: `dosage_form` is a new, additive, nullable field on
+    PrescriptionItem (migration 0045) - snapshotting the selected catalog
+    Medicine's dosage form, same convention as medicine/generic_name/
+    brand_name/strength. Confirms it round-trips when supplied, and that a
+    historical-style item omitting it entirely (as every prescription
+    written before this field existed does) still saves and reads back
+    fine with a null value - not a required field, nothing broken."""
+    _clinic, _owner_headers, doc_headers, _deps, _visit_id, cid = await _setup_doctor_and_consultation(client, make_clinic_with_owner, db_session)
+
+    items = [
+        {"medicine": "Amoxicillin", "generic_name": "Amoxicillin", "brand_name": "Amoxil", "strength": "500mg", "dosage_form": "Capsule", "dosage": "1 cap", "frequency": "TID", "duration": "7 days"},
+        {"medicine": "Legacy Free-Text Medicine", "dosage": "1 tab"},  # no dosage_form at all - the pre-Task-#8 shape
+    ]
+    resp = await client.post(f"/api/v1/consultations/{cid}/prescriptions", headers=doc_headers, json={"items": items})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["prescription"]["items"]
+    assert body[0]["dosage_form"] == "Capsule"
+    assert body[1]["dosage_form"] is None
 
 
 async def test_prescription_validation_warnings_do_not_block_save(client: AsyncClient, make_clinic_with_owner, db_session) -> None:

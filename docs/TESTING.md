@@ -1868,6 +1868,231 @@ Verified live, 2026-08-11, against the running dev backend (port 8010) and front
 
 **Summary: all 25 acceptance criteria PASS**, verified via a real Receptionist browser/API session creating real patients and queue tickets end-to-end, with the TV Display screenshot-verified for both classifications and confirmed to never expose patient names. Zero regressions in queue numbering, multi-doctor/multi-department TV Display, Doctor Workspace, or RBAC. BUG-034 (pre-existing login-rate-limit flakiness) not encountered in this pass and left untouched, exactly as before.
 
+## Fix: Multiple Laboratory Requests in One Clinical Order (BUG-040), 2026-09-18
+
+Investigation-first, then implementation-on-approval per the clinic's explicit request: root cause confirmed by tracing `ClinicalOrdersService.create_order()` → `LaboratoryService.create_from_order()` before any code was written. `order.items[0]` was the only item ever converted into a `laboratory_orders` row, and `laboratory_orders.order_id` carried a UNIQUE constraint (migration `0011`) that made a second row for the same Order structurally impossible regardless. Fixed via an additive migration (`0044_laboratory_order_item_fk`) plus a loop over every item in `LaboratoryService.create_from_order` — see `docs/BUGS.md` BUG-040 and `docs/FEATURES.md` for the full writeup.
+
+**Migration applied to the Dev database** (`python -m alembic upgrade head`, `0043_laboratory_countersigning_med_tech` → `0044_laboratory_order_item_fk`) and verified directly via `psql`: `laboratory_orders_order_id_key` (the old UNIQUE constraint) is gone, `order_id`'s FK and its non-unique `ix_laboratory_orders_order_id` index are untouched, `order_item_id` exists with its own unique index (`ix_laboratory_orders_order_item_id`) and FK to `order_items.id`. All 271 pre-existing `laboratory_orders` rows keep `order_item_id IS NULL` — confirmed via a direct `COUNT(*)` query, not assumed.
+
+**New tests** — `backend/app/tests/test_clinical_orders.py`:
+- `test_create_laboratory_order` (extended): a 2-item Laboratory Order now also asserts both items produce their own `LaboratoryOrder` (previously only checked the raw `Order` response's `items` length, which never exercised the bug).
+- `test_single_laboratory_item_creates_exactly_one_laboratory_order` (new): confirms the pre-existing single-item path is byte-for-byte unchanged.
+- `test_three_laboratory_items_create_three_correctly_mapped_laboratory_orders` (new): CBC + Urinalysis + FBS in one Order produces exactly 3 `LaboratoryOrder`s, each `order_item_id` matching the exact `OrderItem` it came from, no two sharing one.
+
+**New tests** — `backend/app/tests/test_laboratory.py`:
+- `test_multiple_lab_order_items_bill_correctly_with_no_duplicates` (new): the client's literal acceptance scenario — CBC ₱200 + Urinalysis ₱100 + FBS ₱80, one Clinical Order, all 3 items completed through the full collect → process → results lifecycle → invoice shows exactly 3 Laboratory line items (₱80/₱100/₱200) and a grand total of ₱380, with the visit's Consultation Fee service deliberately priced at ₱0 (via `PUT /services/{id}`) so the assertion isn't muddied by an unrelated fee.
+- `test_partial_completion_of_multi_item_lab_order` (new): completing only one of two fanned-out `LaboratoryOrder`s bills just that one (the sibling stays `Requested` and off the invoice); completing the second afterward adds its own line item without disturbing the first — confirms partial completion (an existing, unmodified capability) still works correctly now that a visit can have several independent `LaboratoryOrder`s from one Order.
+- `test_historical_laboratory_order_without_order_item_id_remains_readable` (new): directly constructs a `LaboratoryOrder` row via the ORM with `order_item_id=None` (simulating one of the 271 real pre-migration rows) and confirms `GET /laboratory/orders/{id}` still returns it correctly, `order_item_id: null`, nothing fabricated.
+
+**Commands and results** (against the disposable `connectph_clinic_test` database, `DATABASE_URL=postgresql+asyncpg://<user>:<password>@localhost:5433/connectph_clinic_test`):
+
+```bash
+pytest app/tests/test_clinical_orders.py -q   # 20 passed
+pytest app/tests/test_laboratory.py -q        # 165 passed
+pytest app/tests/test_billing.py -q           # 16 passed
+```
+
+**Environment note**: this sandboxed dev environment's pytest runs are intermittently affected by the pre-existing memory-allocation flakiness already logged as BUG-004 — several earlier attempts at a full `test_laboratory.py` run produced spurious mass failures (Python-level `MemoryError`s during interpreter startup, `ast.parse`-based traceback rendering, and once a genuine `DeadlockDetectedError` from two pytest invocations against the test database overlapping in time). None of these were caused by this fix; the numbers above are from a single, isolated run of each file with no concurrent process touching the test database, and were reproduced this way after the Dev Postgres instance (`.devdb`, port 5433) was found down mid-session and restarted via the existing `backend/scripts/start_dev_postgres.ps1` bootstrap script (no data loss — same disposable/dev instance used throughout this project).
+
+**Frontend**: no changes. The Doctor Workspace's Clinical Orders tab already rendered every entry in `order.items` regardless of how many `LaboratoryOrder` rows they produce server-side, and the Laboratory worklist/report UI already renders `LaboratoryOrder`s as independent rows (it had to, since the pre-fix workaround for multiple lab tests was submitting several single-item Orders). The new `order_item_id` field on `LaboratoryOrderRead` is additive and referenced by no frontend file.
+
+**Acceptance criteria — all met**: 1 lab item → 1 `LaboratoryOrder` (unchanged); 2 items → 2; 3 items → 3, each correctly mapped via `order_item_id`; CBC ₱200 + Urinalysis ₱100 + FBS ₱80 = ₱380 with no duplicate billing items; existing invoice-aggregation code untouched; historical (pre-migration) `LaboratoryOrder`s remain readable; partial completion behaves correctly. Not claimed: production deployment or production database changes — none were made.
+
+## Doctor Workspace: Laboratory Requests Searchable Multi-Select (BUG-041 / Task #3), 2026-09-18
+
+Closes the UI gap BUG-040's backend fix left open: the Clinical Orders "Orders" tab could only submit one lab test per click (`items: [item]` hardcoded in `ClinicalOrdersTab.tsx`). See `docs/BUGS.md` BUG-041 and `docs/FEATURES.md` for the full root-cause/design writeup.
+
+**Catalog source decision**: inspected `LaboratoryService._resolve_template_id` (the code that actually links an `OrderItem.item_name` to a priced, worklist-ready `LaboratoryTemplate`) before choosing a source — it exact-matches against `LaboratoryTemplate.test_name` only, never the Services catalog. Sourced the picker from `GET /laboratory/templates?active_only=true` (existing `useLaboratoryTemplates` hook, no new endpoint) instead of `GET /services`, since the latter risks the exact name-drift silent-billing-failure `_resolve_template_id`'s own docstring documents.
+
+**Files changed** (frontend only — no backend changes):
+- `frontend/src/features/clinical-orders/components/ClinicalOrdersTab.tsx` — Laboratory category renders a `SearchableSelect` (reused from `components/ui/searchable-select.tsx`) sourced from `useLaboratoryTemplates(true)`, backed by a `selectedLabItems: string[]` list with per-item Remove controls; already-selected tests are filtered out of the search results (duplicate prevention); `submitOrder` sends `items: selectedLabItems.map(itemName => ({ itemName }))` in one `createOrder.mutate` call; selection clears on success or on switching away from Laboratory. Radiology/Vaccination/Custom keep the original single free-text field unchanged.
+- `frontend/src/features/clinical-orders/components/ClinicalOrdersTab.test.tsx` — 12 new tests plus a new `useLaboratoryTemplates` mock (CBC ₱350 / Urinalysis ₱100 / FBS ₱80, matching Task #1's acceptance scenario):
+  1. laboratory catalog loads for the Doctor role and shows on search
+  2. search filters the catalog by typed text
+  3. selecting one lab item adds it to the selected list
+  4. selecting CBC + Urinalysis + FBS selects all three
+  5. an already-selected test drops out of the searchable options (can't be selected twice)
+  6. removing a selected item works, and it becomes selectable again
+  7 & 8. submitting once with three tests selected calls `createOrder.mutate` exactly once with `items` = all three `OrderItemInput`s (one Order, not three)
+  10. a single-item selection still submits exactly `items: [{ itemName: "CBC" }]` (existing behavior unchanged)
+  11. Create Order is disabled with nothing selected; switching to Radiology restores the old free-text field and its own submit payload shape, untouched
+  12. the create form (including the picker) is hidden entirely when `canEdit` is false, same as before
+
+**Commands and results**:
+```bash
+cd frontend
+npx tsc --noEmit                                                                      # clean
+npx vitest run src/features/clinical-orders/components/ClinicalOrdersTab.test.tsx    # 19 passed (12 new + 7 pre-existing)
+npx eslint src/features/clinical-orders/components/ClinicalOrdersTab.tsx src/features/clinical-orders/components/ClinicalOrdersTab.test.tsx   # clean
+```
+A full `npx vitest run` in this sandboxed dev environment intermittently OOM-crashes a handful of unrelated worker processes (`LoginForm.test.tsx`, `LaboratoryOrderDetailDialog.test.tsx`, `LaboratoryWorklistTable.test.tsx`) — reproduced identically via `git stash` against the pre-Task-#3 codebase, confirming this is the same pre-existing sandbox memory flakiness already logged as BUG-004, not a regression from this change.
+
+**Backend regression** (BUG-040's own tests, re-run standalone against the disposable `connectph_clinic_test` database, since Task #3 made no backend changes): `pytest app/tests/test_laboratory.py::test_multiple_lab_order_items_bill_correctly_with_no_duplicates app/tests/test_laboratory.py::test_partial_completion_of_multi_item_lab_order app/tests/test_clinical_orders.py::test_three_laboratory_items_create_three_correctly_mapped_laboratory_orders -q` → **3 passed**.
+
+**Live DEV UI acceptance** (real browser session, Dr. Maria Santos, no API shortcuts for the create step): opened the same in-progress consultation used for Task #1's acceptance pass, Orders tab → Laboratory → searched and clicked CBC, then Urinalysis, then FBS (each appeared in the selected list with its own Remove control) → clicked Create Order **once**. Result, verified via the API and the real Laboratory worklist page:
+- **One** parent Order (`ORD-20260918-000003`) with **three** `OrderItem`s (CBC, Urinalysis, FBS) — confirmed via `GET /consultations/{id}/orders`.
+- Task #1's existing backend fanned that out into **three** `LaboratoryOrder`s, each with its own `order_item_id` and a correctly auto-resolved `template_id` (no `null` — the exact-match guarantee held) — confirmed via `GET /laboratory/orders?visit_id=...`.
+- All three appeared correctly in the real Laboratory worklist UI under `ORD-20260918-000003`, correct test names, correct doctor/queue/visit.
+- No duplicate `OrderItem`s, no duplicate `LaboratoryOrder`s.
+
+**Acceptance criteria — all met**: laboratory catalog loads for Doctor; search/select/multi-select/remove all work; duplicate selection prevented; one submit produces one Order with N items; Task #1's backend then produces N `LaboratoryOrder`s; existing single-item request still works; non-Laboratory categories unaffected; existing `canEdit` role gating unaffected. Not claimed: production deployment — none made.
+
+## Doctor Workspace: Patient Address in Consultation View (Task #7), 2026-09-18
+
+Clinic request: show the patient's address in the Doctor Workspace consultation view so the doctor doesn't have to navigate away. Investigation confirmed the address fields were already modeled, already on `PatientRead`, and already fetched by the consultation page's existing `usePatient()` call — this was a frontend-only, display-only change. See `docs/FEATURES.md` for the full writeup.
+
+**Files changed** (frontend only — no backend, no API, no schema changes):
+- `frontend/src/app/(dashboard)/visits/[id]/consultation/page.tsx` — added a `formatPatientAddress()` helper (joins `addressLine`/`barangay`/`city`/`province`/`zipCode` with `", "`, dropping blank fields, falling back to "Not recorded") and one new `<SummaryField label="Address" ... />` in the existing Patient Summary card grid, right after Age/Gender.
+- `frontend/src/app/(dashboard)/visits/[id]/consultation/page.test.tsx` — 6 new tests in a new `describe` block:
+  1. a full address (all 5 fields) displays every component joined together
+  2. a partial address displays cleanly with no stray commas or "undefined"/"null"
+  3. a missing address shows "Not recorded", scoped to the Address field specifically (not accidentally matching the pre-existing "Emergency contact: Not recorded" text elsewhere in the same card)
+  4. patient name/age/gender display is unaffected
+  5. tab switching (Orders tab) still works with the address field present
+  6. `usePatient` is still called exactly once, with the same `patientId` as before - confirms no new data-fetching hook was introduced
+
+**Commands and results**:
+```bash
+cd frontend
+npx tsc --noEmit                                                                          # clean
+npx vitest run "src/app/(dashboard)/visits/[id]/consultation/page.test.tsx"              # 14 passed (6 new + 8 pre-existing)
+npx eslint "src/app/(dashboard)/visits/[id]/consultation/page.tsx" "src/app/(dashboard)/visits/[id]/consultation/page.test.tsx"   # clean
+```
+
+**Live DEV acceptance**: logged in as Dr. Maria Santos, opened the in-progress consultation for `TestMultiLab Patient` (a real DEV patient with a known, partially-filled address: `address_line` set, `barangay`/`city`/`province`/`zip_code` blank). Patient Summary card showed **"Address — 123 QA Test Street, Brgy. Test, Test City"** — correctly built from only the non-blank fields, no stray commas, no "null"/"undefined". Patient name ("TestMultiLab Patient"), age/gender ("31 / Male"), and every other existing field rendered unchanged; no duplicate information; no console errors. Checked at desktop width (clean, no overlap) and at 375px mobile width (the address wraps onto multiple lines within its grid cell, exactly like the existing "Current medications"/"Not tracked yet (Prescription module)" field already does at that width - no overflow, no breakage).
+
+**Acceptance criteria — all met**: address visible in the consultation Patient Summary without navigating away; correct formatting for full/partial/missing data; no fabricated placeholders; patient name/age/sex unchanged; responsive; existing role/access gating unaffected (the field renders from data the page already had permission to fetch). Not claimed: production deployment - none made.
+
+## Prescription Searchable Dropdowns / Autocomplete (Task #8), 2026-09-20
+
+See `docs/FEATURES.md` for design. Migration `0045_prescription_item_dosage_form` (additive nullable `prescription_items.dosage_form`) applied to the Dev DB; verified via `psql`.
+
+**Automated**:
+```bash
+cd frontend
+npx tsc --noEmit                                                            # clean
+npx vitest run src/features/clinical-orders/components/PrescriptionTab.test.tsx   # 17 passed (2 pre-existing + 15 new)
+npx eslint <changed prescription files>                                     # clean
+cd ../backend   # DATABASE_URL=...connectph_clinic_test
+pytest app/tests/test_clinical_orders.py -q                                 # 21 passed (1 new: dosage_form round-trip + null for legacy-shaped item)
+```
+New frontend tests cover: page renders; medicine search uses `GET /medicines` (not a static list); filter; select → medicine + strength + form autofill; dosage/frequency/route/duration suggestions; free-text still accepted; Save submits `dosageForm`; multi-row independence; historical item with no form renders cleanly (no "null"/"undefined"); `canEdit=true/false` gating unchanged.
+
+**Live DEV acceptance** (real Doctor UI): medicine search hit the real catalog; Amoxicillin selection auto-filled Strength 500mg / Form Capsule; suggestions used for dosage/frequency/route/duration; a second Paracetamol row stayed independent, with a custom free-text frequency; one Save → `RX-20260920-000001`; after a full reload both items rendered with all values, each stored in its own column; historical free-text prescriptions (form NULL) still read via the API. DEV seed data: 3 medicines (Amoxicillin 500mg Amoxil Capsule, Amoxicillin 250mg Capsule, Paracetamol 500mg Biogesic Tablet) added because the DEV catalog was empty.
+
+**Environment notes**: the DEV stack (Postgres/backend/frontend) and the browser pane repeatedly dropped and were restarted via the existing scripts; a hung Next.js dev process was killed and restarted. The pre-existing sandbox-flaky `LoginForm`/`LaboratoryOrderDetailDialog`/`LaboratoryWorklistTable` frontend tests are unrelated and untouched.
+
+## Billing: every completed patient billed, newest first (Task #9), 2026-09-20
+
+See `docs/FEATURES.md`. **New/updated backend tests** (`test_billing.py`, `test_laboratory.py`): sort by latest completed visit (replaces the old invoice-date-sort test), fallback when the visit has no completion time, id tie-break, paging reaches every invoice, invoice date uses Asia/Manila, manually completing a visit creates exactly one invoice, and late lab charges reopen a Paid and a Partially Paid invoice (once, no duplicate on re-submit).
+
+```bash
+cd backend   # DATABASE_URL=...connectph_clinic_test
+pytest app/tests/test_billing.py -q                                 # 20 passed
+pytest app/tests/test_laboratory.py -k "late_lab_charge or multiple_lab_order_items or two_orders_same_test or billing_sync_idempotent or completing_priced" -q   # 6 passed
+pytest app/tests/test_laboratory_payment_first_queue.py app/tests/test_laboratory_multi_service_pay_first.py app/tests/test_walk_in_laboratory_queue.py -q     # 45 passed (no double charge on walk-in labs)
+cd ../frontend
+npx vitest run src/lib/date-range.test.ts src/components/filters   # 26 passed (1 new: Manila "today")
+npx tsc --noEmit                                                    # clean
+```
+**DEV check** (live API, restarted stack): newest completed patient first (`INV-20260917-000001`, now dated 2026-09-18), `limit=40` returns all 32 of 32; DB shows 0 completed visits without a bill. Only DEV data was changed. The full `test_laboratory.py` file was not re-run in one go (this sandbox is memory-flaky); the billing-related subsets above were.
+
+**Live DEV acceptance (2026-09-20)** - test visit VIS-20260920-000001: completion auto-created `INV-20260920-000009` (PendingPayment, ₱300); ₱100 paid → PartiallyPaid, balance ₱200; CBC ₱350 completed late → HTTP 200, total ₱650, balance ₱550, added once; ₱550 paid → Paid, ₱0; Urinalysis ₱100 completed after full payment → PartiallyPaid, total ₱750, paid ₱650, balance ₱100, no duplicate line. Billing UI: 33 invoices, first page 20 with "Showing 20 of 33", Load more → 33 unique rows in the same order; Today → 1, This Week → 2, This Month → 2 (Manila). Read-only DB check: 0 completed visits without an invoice. Walk-in lab orders share no invoice line; the two repeated-CBC invoices found are earlier multi-lab test data (INV-20260726-000002, INV-20260917-000001), not walk-ins.
+
+**Method / limits**: the workflow steps were API calls (authenticated fetch) from the browser tab, not UI clicks, and no UI automation test covers this flow; the Billing UI was inspected directly, with filter presets selected by setting the select's value. Screenshot capture timed out - none recorded. The full `test_laboratory.py` suite was not run. Clinic-side UI acceptance is still required.
+
+## Patient list: YAKAP / Regular filter (Task #5), 2026-09-20
+
+See `docs/FEATURES.md`. **New backend tests** (`test_patients.py`): all-patients returns both types; YAKAP returns only `is_yakap_beneficiary = true`; Regular returns only `false`; YAKAP/Regular + search; server-side pagination with the filter (filtered `total`, no overlap between pages); empty YAKAP result; tenant isolation and unauthenticated rejection with the filter; editing the flag still works and is reflected in the filtered list. **New frontend tests**: `patients/page.test.tsx` (filter renders, sends true/false/omitted, resets to page 1, keeps the filter with search, YAKAP-specific empty state) and `patients-api.test.ts` (query string incl. `false` not dropped).
+
+```bash
+cd backend   # DATABASE_URL=...connectph_clinic_test  (one pytest process at a time)
+pytest app/tests/test_patients.py -q                       # 19 passed (11 existing + 8 new)
+pytest app/tests/test_queues.py app/tests/test_tv_display.py -q   # 63 passed (queue YAKAP classification unchanged)
+cd ../frontend
+npx vitest run "src/app/(dashboard)/patients" src/features/patients   # 20 passed (10 new)
+npx tsc --noEmit && npx eslint "src/app/(dashboard)/patients" src/features/patients   # clean
+```
+**Live DEV check** (real Patients page, Owner, Demo Clinic, dev backend restarted to load the new parameter): the Patient type filter is present; All Patients = 30, Regular Patients = 30, YAKAP Patients = 0 with the "No YAKAP patients found." empty state; the request carries `is_yakap_beneficiary=true`. The Demo Clinic has no YAKAP patients, so the positive YAKAP list and YAKAP+search were verified by the automated tests, not in the DEV UI, unless noted below. No patient classification was changed.
+
+## YAKAP Billing Report (Task #4), 2026-09-21
+
+See `docs/FEATURES.md`. **Backend** (`test_yakap_billing_report.py`, 24 cases): YAKAP patient included / Regular patient excluded; the four visit-classification cases (YAKAP patient + Regular visit **included**, non-YAKAP + Yakap visit **excluded**, YAKAP + Yakap included, Regular + Regular excluded); pure Weekly/Monthly/Yearly/Custom resolution; a Manila day-rollover test (Sunday 23:30 UTC is already Monday in Manila, so the report week moves); weekly/monthly/yearly inclusion against the clinic's today; custom range inclusive on both ends and 400/422 on bad input; unpaid / partial / paid totals with billed - paid = outstanding; a multi-item invoice (consultation + 3 labs, 2 payments) counted once; several invoices for one patient (patient counted once); pay-first lab (one item, one payment); late lab after payment (total up, earlier payment kept, only the new charge outstanding); voided payments not counted; Cancelled and Draft excluded; empty result; pagination leaves the summary unchanged; search narrows rows and totals; tenant isolation; CSV holds every filtered row and no Regular patient; role gating (Cashier ok, Doctor/Receptionist 403, unauthenticated rejected); the normal invoice list is unaffected. **Frontend** (`yakap-report/page.test.tsx` 12, `yakap-report-api.test.ts` 2): title and explanatory note, period selector and custom range, start-after-end warning, summary values, one detail row per invoice, loading, error, empty (and search-empty), pagination reset, export and print.
+
+```bash
+cd backend   # DATABASE_URL=...connectph_clinic_test  (one pytest process at a time)
+pytest app/tests/test_yakap_billing_report.py -q        # 24 passed
+pytest app/tests/test_billing.py -q                     # 20 passed (existing billing unaffected)
+cd ../frontend
+npx vitest run "src/app/(dashboard)/billing/yakap-report" src/features/yakap-report src/components/layout   # 27 passed
+npx tsc --noEmit && npx eslint "src/app/(dashboard)/billing/yakap-report" src/features/yakap-report src/components/layout/Sidebar.tsx   # clean
+```
+Not re-run for this task: the full backend/frontend suites and `test_laboratory.py`.
+
+**Live DEV acceptance (2026-09-21, real UI, Owner of Pilot Community Clinic)** - completed. The report page loads with the explanatory note; Monthly (09/01-09/30/2026), Weekly (09/21-09/27/2026, Monday-Sunday; Manila today is Mon 09/21), Yearly (01/01-12/31/2026) and Custom (07/01-08/31/2026 and an empty 01/2025 range) all returned 200 and showed the empty state with YAKAP Patients 0, Consultations 0, Laboratory Services 0 and Total Billed / Paid / Outstanding at 0.00 (ranges displayed as `by invoice date (Asia/Manila)`). Read-only cross-check: `PAT-000086` has `is_yakap_beneficiary = true` (the clinic's only YAKAP patient); YAKAP invoices in the clinic = 0; Regular-patient invoices = 5 totalling 2,400.00 (4 on 2026-07-27, 1 on 2026-08-18 - all inside the Custom July-August range), none of which appear in the report or its totals; no other clinic has any invoice for a YAKAP patient and no other clinic's data appeared. No patient or invoice was modified (0 patients and 0 invoices updated in the test window). **Positive live YAKAP billing rows were unavailable in Pilot DEV because no invoice currently belongs to a YAKAP beneficiary**; positive aggregation, the four patient-flag vs visit-classification cases, partial/late-lab/pay-first totals and tenant isolation are covered by the automated tests only. Live data also cannot tell the patient flag apart from the visit classification (the only Yakap-classified ticket, A015, belongs to the YAKAP patient and has no invoice); that rule is proven by the automated cases and by the report code never reading the queue table. Screenshots: default Monthly, Weekly, Yearly and Custom July-August empty states.
+
+## Doctor SOAP autosuggest (Task #2), 2026-09-21
+
+See `docs/FEATURES.md`. **Backend** (`test_soap_suggestions.py`, 52 cases): threshold needs 2 DIFFERENT patients (three consultations by one patient do not qualify; a value split across two clinics never qualifies); case-insensitive duplicates collapse and whitespace is normalized; the 80-character limit; multi-line values skipped; 12 identifying/junk patterns excluded (email, URL, phone-like, patient/visit ids, UUID, test artifacts, long code-like token) while normal phrases and ICD-10 codes are kept; `q` filtering, case-insensitivity and literal `%`/`_`; deterministic ordering (most patients, then A-Z) and the bounded limit; all 8 approved SOAP fields; the 8 long narrative fields, arbitrary columns (`clinic_id`, `hashed_password`, ...) and a missing/empty field are rejected with 422; ICD-10 code/description learned from the clinic's own diagnoses only; tenant isolation; the response holds only `field` and `{text}` (no patient/consultation/visit ids, no counts); role gating (as accepted for Task #2: Doctor/Administrator 200, Receptionist/Cashier/Laboratory 403, unauthenticated rejected - **superseded by Task #6**: Receptionist and Nurse now get 200 for `chief_complaint` only and 403 for every other field, Cashier/Laboratory remain 403, and `test_soap_suggestions.py`'s role test was updated to match); the literal route is not swallowed by `/consultations/{id}`; calling it never changes stored SOAP rows. **Frontend** (31 new): `SuggestionInput.multiline.test.tsx` (10: focus/typing/filtering, selecting fills and stays editable, caret placement, replaces ONLY the current line and preserves the rest, empty new line, custom text and clearing, disabled, single-line unchanged), `SoapSuggestionInput.test.tsx` (6: learned before static, dedupe, fallback, ICD-10 learned-only, read-only makes no request), `soap-vocabulary.test.ts` (5), `consultation/page.soap-suggestions.test.tsx` (8: the 8 fields suggest, the 8 narrative fields stay plain, learned first, custom text, historical values render and stay editable, read-only viewer, Diagnosis tab ICD-10 inputs, Task #7 address unchanged), `consultation-api.soap-suggestions.test.ts` (2).
+
+```bash
+cd backend   # DATABASE_URL=...connectph_clinic_test  (one pytest process at a time)
+pytest app/tests/test_soap_suggestions.py app/tests/test_consultations.py -q   # 60 passed, 2 failed (pre-existing, see below)
+cd ../frontend
+npx vitest run "src/app/(dashboard)/visits" src/features/clinical-orders src/features/consultation   # 142 passed (111 existing + 31 new)
+npx tsc --noEmit && npx eslint src/features/consultation src/features/clinical-orders/components/SuggestionInput.tsx "src/app/(dashboard)/visits/[id]/consultation"   # clean
+```
+**Pre-existing failures, confirmed unrelated**: `test_consultations.py::test_complete_consultation_reflects_onto_visit_status` and `::test_sign_consultation` fail because the committed `ConsultationService.complete_consultation` deliberately takes a consultation straight to **Signed** (see its comment near line 520), while these two tests still expect `Completed` and then a separate sign. `consultation_service.py`, `consultations.py`, the model and `test_consultations.py` are unmodified against HEAD, and Task #2 touches none of the complete/sign code, so the failures are independent of this task (logged as BUG-042). Not run for this task: the full backend/frontend suites and `test_laboratory.py`.
+
+**Live DEV acceptance (2026-09-21, real Doctor UI, Maria Santos, CONNECT.PH Demo Clinic; dev backend restarted to load the new route)** - completed A-J, all PASS. Test record: visit `VIS-20260917-000001` (the TestMultiLab test visit, In Consultation); no clinical data was fabricated and no diagnosis rows were created.
+
+| Step | Result |
+|---|---|
+| A. Open consultation | PASS - workspace loads, "open for editing"; the Task #7 Address block ("123 QA Test Street, Brgy. Test, Test City") is present after Age / Gender, unchanged. |
+| B. Field behaviour | PASS - the 8 approved fields carry the suggestion control; History of present illness, Past medical history, Family history, Social history, Review of systems, Additional subjective notes, Assessment notes and Referral notes are plain textareas. |
+| C. Learned suggestions | PASS - focusing Chief complaint showed the Demo Clinic's own learned "cough" (3 patients) and "Fever and cough for 3 days" (2) first, then the static starters; no patient identity or raw data shown. |
+| D. Select + edit | PASS - selected "cough" (caret at the end, focus kept), typed on to "cough and colds x2 days (DEV test)"; the field never locked. |
+| E. Custom text | PASS - "Zzq custom DEV acceptance finding" typed in Clinical findings with no suggestion. |
+| F. Multiline | PASS - three-line Treatment plan, caret on line 2 ("hydra"): the list filtered to that line only; picking "Rest and hydration" replaced only line 2, lines 1 and 3 were unchanged, the caret sat at the end of the insertion, and typing continued normally. |
+| G. ICD-10 | PASS - the Diagnosis tab has ICD-10 code and a new ICD-10 description input; both offered the learned values (J06.9 and "Acute upper respiratory infection, unspecified", no static catalog), were selectable, and stayed freely editable (custom "Z00.0" accepted). "Add Diagnosis" was not clicked, so no diagnosis was created. |
+| H. Save / reload | PASS - Save Progress returned 200; after a full reload the three values were exactly as typed, the other 13 fields stayed empty and the vitals (120/80, 75, 18, 36.8) were intact (read-only DB check agreed): the merge-save is unchanged. |
+| I. Historical data | PASS - signed `VIS-20260806-000001` renders Chief complaint, Clinical impression, Treatment plan, Patient instructions and Assessment notes correctly (read-only by design, no "null" text); in-progress `VIS-20260806-000005` renders its stored values ("regression verification test", "test assessment", "test plan"), all 16 SOAP fields are enabled and Save Progress is present. Not typed into, to avoid altering a historical record. |
+| J. Responsive + console | PASS - at 375px width the SOAP tab is a single column with no horizontal scroll; the suggestion list stayed inside the viewport (41-334px of 375) and only overlaid the next field. Browser console: only React DevTools info and Fast Refresh logs, no errors or warnings. |
+
+**Security / tenant (read-only)**: the API returned exactly the Demo Clinic's two learnable chief-complaint values while other clinics have their own (no leakage); the response body is only `{"field", "suggestions":[{"text"}]}` (no patient/consultation/visit identifiers or counts); `history_of_present_illness` is rejected with 422; the suggestion code contains no queue-table reference.
+
+**Cleanup**: my four test values (Chief complaint, Clinical findings, Treatment plan, and a stray "x" that autosave had written to Patient instructions) were cleared through the form and saved; only those four fields changed - they now hold an empty string instead of NULL - and every other field and the vitals are as before. **Tool notes**: the browser tool's keyboard keys (Backspace/Delete/Up) do not edit text, so newlines and caret placement were done with typed text and mouse clicks and clearing used the form-field control; this affects the test tooling only. The Signed consultation page also shows "You have this visit open for editing", an existing quirk unrelated to Task #2. **BUG-042** (the two stale complete/sign tests) is unrelated to Task #2 and unchanged.
+
+## Receptionist/Nurse SOAP pre-entry (Task #6), 2026-09-21
+
+See `docs/FEATURES.md` (feature and live acceptance table) and `docs/BUGS.md` (BUG-043 null-padding, fixed; BUG-044 duplicate consultations, pre-existing and open).
+
+```bash
+cd backend   # DATABASE_URL must name connectph_clinic_test (conftest refuses anything else); one pytest process at a time
+pytest app/tests/test_consultations.py app/tests/test_reception_soap.py app/tests/test_soap_suggestions.py -q   # 121 passed, 2 failed (BUG-042, pre-existing)
+cd ../frontend
+npx vitest run src/features/consultation src/features/queue "src/app/(dashboard)/visits" "src/app/(dashboard)/queue" src/features/clinical-orders   # 30 files, 253 tests passed
+npx tsc --noEmit   # no errors
+npx eslint src/features/consultation src/features/queue src/features/clinical-orders "src/app/(dashboard)/visits" "src/app/(dashboard)/queue"   # no output (clean)
+```
+
+**Actual results (final run, 2026-09-21):**
+- Backend, the three files above (123 tests: `test_reception_soap.py` 61, `test_soap_suggestions.py` 52, `test_consultations.py` 10): **121 passed, 2 failed** in 19m30s. The 2 failures are the BUG-042 tests, `test_consultations.py::test_complete_consultation_reflects_onto_visit_status` and `::test_sign_consultation` (pre-existing, unrelated, left unchanged). `test_reception_soap.py` on its own passed 61/61 earlier in the task.
+- Earlier broader backend regression started during the task (output `/tmp/regress6.txt`, 138 tests, 11m34s): 136 passed, 2 failed - the same two BUG-042 tests. I did not record which files that command listed, so I re-ran the three files above as the definitive result; no backend source file changed after that earlier run. A wider backend suite was NOT re-run in this final pass, so this document does not claim the whole backend suite passes.
+- Frontend: 30 test files / 253 tests passed. This includes `use-soap-autosave.test.tsx` (15), `consultation-api.payload.test.ts` (5), `ReceptionVitalsDialog.test.tsx` (21), `PreQueueVitalsStep.test.tsx` (8). `tsc` and ESLint (scoped to the directories above) are clean.
+- Mistake worth knowing: a first re-run used the `.env` database URL (`connectph_clinic`, the DEV database) by accident. `conftest.py`'s guard rejected it (every test errored at setup) and I stopped the process; a read-only check afterwards showed DEV data intact (Demo visit values unchanged, table counts normal). Always derive the `_test` URL first.
+
+- **BUG-043 regression re-check (release audit, 2026-09-21):** `consultation-api.payload.test.ts` (5) + `use-soap-autosave.test.tsx` (15) re-run on their own: **2 files, 20 tests passed**. These are part of the 253 above, not additional tests; no other suite was re-run for the audit, and no full-repository run is claimed.
+
+**What the tests cover**: backend - Receptionist/Nurse can read/write only the 16 approved S/O fields; 422 (`extra_forbidden`) for each Doctor-only key and unknown keys; partial merge leaves every other field intact; Cashier/Laboratory/other roles 403; full `/soap`, complete, sign 403 for Receptionist/Nurse; cross-clinic 404; signed consultation 400; suggestions 200 for `chief_complaint` and 403 for Doctor-only fields (422 for an unsupported field) for Receptionist/Nurse. Frontend - `fromSoapNoteInput` never emits `null` for unsupplied fields (regression for BUG-043); the Doctor autosave sends only changed fields, updates its baseline after a successful save, ignores a stale response for another consultation, and never sends the whole form; dialogs/pre-queue step send only changed fields, offer no Doctor-only fields, keep the required-vitals gate and BMI, and reuse the Task #2 suggestions for Chief complaint only.
+
+**Final DEV cleanup (2026-09-21, DEV database only: `connectph_clinic` on localhost:5433, `DEPLOYMENT_MODE` unset = local):**
+- **Pre-queue test artifact `VIS-20260921-000001` (Demo Clinic) - REMOVED.** Read-only dependency check first: still `DraftVitals`, no queue ticket, no invoice, laboratory order, order, prescription, appointment, procedure, referral, certificate, vaccination or lock; only its own 2 consultations (`Draft` and `InProgress`, created 5 ms apart, the BUG-044 race again), 1 SOAP note (chief complaint "DEV6 prequeue test", the test vitals), 4 timeline events, and 2 pending Cloud Backup `sync_jobs` rows (visit create, soap_note create; the queue holds 2,600+ pending jobs and is not being pushed anywhere in local mode). The app has no delete endpoint (`Visit.is_deleted` exists but nothing exposes it), so a scripted, exact-ID direct DEV cleanup was used: one transaction, guarded by assertions (DEV database, exact visit id, status, no queue, exact child id sets, no other foreign-key references, exact per-statement row counts and a table-count delta check that rolls back on any mismatch). A dry run came first; the removed rows were captured to a local backup file (outside the repo). Deleted: 2 `sync_jobs`, 1 `soap_notes`, 4 `visit_timeline_events`, 2 `consultations`, 1 `visits`. Audit-log rows were deliberately left (append-only trail, no foreign key); the shared test patient was not touched.
+- **Verification afterwards (read-only):** the visit no longer exists; nothing remains by id in visits/consultations/soap_notes/visit_timeline_events/sync_jobs; the table-count delta was exactly visits -1, consultations -2, soap_notes -1, timeline events -4, sync_jobs -2 and 0 for audit_logs, patients, queues, invoices; the newest Demo visit is back to `VIS-20260920-000005`; `VIS-20260917-000001` is identical to its post-cleanup state (temporary values null, vitals/BMI intact).
+- **Remaining DEV-only artifact:** the empty SOAP note row on Pilot `VIS-20260811-000025` (and that visit's duplicate `Draft` consultation from BUG-044). The reception dialog cannot save a completely empty form and there is no supported deletion, so it is left as a documented cleanup limitation; it is harmless (all fields null).
+
+**Live DEV acceptance**: see the table in FEATURES.md (A-H/J passed; Receptionist, Nurse, Doctor handoff, pre-queue, security, autosave payload, 375px, console). Manual two-session race reproduction was not practical; dedicated autosave tests cover the race scenario.
+
 ## Running everything before opening a PR
 
 ```bash

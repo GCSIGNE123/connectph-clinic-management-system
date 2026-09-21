@@ -1269,6 +1269,21 @@ Role gating unchanged: classification is set/edited under the same `QUEUE_MANAGE
 
 ---
 
+### Post-RC1 - Tasks #1-#9 (DEV-accepted release candidate change set)
+
+Documented from the actual routers and schemas. Not yet deployed to production.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/consultations/soap-suggestions` | Learned suggestions for the SOAP/diagnosis fields (Task #2, extended by Task #6). Query: `field` (required; one of `chief_complaint`, `physical_examination`, `clinical_findings`, `clinical_impression`, `differential_diagnosis`, `treatment_plan`, `patient_instructions`, `followup_recommendation`, `icd10_code`, `icd10_description`), `q` (optional, max 80 chars), `limit` (1-20, default 10). Response `{"field": "...", "suggestions": [{"text": "..."}]}` - suggestion text only, never a patient/consultation/visit id or a count. Clinic-scoped and read-only. **Roles**: Owner, Administrator and Doctor may request any allowlisted field; Receptionist and Nurse may request ONLY `chief_complaint` (`403` for every other field); other roles `403`. An unsupported `field` is `422` (checked before the role check). A phrase is suggested only when the clinic has used it for at least 2 different patients; multi-line, over-long and identifying/test-looking values are excluded. |
+| `GET` | `/billing/reports/yakap` | YAKAP Billing Report (Task #4), read-only, clinic-scoped. Query: `period` (`weekly`, `monthly`, `yearly` or `custom`; default `monthly`), `start` / `end` (dates; both required when `period=custom`, and `start` must not be after `end`, otherwise `400`), `q` (patient name/number, invoice or visit number), `limit` (1-100, default 20), `offset` (>= 0). Response: `period`, `date_from`, `date_to`, `summary` (`total_yakap_patients`, `total_invoices`, `total_consultations`, `total_laboratory_services`, `total_billed`, `total_paid`, `total_outstanding` - aggregated over the whole filtered population, not one page), `items` (one row per invoice: `invoice_id`, `invoice_number`, `invoice_date`, patient and visit ids/numbers, `consultation_count`, `laboratory_count`, `services`, `total_billed`, `paid`, `outstanding`, `status`), `total`, `limit`, `offset`. **Roles**: Owner, Administrator, Cashier (`require_billing_manage_role`). |
+| `GET` | `/billing/reports/yakap/export` | CSV export of the same filtered population (`period`, `start`, `end`, `q`; no paging), built with the existing analytics CSV exporter. Capped at 10,000 rows. `Content-Type: text/csv`, `Content-Disposition: attachment; filename="yakap_billing_<from>_<to>.csv"`. Same roles and `400` conditions as the report. |
+| `PUT` | `/consultations/{consultation_id}/soap/subjective-objective` | **Task #6 tightening** of the Phase 20 endpoint above. Accepts only these keys: `chief_complaint`, `history_of_present_illness`, `past_medical_history`, `family_history`, `social_history`, `review_of_systems`, `subjective_notes`, `blood_pressure`, `pulse_rate`, `respiratory_rate`, `temperature`, `height_cm`, `weight_kg`, `oxygen_saturation`, `pain_score`, `head_circumference_cm`. **Any other key - `physical_examination`, `clinical_findings`, every Assessment/Plan field, ICD-10 fields, or an unknown key - returns `422` (`extra_forbidden`); nothing is silently ignored.** `physical_examination` and `clinical_findings` are now Doctor-only. Merge-write: only the submitted keys are written and an explicit `null` clears that field (unsubmitted fields are never touched); BMI is recomputed server-side; a signed consultation returns `400`. Roles: Owner, Administrator, Doctor, Receptionist, Nurse. |
+| `GET` | `/consultations/{consultation_id}/soap/subjective-objective` | Same 16 fields only (read). Same role gate. |
+| `GET` | `/patients` | Task #5: optional `is_yakap_beneficiary` (bool) filter. |
+
+Additive response/request fields from the same change set: `LaboratoryOrderRead.order_item_id` (Task #1, nullable) and `dosage_form` on prescription items (Task #8, nullable); they need migrations `0044` and `0045`. No other public API shape changed.
+
 ## Versioning
 
 All routes are prefixed `/api/v1`. Breaking changes will be introduced under a new prefix (`/api/v2`) rather than mutating `v1` in place; additive/backwards-compatible changes (new optional fields, new endpoints) may land in `v1` directly.

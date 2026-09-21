@@ -43,7 +43,7 @@ function toReferral(raw: any): Referral {
 function toPrescriptionItem(raw: any) {
   return {
     id: raw.id, medicine: raw.medicine, genericName: raw.generic_name, brandName: raw.brand_name,
-    strength: raw.strength, dosage: raw.dosage, frequency: raw.frequency, duration: raw.duration,
+    strength: raw.strength, dosageForm: raw.dosage_form, dosage: raw.dosage, frequency: raw.frequency, duration: raw.duration,
     quantity: raw.quantity, route: raw.route, instructions: raw.instructions,
     substitutionAllowed: raw.substitution_allowed,
   };
@@ -69,7 +69,7 @@ function fromOrderItemInput(item: OrderItemInput) {
 function fromPrescriptionItemInput(item: PrescriptionItemInput) {
   return {
     medicine: item.medicine, generic_name: item.genericName ?? null, brand_name: item.brandName ?? null,
-    strength: item.strength ?? null, dosage: item.dosage ?? null, frequency: item.frequency ?? null,
+    strength: item.strength ?? null, dosage_form: item.dosageForm ?? null, dosage: item.dosage ?? null, frequency: item.frequency ?? null,
     duration: item.duration ?? null, quantity: item.quantity ?? null, route: item.route ?? null,
     instructions: item.instructions ?? null, substitution_allowed: item.substitutionAllowed,
   };

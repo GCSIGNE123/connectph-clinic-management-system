@@ -10,28 +10,56 @@ const AUTOSAVE_INTERVAL_MS = 30_000;
 
 export type AutosaveStatus = "idle" | "saving" | "saved" | "unsaved" | "error";
 
+type SoapValues = Partial<SoapNoteInput>;
+
+/** `undefined`, `null` and "" all mean "empty" - a field that was empty and is empty again is unchanged. */
+const normalize = (v: unknown) => (v === undefined || v === "" ? null : v);
+
 /**
- * Real dirty-tracking autosave: only calls the API when the current form
- * values differ from the last-saved snapshot (avoids firing an empty PUT
- * every 30s when the doctor is reading, not typing). Also warns on
+ * Task #6: the fields the Doctor actually changed relative to `baseline` (the values loaded
+ * from - or last saved to - the server). Only these are ever sent, so an autosave can never
+ * overwrite a field somebody else (Reception/Nurse pre-entry) saved in the meantime. A field
+ * that was edited and then put back to its baseline value is NOT reported. A value cleared to
+ * "" from a non-empty baseline IS reported (and sent as-is, so it clears the field).
+ */
+export function changedSoapFields(baseline: SoapValues, current: SoapValues): SoapValues {
+  const changed: Record<string, unknown> = {};
+  for (const key of Object.keys(current) as (keyof SoapNoteInput)[]) {
+    if (normalize(baseline[key]) !== normalize(current[key])) changed[key] = current[key];
+  }
+  return changed as SoapValues;
+}
+
+/**
+ * Real dirty-tracking autosave: only calls the API when a field differs from the baseline
+ * (avoids firing an empty PUT every 30s when the doctor is reading, not typing), and - since
+ * Task #6 - sends ONLY the changed fields, never a full snapshot. Also warns on
  * `beforeunload` only while genuinely dirty, not unconditionally.
  */
 export function useSoapAutosave(consultationId: string | null, canEdit: boolean) {
   const queryClient = useQueryClient();
-  const [values, setValuesState] = useState<Partial<SoapNoteInput>>({});
+  const [values, setValuesState] = useState<SoapValues>({});
   const [status, setStatus] = useState<AutosaveStatus>("idle");
-  const lastSavedRef = useRef<string>("{}");
-  const valuesRef = useRef<Partial<SoapNoteInput>>({});
+  // Values as loaded from the server / as last successfully saved - the diff base.
+  const baselineRef = useRef<SoapValues>({});
+  const valuesRef = useRef<SoapValues>({});
+  const consultationIdRef = useRef<string | null>(consultationId);
+  consultationIdRef.current = consultationId;
+
+  const hasChanges = () => Object.keys(changedSoapFields(baselineRef.current, valuesRef.current)).length > 0;
 
   const mutation = useMutation({
-    mutationFn: (payload: Partial<SoapNoteInput>) => {
+    mutationFn: ({ payload }: { payload: SoapValues; forConsultation: string | null }) => {
       if (!consultationId) throw new Error("No consultation open");
       return consultationApi.saveSoap(consultationId, payload);
     },
     onMutate: () => setStatus("saving"),
-    onSuccess: (consultation) => {
-      lastSavedRef.current = JSON.stringify(valuesRef.current);
-      setStatus("saved");
+    onSuccess: (consultation, { payload, forConsultation }) => {
+      // A save that finishes after the doctor switched consultations must not touch the new baseline.
+      if (forConsultation === consultationIdRef.current) {
+        baselineRef.current = { ...baselineRef.current, ...payload };
+        setStatus(hasChanges() ? "unsaved" : "saved");
+      }
       if (consultationId) {
         queryClient.setQueryData(consultationKeys.detail(consultationId), consultation);
         // The consultation page reads from `consultationKeys.forVisit(visitId)`
@@ -43,25 +71,27 @@ export function useSoapAutosave(consultationId: string | null, canEdit: boolean)
     onError: () => setStatus("error"),
   });
 
-  const setValues = useCallback((next: Partial<SoapNoteInput>) => {
+  const setValues = useCallback((next: SoapValues) => {
     valuesRef.current = next;
     setValuesState(next);
-    setStatus(JSON.stringify(next) === lastSavedRef.current ? "saved" : "unsaved");
+    setStatus(Object.keys(changedSoapFields(baselineRef.current, next)).length > 0 ? "unsaved" : "saved");
   }, []);
 
-  const initialize = useCallback((initial: Partial<SoapNoteInput>) => {
+  /** (Re)load from the server: also resets the baseline, e.g. when the consultation changes. */
+  const initialize = useCallback((initial: SoapValues) => {
     valuesRef.current = initial;
-    lastSavedRef.current = JSON.stringify(initial);
+    baselineRef.current = { ...initial };
     setValuesState(initial);
     setStatus("idle");
   }, []);
 
-  const isDirty = JSON.stringify(valuesRef.current) !== lastSavedRef.current;
+  const isDirty = hasChanges();
 
   const saveNow = useCallback(() => {
     if (!canEdit || !consultationId) return;
-    if (JSON.stringify(valuesRef.current) === lastSavedRef.current) return;
-    mutation.mutate(valuesRef.current);
+    const payload = changedSoapFields(baselineRef.current, valuesRef.current);
+    if (Object.keys(payload).length === 0) return;
+    mutation.mutate({ payload, forConsultation: consultationId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canEdit, consultationId]);
 
@@ -76,7 +106,7 @@ export function useSoapAutosave(consultationId: string | null, canEdit: boolean)
   useEffect(() => {
     if (!canEdit) return;
     const handler = (event: BeforeUnloadEvent) => {
-      if (JSON.stringify(valuesRef.current) !== lastSavedRef.current) {
+      if (hasChanges()) {
         event.preventDefault();
         event.returnValue = "";
       }

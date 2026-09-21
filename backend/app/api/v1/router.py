@@ -39,7 +39,9 @@ from app.api.v1 import (
     users,
     vaccinations,
     visits,
+    soap_suggestions,
     ws_queues,
+    yakap_billing_report,
 )
 
 api_router = APIRouter()
@@ -83,6 +85,8 @@ api_router.include_router(visits.router)
 api_router.include_router(doctor_workspace.router)
 
 # Phase 8: Clinical Consultation / SOAP
+# Task #2: literal /consultations/soap-suggestions must be registered before the /consultations/{id} routes.
+api_router.include_router(soap_suggestions.router)
 api_router.include_router(consultations.router)
 
 # Phase 9: Clinical Orders & Prescriptions
@@ -95,6 +99,7 @@ api_router.include_router(medical_certificates.router)
 # before Appointments, but placed at 12 in the final sequence to make room
 # for Phase 10 Laboratory and Phase 11 Appointments per explicit user instruction)
 api_router.include_router(billing.router)
+api_router.include_router(yakap_billing_report.router)
 
 # Phase 10: Laboratory Management
 api_router.include_router(laboratory.router)

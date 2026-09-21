@@ -86,7 +86,7 @@ SUBJECTIVE_OBJECTIVE_FIELDS = [
     "chief_complaint", "history_of_present_illness", "past_medical_history", "family_history",
     "social_history", "review_of_systems", "subjective_notes",
     "blood_pressure", "pulse_rate", "respiratory_rate", "temperature", "height_cm", "weight_kg",
-    "oxygen_saturation", "pain_score", "head_circumference_cm", "physical_examination", "clinical_findings",
+    "oxygen_saturation", "pain_score", "head_circumference_cm",
 ]
 
 

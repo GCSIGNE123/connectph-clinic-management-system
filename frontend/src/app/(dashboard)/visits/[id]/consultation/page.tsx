@@ -26,6 +26,8 @@ import { useAttachments, useUploadAttachment } from "@/features/consultation/hoo
 import { AttachmentList } from "@/features/consultation/components/AttachmentList";
 import type { AttachmentType, DiagnosisStatus, DiagnosisType, SoapNoteInput } from "@/features/consultation/types";
 import { computeBmi } from "@/features/consultation/bmi";
+import { SoapSuggestionInput } from "@/features/consultation/components/SoapSuggestionInput";
+import type { SoapSuggestField } from "@/features/consultation/lib/soap-vocabulary";
 import { ClinicalOrdersTab } from "@/features/clinical-orders/components/ClinicalOrdersTab";
 import { PrescriptionTab } from "@/features/clinical-orders/components/PrescriptionTab";
 import { MedicalCertificateTab } from "@/features/clinical-orders/components/MedicalCertificateTab";
@@ -125,7 +127,8 @@ export default function ConsultationPage() {
     status: DiagnosisStatus;
     notes: string;
     icd10Code: string;
-  }>({ diagnosisType: "Primary", status: "Working", notes: "", icd10Code: "" });
+    icd10Description: string;
+  }>({ diagnosisType: "Primary", status: "Working", notes: "", icd10Code: "", icd10Description: "" });
 
   const liveBmi = useMemo(() => computeBmi(autosave.values.heightCm, autosave.values.weightKg), [autosave.values.heightCm, autosave.values.weightKg]);
 
@@ -213,6 +216,7 @@ export default function ConsultationPage() {
             <SummaryField label="Visit #" value={visit.visitNumber} />
             <SummaryField label="Queue #" value={visit.queueNumber ?? "—"} />
             <SummaryField label="Age / Gender" value={patient ? `${computeAge(patient.birthDate)} / ${patient.gender}` : "—"} />
+            <SummaryField label="Address" value={formatPatientAddress(patient)} />
             <SummaryField label="Blood type" value={patient?.bloodType ?? "Unknown"} />
             <SummaryField label="Allergies" value={patient?.allergies || "None recorded"} />
             <SummaryField label="Current medications" value="Not tracked yet (Prescription module)" />
@@ -294,7 +298,7 @@ export default function ConsultationPage() {
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
                 {soapField("chief_complaint") ? (
-                  <Field label="Chief complaint" value={autosave.values.chiefComplaint} onChange={(v) => set("chiefComplaint", v)} disabled={!canEdit} />
+                  <Field label="Chief complaint" value={autosave.values.chiefComplaint} onChange={(v) => set("chiefComplaint", v)} disabled={!canEdit} suggestField="chief_complaint" />
                 ) : null}
                 {soapField("history_of_present_illness") ? (
                   <Field label="History of present illness" value={autosave.values.historyOfPresentIllness} onChange={(v) => set("historyOfPresentIllness", v)} disabled={!canEdit} />
@@ -354,10 +358,10 @@ export default function ConsultationPage() {
                   ) : null}
                 </div>
                 {soapField("physical_examination") ? (
-                  <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} />
+                  <Field label="Physical examination" value={autosave.values.physicalExamination} onChange={(v) => set("physicalExamination", v)} disabled={!canEdit} suggestField="physical_examination" />
                 ) : null}
                 {soapField("clinical_findings") ? (
-                  <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} />
+                  <Field label="Clinical findings" value={autosave.values.clinicalFindings} onChange={(v) => set("clinicalFindings", v)} disabled={!canEdit} suggestField="clinical_findings" />
                 ) : null}
               </CardContent>
             </Card>
@@ -370,10 +374,10 @@ export default function ConsultationPage() {
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
                 {soapField("clinical_impression") ? (
-                  <Field label="Clinical impression" value={autosave.values.clinicalImpression} onChange={(v) => set("clinicalImpression", v)} disabled={!canEdit} />
+                  <Field label="Clinical impression" value={autosave.values.clinicalImpression} onChange={(v) => set("clinicalImpression", v)} disabled={!canEdit} suggestField="clinical_impression" />
                 ) : null}
                 {soapField("differential_diagnosis") ? (
-                  <Field label="Differential diagnosis" value={autosave.values.differentialDiagnosis} onChange={(v) => set("differentialDiagnosis", v)} disabled={!canEdit} />
+                  <Field label="Differential diagnosis" value={autosave.values.differentialDiagnosis} onChange={(v) => set("differentialDiagnosis", v)} disabled={!canEdit} suggestField="differential_diagnosis" />
                 ) : null}
                 {soapField("assessment_notes") ? (
                   <Field label="Assessment notes" value={autosave.values.assessmentNotes} onChange={(v) => set("assessmentNotes", v)} disabled={!canEdit} className="md:col-span-2" />
@@ -389,13 +393,13 @@ export default function ConsultationPage() {
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
                 {soapField("treatment_plan") ? (
-                  <Field label="Treatment plan" value={autosave.values.treatmentPlan} onChange={(v) => set("treatmentPlan", v)} disabled={!canEdit} />
+                  <Field label="Treatment plan" value={autosave.values.treatmentPlan} onChange={(v) => set("treatmentPlan", v)} disabled={!canEdit} suggestField="treatment_plan" />
                 ) : null}
                 {soapField("patient_instructions") ? (
-                  <Field label="Patient instructions" value={autosave.values.patientInstructions} onChange={(v) => set("patientInstructions", v)} disabled={!canEdit} />
+                  <Field label="Patient instructions" value={autosave.values.patientInstructions} onChange={(v) => set("patientInstructions", v)} disabled={!canEdit} suggestField="patient_instructions" />
                 ) : null}
                 {soapField("followup_recommendation") ? (
-                  <Field label="Follow-up recommendation" value={autosave.values.followupRecommendation} onChange={(v) => set("followupRecommendation", v)} disabled={!canEdit} />
+                  <Field label="Follow-up recommendation" value={autosave.values.followupRecommendation} onChange={(v) => set("followupRecommendation", v)} disabled={!canEdit} suggestField="followup_recommendation" />
                 ) : null}
                 {soapField("referral_notes") ? (
                   <Field label="Referral notes" value={autosave.values.referralNotes} onChange={(v) => set("referralNotes", v)} disabled={!canEdit} />
@@ -462,7 +466,23 @@ export default function ConsultationPage() {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground">ICD-10 code (optional)</label>
-                    <Input value={diagnosisForm.icd10Code} onChange={(e) => setDiagnosisForm((f) => ({ ...f, icd10Code: e.target.value }))} />
+                    <SoapSuggestionInput
+                      field="icd10_code"
+                      multiline={false}
+                      value={diagnosisForm.icd10Code}
+                      onChange={(v) => setDiagnosisForm((f) => ({ ...f, icd10Code: v }))}
+                      aria-label="ICD-10 code"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">ICD-10 description (optional)</label>
+                    <SoapSuggestionInput
+                      field="icd10_description"
+                      multiline={false}
+                      value={diagnosisForm.icd10Description}
+                      onChange={(v) => setDiagnosisForm((f) => ({ ...f, icd10Description: v }))}
+                      aria-label="ICD-10 description"
+                    />
                   </div>
                 </div>
                 <div>
@@ -473,8 +493,8 @@ export default function ConsultationPage() {
                   type="button"
                   onClick={() =>
                     addDiagnosis.mutate(
-                      { ...diagnosisForm, icd10Code: diagnosisForm.icd10Code || null },
-                      { onSuccess: () => setDiagnosisForm({ diagnosisType: "Primary", status: "Working", notes: "", icd10Code: "" }) }
+                      { ...diagnosisForm, icd10Code: diagnosisForm.icd10Code || null, icd10Description: diagnosisForm.icd10Description || null },
+                      { onSuccess: () => setDiagnosisForm({ diagnosisType: "Primary", status: "Working", notes: "", icd10Code: "", icd10Description: "" }) }
                     )
                   }
                   disabled={addDiagnosis.isPending}
@@ -573,6 +593,26 @@ export default function ConsultationPage() {
   );
 }
 
+// Task #7: combines the patient's separately-stored address fields into one
+// display line for the consultation Patient Summary card - same
+// `.filter(Boolean).join(", ")` convention already used for the clinic's own
+// address elsewhere in this codebase (e.g. PrescriptionTab's print header).
+// Never renders "undefined"/"null"/a dangling comma: falsy or blank-string
+// fields are dropped before joining, not just filtered by truthiness alone.
+function formatPatientAddress(patient: {
+  addressLine?: string | null;
+  barangay?: string | null;
+  city?: string | null;
+  province?: string | null;
+  zipCode?: string | null;
+} | null | undefined): string {
+  if (!patient) return "—";
+  const parts = [patient.addressLine, patient.barangay, patient.city, patient.province, patient.zipCode].filter(
+    (part): part is string => Boolean(part && part.trim())
+  );
+  return parts.length > 0 ? parts.join(", ") : "Not recorded";
+}
+
 function SummaryField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -588,17 +628,24 @@ function Field({
   onChange,
   disabled,
   className,
+  suggestField,
 }: {
   label: string;
   value: string | null | undefined;
   onChange: (v: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Task #2: when set, the field offers learned + starter suggestions (free text stays allowed). */
+  suggestField?: SoapSuggestField;
 }) {
   return (
     <div className={className}>
       <label className="text-xs font-medium text-muted-foreground">{label}</label>
-      <Textarea value={value ?? ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} rows={3} className="mt-1" />
+      {suggestField ? (
+        <SoapSuggestionInput field={suggestField} value={value ?? ""} onChange={onChange} disabled={disabled} rows={3} aria-label={label} />
+      ) : (
+        <Textarea value={value ?? ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} rows={3} className="mt-1" />
+      )}
     </div>
   );
 }

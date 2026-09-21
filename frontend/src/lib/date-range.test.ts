@@ -85,3 +85,20 @@ describe("toIsoDate", () => {
     expect(toIsoDate(new Date("2026-03-05T23:59:59.000Z"))).toBe("2026-03-05");
   });
 });
+
+describe("resolveRecordDateRange with a clinic timeZone (Task #9)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves 'today' to the Manila calendar day, not the UTC day, in the early morning", () => {
+    // 2026-09-17 23:50 UTC is already 2026-09-18 07:50 in Asia/Manila.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-17T23:50:00.000Z"));
+    expect(resolveRecordDateRange("today")).toEqual({ dateFrom: "2026-09-17", dateTo: "2026-09-17" });
+    expect(resolveRecordDateRange("today", undefined, undefined, "Asia/Manila")).toEqual({
+      dateFrom: "2026-09-18",
+      dateTo: "2026-09-18",
+    });
+  });
+});

@@ -182,6 +182,7 @@ def _to_read(lab_order: LaboratoryOrder) -> LaboratoryOrderRead:
     return LaboratoryOrderRead(
         id=lab_order.id,
         order_id=lab_order.order_id,
+        order_item_id=lab_order.order_item_id,
         # A doctor-referred lab order reads its number from the Phase 9
         # `Order` it's attached to (unchanged). A walk-in order (no `Order`
         # - see `create_from_queue_ticket`) has its own `ORD-YYYYMMDD-NNNNNN`
@@ -368,11 +369,29 @@ class LaboratoryService:
 
     # --- Creation (attaches to an existing Phase 9 Laboratory-category Order) ---
 
-    async def create_from_order(self, order: Order, *, clinic_id: UUID, actor_id: UUID | None) -> LaboratoryOrder:
-        """Idempotent: if a laboratory_orders row already exists for this
-        order (e.g. called twice), returns the existing one rather than
-        raising or duplicating - mirrors the invoice auto-creation
-        idempotency pattern used across the app.
+    async def create_from_order(self, order: Order, *, clinic_id: UUID, actor_id: UUID | None) -> list[LaboratoryOrder]:
+        """BUG fix (2026-09): previously created exactly one LaboratoryOrder
+        per Order, reading only `order.items[0].item_name` - every lab
+        OrderItem after the first was silently dropped (never got a
+        LaboratoryOrder, never reached the worklist, never got billed),
+        even though `OrderCreate.items` already supported multiple items
+        end-to-end. Now creates one LaboratoryOrder PER OrderItem, so a
+        single Clinical Order with e.g. CBC + Urinalysis + FBS produces
+        three independent LaboratoryOrder rows - each with its own
+        lifecycle (collect/process/complete/release) and its own billing
+        line via `_sync_billing`, called independently for each when THAT
+        order reaches Completed (see `enter_results`). An Order with zero
+        items (not reachable via the public API - `OrderCreate.items` has
+        `min_length=1` - but defensively handled anyway) simply produces
+        an empty list, never a fabricated placeholder order.
+
+        Idempotent PER ITEM: if a laboratory_orders row already exists for
+        a given OrderItem (e.g. this method is called twice for the same
+        Order), that item's existing row is returned unchanged rather than
+        duplicated - same idempotency contract as before, now scoped to
+        the item instead of the whole order (see `get_by_order_item_id`
+        and the model's `order_item_id` unique constraint, migration
+        0044).
 
         Deliberately does NOT commit and does NOT enqueue a sync job -
         this is always invoked from `ClinicalOrdersService.create_order()`
@@ -387,25 +406,31 @@ class LaboratoryService:
         with no matching `LaboratoryOrder`: the doctor saw the Order after
         a refresh, but the Laboratory Technician's worklist correctly
         showed nothing, because the row genuinely never existed."""
-        existing = await self.repo.get_by_order_id(order.id, clinic_id)
-        if existing is not None:
-            return existing
+        lab_orders: list[LaboratoryOrder] = []
+        for item in order.items:
+            existing = await self.repo.get_by_order_item_id(item.id, clinic_id)
+            if existing is not None:
+                lab_orders.append(existing)
+                continue
 
-        test_type = order.items[0].item_name if order.items else "Laboratory Test"
-        # Best-effort match against an active template - lets the doctor's
-        # free-text item name auto-link to a configured template (pricing/
-        # turnaround/parameters) without requiring a separate "select
-        # template" step in the Phase 9 order-creation UI. See
-        # `_resolve_template_id`'s own docstring for the exact matching
-        # rules (exact match, then one-trailing-parenthetical-stripped
-        # match, never guessing between ambiguous candidates).
-        template_id = await self._resolve_template_id(clinic_id, test_type)
+            test_type = item.item_name
+            # Best-effort match against an active template - lets the
+            # doctor's free-text item name auto-link to a configured
+            # template (pricing/turnaround/parameters) without requiring a
+            # separate "select template" step in the Phase 9 order-
+            # creation UI. See `_resolve_template_id`'s own docstring for
+            # the exact matching rules (exact match, then one-trailing-
+            # parenthetical-stripped match, never guessing between
+            # ambiguous candidates).
+            template_id = await self._resolve_template_id(clinic_id, test_type)
 
-        return await self.repo.create_laboratory_order(
-            clinic_id=clinic_id, order_id=order.id, branch_id=order.branch_id, visit_id=order.visit_id,
-            patient_id=order.patient_id, doctor_id=order.doctor_id, template_id=template_id, test_type=test_type,
-            status=LaboratoryOrderStatus.REQUESTED,
-        )
+            lab_order = await self.repo.create_laboratory_order(
+                clinic_id=clinic_id, order_id=order.id, order_item_id=item.id, branch_id=order.branch_id,
+                visit_id=order.visit_id, patient_id=order.patient_id, doctor_id=order.doctor_id,
+                template_id=template_id, test_type=test_type, status=LaboratoryOrderStatus.REQUESTED,
+            )
+            lab_orders.append(lab_order)
+        return lab_orders
 
     async def create_from_queue_ticket(
         self, *, visit_id: UUID, branch_id: UUID, patient_id: UUID, service_name: str, clinic_id: UUID
@@ -838,7 +863,29 @@ class LaboratoryService:
         # A doctor-ordered lab test (the other caller of this method) still
         # syncs normally, since its invoice is virtually never already Paid
         # at result-entry time.
-        if invoice.status == InvoiceStatus.PAID:
+        if invoice.status in (InvoiceStatus.PAID, InvoiceStatus.PARTIALLY_PAID):
+            # Task #9: a doctor-ordered lab completed AFTER the patient already
+            # paid (fully or partly) must still be billed - reopen the invoice
+            # for the late charge instead of silently dropping it. NOT for a
+            # walk-in/pay-first lab order (`order_id` is None): its charge is
+            # already on that invoice, so skipping is what prevents a double
+            # charge. Also skipped if this order already has its line.
+            if lab_order.order_id is None or lab_order.invoice_item_id is not None:
+                return
+            await self.session.refresh(invoice, attribute_names=["items"])
+            before_ids_late = {i.id for i in invoice.items}
+            detail = await self.invoice_service.add_item_to_settled_invoice(
+                invoice.id,
+                {
+                    "description": lab_order.test_type, "item_type": InvoiceItemType.LABORATORY,
+                    "quantity": Decimal("1"), "unit_price": price, "discount_amount": Decimal("0"),
+                },
+                clinic_id=clinic_id, actor_id=actor_id,
+            )
+            new_item = next((i for i in detail.items if i.id not in before_ids_late), None)
+            if new_item is not None:
+                await self.repo.update_laboratory_order(lab_order, invoice_item_id=new_item.id)
+                await self.session.commit()
             return
 
         if lab_order.invoice_item_id is not None:

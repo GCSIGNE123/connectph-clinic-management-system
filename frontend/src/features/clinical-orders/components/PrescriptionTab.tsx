@@ -11,14 +11,29 @@ import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { apiClient } from "@/lib/api-client";
 import { formatDate } from "@/lib/utils";
 import { useCreatePrescription, usePrescriptionsForConsultation } from "@/features/clinical-orders/hooks/use-clinical-orders";
-import { COMMON_MEDICINES, validatePrescriptionItems, type Prescription, type PrescriptionItemInput } from "@/features/clinical-orders/types";
+import { validatePrescriptionItems, type Prescription, type PrescriptionItemInput } from "@/features/clinical-orders/types";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
 import { DoctorSignatureBlock } from "@/features/clinical-orders/components/DoctorSignatureBlock";
-import type { ClinicSettings } from "@/features/clinic-config/types";
+import { SuggestionInput } from "@/features/clinical-orders/components/SuggestionInput";
+import { DOSAGE_SUGGESTIONS, DURATION_SUGGESTIONS, FREQUENCY_SUGGESTIONS, ROUTE_SUGGESTIONS } from "@/features/clinical-orders/lib/prescription-vocabulary";
+import { createCrudHooks } from "@/features/clinic-config/hooks/use-crud";
+import type { ClinicSettings, Medicine } from "@/features/clinic-config/types";
 
 function emptyItem(): PrescriptionItemInput {
   return { medicine: "", dosage: "", frequency: "", duration: "", quantity: "", route: "", instructions: "", substitutionAllowed: true };
 }
+
+// Task #8: Medicine is the clinic's real, already-role-gated inventory
+// catalog (Doctor already has view access - see `INVENTORY_VIEW_ROLES`),
+// NOT a new endpoint. Reuses the exact same `createCrudHooks` factory the
+// Medicines admin page already uses (`app/(dashboard)/medicines/page.tsx`),
+// so this is zero new backend/API surface. Deliberately queried with only
+// `is_active: true` - no stock/quantity filter - so a currently
+// out-of-stock medicine (still a legitimate thing to prescribe; the
+// clinic just needs to source it elsewhere) is never silently hidden from
+// the doctor. "Active in the catalog" and "in stock right now" are
+// different questions - this UI only ever answers the first one.
+const { useList: useMedicineList } = createCrudHooks<Medicine>("medicines", "/medicines");
 
 export function PrescriptionTab({
   consultationId,
@@ -63,6 +78,18 @@ export function PrescriptionTab({
 
   const liveWarnings = useMemo(() => validatePrescriptionItems(items.filter((i) => i.medicine.trim())), [items]);
 
+  // Task #8: one shared, currently-focused-row search against the real
+  // Medicine catalog - only one medicine suggestion dropdown can be open
+  // at a time (`activeSuggestionRow`), so one query covers it. Also feeds
+  // that same row's Strength/Form suggestion lists (the actual available
+  // strengths/forms for whatever the doctor is currently typing), not a
+  // second, separate fetch.
+  const activeMedicineQuery = activeSuggestionRow !== null ? items[activeSuggestionRow]?.medicine.trim() ?? "" : "";
+  const medicineResultsQuery = useMedicineList({ q: activeMedicineQuery, is_active: true, limit: 8 });
+  const medicineResults = activeMedicineQuery ? medicineResultsQuery.data?.items ?? [] : [];
+  const strengthSuggestionsForActiveRow = Array.from(new Set(medicineResults.map((m) => m.strength).filter((s): s is string => !!s)));
+  const formSuggestionsForActiveRow = Array.from(new Set(medicineResults.map((m) => m.dosage_form).filter((f): f is string => !!f)));
+
   if (prescriptionsQuery.isLoading) return <SkeletonList rows={4} />;
 
   const updateItem = (index: number, patch: Partial<PrescriptionItemInput>) => {
@@ -99,6 +126,7 @@ export function PrescriptionTab({
                       <li key={item.id} className="text-muted-foreground">
                         <span className="font-medium text-foreground">{item.medicine}</span>
                         {item.strength ? ` ${item.strength}` : ""}
+                        {item.dosageForm ? ` (${item.dosageForm})` : ""}
                         {item.dosage ? ` — ${item.dosage}` : ""}
                         {item.frequency ? ` ${item.frequency}` : ""}
                         {item.duration ? ` for ${item.duration}` : ""}
@@ -125,37 +153,92 @@ export function PrescriptionTab({
                         onChange={(e) => updateItem(index, { medicine: e.target.value })}
                         onFocus={() => setActiveSuggestionRow(index)}
                         onBlur={() => setTimeout(() => setActiveSuggestionRow(null), 150)}
-                        placeholder="Type medicine name…"
+                        placeholder="Search medicine…"
                       />
-                      {activeSuggestionRow === index && item.medicine.trim() ? (
-                        <MedicationSuggestions
-                          query={item.medicine}
-                          onSelect={(name) => updateItem(index, { medicine: name })}
-                        />
+                      {activeSuggestionRow === index && item.medicine.trim() && medicineResults.length > 0 ? (
+                        <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-popover shadow-md">
+                          {medicineResults.map((m) => (
+                            <li key={m.id}>
+                              <button
+                                type="button"
+                                className="block w-full px-3 py-1.5 text-left text-sm hover:bg-accent"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  updateItem(index, {
+                                    medicine: m.generic_name,
+                                    genericName: m.generic_name,
+                                    brandName: m.brand_name ?? null,
+                                    strength: m.strength ?? item.strength,
+                                    dosageForm: m.dosage_form ?? item.dosageForm,
+                                  });
+                                }}
+                              >
+                                {m.generic_name}
+                                {m.brand_name ? ` (${m.brand_name})` : ""}
+                                {m.strength ? ` — ${m.strength}` : ""}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
                       ) : null}
                     </div>
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Strength</label>
-                      <Input value={item.strength ?? ""} onChange={(e) => updateItem(index, { strength: e.target.value })} placeholder="e.g. 500mg" />
+                      <SuggestionInput
+                        value={item.strength ?? ""}
+                        onChange={(v) => updateItem(index, { strength: v })}
+                        suggestions={strengthSuggestionsForActiveRow}
+                        placeholder="e.g. 500mg"
+                      />
                     </div>
                     <div>
-                      <label className="text-xs font-medium text-muted-foreground">Route</label>
-                      <Input value={item.route ?? ""} onChange={(e) => updateItem(index, { route: e.target.value })} placeholder="Oral / IV / Topical" />
+                      <label className="text-xs font-medium text-muted-foreground">Form</label>
+                      <SuggestionInput
+                        value={item.dosageForm ?? ""}
+                        onChange={(v) => updateItem(index, { dosageForm: v })}
+                        suggestions={formSuggestionsForActiveRow}
+                        placeholder="e.g. Tablet"
+                      />
                     </div>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-4">
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Dosage</label>
-                      <Input value={item.dosage ?? ""} onChange={(e) => updateItem(index, { dosage: e.target.value })} />
+                      <SuggestionInput
+                        value={item.dosage ?? ""}
+                        onChange={(v) => updateItem(index, { dosage: v })}
+                        suggestions={DOSAGE_SUGGESTIONS}
+                      />
                     </div>
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Frequency</label>
-                      <Input value={item.frequency ?? ""} onChange={(e) => updateItem(index, { frequency: e.target.value })} placeholder="e.g. TID" />
+                      <SuggestionInput
+                        value={item.frequency ?? ""}
+                        onChange={(v) => updateItem(index, { frequency: v })}
+                        suggestions={FREQUENCY_SUGGESTIONS}
+                        placeholder="e.g. Twice daily"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Route</label>
+                      <SuggestionInput
+                        value={item.route ?? ""}
+                        onChange={(v) => updateItem(index, { route: v })}
+                        suggestions={ROUTE_SUGGESTIONS}
+                        placeholder="Oral / IV / Topical"
+                      />
                     </div>
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Duration</label>
-                      <Input value={item.duration ?? ""} onChange={(e) => updateItem(index, { duration: e.target.value })} placeholder="e.g. 7 days" />
+                      <SuggestionInput
+                        value={item.duration ?? ""}
+                        onChange={(v) => updateItem(index, { duration: v })}
+                        suggestions={DURATION_SUGGESTIONS}
+                        placeholder="e.g. 7 days"
+                      />
                     </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-4">
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Quantity</label>
                       <Input value={item.quantity ?? ""} onChange={(e) => updateItem(index, { quantity: e.target.value })} placeholder="e.g. 21 tabs" />
@@ -257,6 +340,7 @@ export function PrescriptionTab({
                   <p className="font-medium">
                     {i + 1}. {item.medicine}
                     {item.strength ? ` ${item.strength}` : ""}
+                    {item.dosageForm ? ` (${item.dosageForm})` : ""}
                   </p>
                   <p className="text-muted-foreground">
                     {[item.dosage, item.route, item.frequency, item.duration ? `for ${item.duration}` : null, item.quantity ? `Qty: ${item.quantity}` : null]
@@ -284,28 +368,5 @@ export function PrescriptionTab({
         ) : null}
       </PrintableDocumentDialog>
     </div>
-  );
-}
-
-function MedicationSuggestions({ query, onSelect }: { query: string; onSelect: (name: string) => void }) {
-  const matches = COMMON_MEDICINES.filter((m) => m.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6);
-  if (matches.length === 0) return null;
-  return (
-    <ul className="absolute z-10 mt-1 w-full rounded-md border border-border bg-popover shadow-md">
-      {matches.map((m) => (
-        <li key={m}>
-          <button
-            type="button"
-            className="block w-full px-3 py-1.5 text-left text-sm hover:bg-accent"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSelect(m);
-            }}
-          >
-            {m}
-          </button>
-        </li>
-      ))}
-    </ul>
   );
 }

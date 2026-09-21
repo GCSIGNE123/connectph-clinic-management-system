@@ -144,6 +144,7 @@ export interface PrescriptionItem {
   genericName?: string | null;
   brandName?: string | null;
   strength?: string | null;
+  dosageForm?: string | null;
   dosage?: string | null;
   frequency?: string | null;
   duration?: string | null;
@@ -173,6 +174,7 @@ export interface PrescriptionItemInput {
   genericName?: string | null;
   brandName?: string | null;
   strength?: string | null;
+  dosageForm?: string | null;
   dosage?: string | null;
   frequency?: string | null;
   duration?: string | null;

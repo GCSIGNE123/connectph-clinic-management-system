@@ -52,6 +52,8 @@ class PatientRepository(BaseRepository[Patient]):
             filters.append(Patient.gender == params.gender)
         if params.status is not None:
             filters.append(Patient.status == params.status)
+        if params.is_yakap_beneficiary is not None:
+            filters.append(Patient.is_yakap_beneficiary.is_(params.is_yakap_beneficiary))
 
         # Age range -> birth_date range (inclusive). age_min=older bound (earlier
         # birth_date), age_max=younger bound (later birth_date).

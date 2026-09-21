@@ -30,6 +30,20 @@ export const RECORD_DATE_RANGE_PRESETS: { value: RecordDateRangePreset; label: s
   { value: "custom", label: "Custom" },
 ];
 
+/** Today's calendar date in `timeZone` (e.g. "Asia/Manila"), returned as a
+ * UTC-midnight `Date` so the UTC-based week/month math below applies
+ * unchanged. With no `timeZone` this is just `new Date()` (the default UTC
+ * basis every other record tab uses). Billing passes the clinic timezone
+ * because invoice dates are now clinic-local. */
+function calendarNow(timeZone?: string): Date {
+  if (!timeZone) return new Date();
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date())
+    .split("-")
+    .map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 export function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -68,8 +82,9 @@ export function resolveRecordDateRange(
   preset: RecordDateRangePreset,
   customFrom?: string,
   customTo?: string,
+  timeZone?: string,
 ): { dateFrom?: string; dateTo?: string } {
-  const now = new Date();
+  const now = calendarNow(timeZone);
   switch (preset) {
     case "today": {
       const today = toIsoDate(now);

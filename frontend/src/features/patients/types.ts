@@ -116,6 +116,9 @@ export interface PatientListParams {
   branchId?: string;
   gender?: PatientGender;
   status?: PatientStatus;
+  /** Patient-list YAKAP view: true = YAKAP beneficiaries only, false = Regular
+   * (non-YAKAP) only, undefined = all. Maps to `Patient.is_yakap_beneficiary`. */
+  isYakapBeneficiary?: boolean;
   ageMin?: number;
   ageMax?: number;
   registeredFrom?: string;

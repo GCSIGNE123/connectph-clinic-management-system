@@ -46,6 +46,10 @@ async def list_patients(
     branch_id: UUID | None = Query(default=None),
     gender: Gender | None = Query(default=None),
     status_filter: PatientStatus | None = Query(default=None, alias="status"),
+    is_yakap_beneficiary: bool | None = Query(
+        default=None,
+        description="true = YAKAP beneficiaries only, false = non-YAKAP (Regular) only, omitted = all patients.",
+    ),
     age_min: int | None = Query(default=None, ge=0, le=150),
     age_max: int | None = Query(default=None, ge=0, le=150),
     registered_from: date | None = Query(default=None),
@@ -64,6 +68,7 @@ async def list_patients(
         branch_id=branch_id,
         gender=gender,
         status=status_filter,
+        is_yakap_beneficiary=is_yakap_beneficiary,
         age_min=age_min,
         age_max=age_max,
         registered_from=registered_from,

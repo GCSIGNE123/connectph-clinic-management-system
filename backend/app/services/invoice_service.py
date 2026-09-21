@@ -20,6 +20,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -126,7 +127,7 @@ class InvoiceService:
         if visit is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Visit not found")
 
-        today = datetime.now(UTC).date()
+        today = await self._clinic_today(clinic_id)
         invoice_number = await self.number_generator.next_number(clinic_id, today)
         invoice = await self.repo.create_invoice(
             clinic_id=clinic_id, visit_id=visit_id, branch_id=visit.branch_id, patient_id=visit.patient_id,
@@ -248,7 +249,7 @@ class InvoiceService:
                 )
             services.append(service)
 
-        today = datetime.now(UTC).date()
+        today = await self._clinic_today(clinic_id)
         invoice_number = await self.number_generator.next_number(clinic_id, today)
 
         # Race guard: `get_latest_for_visit` above is a plain SELECT with no
@@ -326,6 +327,22 @@ class InvoiceService:
         )
         return _to_detail(invoice)
 
+    async def _clinic_today(self, clinic_id: UUID) -> date:
+        """Today's calendar date in the clinic's own timezone (`Clinic.timezone`,
+        default Asia/Manila), NOT UTC - a clinic day runs 00:00-24:00 local, so
+        an invoice made at 07:50 Manila must be dated that Manila day, not the
+        previous UTC day."""
+        from zoneinfo import ZoneInfo
+
+        from app.models.clinic import Clinic
+
+        tz_name = await self.session.scalar(select(Clinic.timezone).where(Clinic.id == clinic_id))
+        try:
+            tz = ZoneInfo(tz_name or "Asia/Manila")
+        except Exception:
+            tz = ZoneInfo("Asia/Manila")
+        return datetime.now(tz).date()
+
     # --- Items ---
 
     def _require_editable(self, invoice: Invoice) -> None:
@@ -355,6 +372,41 @@ class InvoiceService:
         await self.audit_service.log_event(
             clinic_id=clinic_id, user_id=actor_id, action="invoice.edited", entity_type="invoice", entity_id=str(invoice_id),
             metadata={"change": "item_added"},
+        )
+        await self.session.commit()
+        return _to_detail(await self.repo.get_by_id(invoice_id, clinic_id))
+
+    async def add_item_to_settled_invoice(
+        self, invoice_id: UUID, payload: dict, *, clinic_id: UUID, actor_id: UUID | None
+    ) -> InvoiceDetail:
+        """Reopens a Paid/Partially Paid invoice to add a LATE charge (a
+        doctor-ordered lab result completed after the patient already paid).
+        Existing payments/receipts are untouched; the new line just raises the
+        total, so a Paid invoice drops back to Partially Paid with the new
+        line outstanding. Audit-logged as `item_added_after_payment`. Ordinary
+        item edits still go through `add_item`, which keeps blocking these
+        statuses."""
+        invoice = await self._require_invoice(invoice_id, clinic_id)
+        if invoice.status not in (InvoiceStatus.PAID, InvoiceStatus.PARTIALLY_PAID):
+            return await self.add_item(invoice_id, payload, clinic_id=clinic_id, actor_id=actor_id)
+        unit_price = Decimal(str(payload["unit_price"]))
+        quantity = Decimal(str(payload["quantity"]))
+        discount_amount = Decimal(str(payload.get("discount_amount") or 0))
+        line_total = max(unit_price * quantity - discount_amount, Decimal("0"))
+        await self.repo.add_item(
+            invoice_id, clinic_id, description=payload["description"], item_type=payload["item_type"],
+            quantity=quantity, unit_price=unit_price, discount_amount=discount_amount,
+            tax_amount=payload.get("tax_amount"), line_total=line_total, notes=payload.get("notes"),
+        )
+        await self.session.refresh(invoice, attribute_names=["items", "discounts", "payments"])
+        self._recompute_totals(invoice)
+        if invoice.status == InvoiceStatus.PAID and invoice.balance_due > 0:
+            invoice.status = InvoiceStatus.PARTIALLY_PAID
+        invoice.updated_by = actor_id
+        await self.session.flush()
+        await self.audit_service.log_event(
+            clinic_id=clinic_id, user_id=actor_id, action="invoice.edited", entity_type="invoice", entity_id=str(invoice_id),
+            metadata={"change": "item_added_after_payment", "description": payload["description"]},
         )
         await self.session.commit()
         return _to_detail(await self.repo.get_by_id(invoice_id, clinic_id))

@@ -162,12 +162,18 @@ class ClinicalOrdersService:
         # commit for the whole operation means any failure anywhere above
         # rolls back everything - the Order included - instead of leaving
         # this split state.
-        lab_order = None
+        # BUG fix (2026-09): `create_from_order` now returns one
+        # LaboratoryOrder PER lab OrderItem (was: a single LaboratoryOrder
+        # reading only items[0], silently dropping every item after the
+        # first). `lab_orders` is therefore a list, possibly empty (no
+        # items - not reachable via the API today) or with more than one
+        # entry (multiple lab tests requested in one Order).
+        lab_orders: list = []
         vaccination_record = None
         if payload.order_category == OrderCategory.LABORATORY:
             from app.services.laboratory_service import LaboratoryService
 
-            lab_order = await LaboratoryService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
+            lab_orders = await LaboratoryService(self.session).create_from_order(order, clinic_id=clinic_id, actor_id=actor_id)
 
         if payload.order_category == OrderCategory.VACCINATION:
             from app.services.vaccination_service import VaccinationService
@@ -182,13 +188,22 @@ class ClinicalOrdersService:
         # via `enqueue_lazy` so a payload-serialization failure can't turn
         # this already-successful create into a 500 either (see
         # `sync_queue_service.enqueue_lazy`'s docstring).
-        if lab_order is not None:
+        if lab_orders:
             from app.services.laboratory_service import build_sync_payload as build_lab_sync_payload
 
-            await sync_queue_service.enqueue_lazy(
-                entity_type="laboratory_order", record_id=lab_order.id, operation="create",
-                clinic_id=clinic_id, build_payload=lambda: build_lab_sync_payload(lab_order),
-            )
+            for lab_order in lab_orders:
+                await sync_queue_service.enqueue_lazy(
+                    entity_type="laboratory_order", record_id=lab_order.id, operation="create",
+                    # Default-arg binds THIS iteration's lab_order, not the
+                    # loop variable's final value (a lambda inside a for
+                    # loop otherwise captures by reference, so all lambdas
+                    # would silently build the payload for only the last
+                    # lab_order - never actually exercised for a single-
+                    # item order, which is why the old single-lab_order
+                    # code here never had this bug, but a real risk now
+                    # that a loop exists).
+                    clinic_id=clinic_id, build_payload=lambda lo=lab_order: build_lab_sync_payload(lo),
+                )
         if vaccination_record is not None:
             from app.services.vaccination_service import build_sync_payload as build_vaccination_sync_payload
 

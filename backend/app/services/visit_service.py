@@ -434,6 +434,17 @@ class VisitService:
             metadata={"from": from_status.value, "to": new_status.value},
         )
         await self.session.commit()
+        if new_status == VisitStatus.COMPLETED:
+            # Task #9: every completed patient must be billable, including when
+            # the status is changed directly (PATCH /visits/{id}/status) rather
+            # than through consultation/quick-complete. Idempotent - returns
+            # the visit's existing non-cancelled invoice if there already is
+            # one (so paid / lab pay-first visits are untouched).
+            from app.services.invoice_service import InvoiceService
+
+            await InvoiceService(self.session).create_draft_invoice_for_consultation(
+                clinic_id=clinic_id, visit_id=visit_id, actor_id=actor_id
+            )
         detail = await self.get_detail(visit_id, clinic_id=clinic_id)
         await sync_queue_service.enqueue(
             entity_type="visit", record_id=visit_id, operation="update",

@@ -55,8 +55,29 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     # consultation) has no Phase 9 `orders` row to attach to - see
     # `LaboratoryService.create_from_queue_ticket`. Every doctor-placed lab
     # order still gets one via `create_from_order`, unchanged.
+    #
+    # BUG fix (2026-09, migration 0044): NOT unique anymore. A single
+    # `Order` can carry multiple lab `OrderItem`s (`OrderCreate.items`),
+    # and `create_from_order` now creates one `LaboratoryOrder` per item -
+    # previously it only ever read `order.items[0]`, silently dropping
+    # every item after the first. `order_item_id` below is the new,
+    # finer-grained uniqueness boundary (one LaboratoryOrder per
+    # OrderItem); `order_id` legitimately repeats across the several
+    # LaboratoryOrder rows that now share one parent Order.
     order_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
+        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # Which specific OrderItem this LaboratoryOrder was created from - see
+    # the note on order_id above. Nullable for the same two reasons
+    # order_id is nullable: (a) every LaboratoryOrder row created before
+    # this column existed (migration 0044) has no value here and remains
+    # fully valid, and (b) a walk-in queue-ticket LaboratoryOrder
+    # (`create_from_queue_ticket`) has no Order/OrderItem at all. Unique
+    # (via `ix_laboratory_orders_order_item_id`) so `create_from_order`'s
+    # per-item idempotency check (`get_by_order_item_id`) can never result
+    # in two LaboratoryOrder rows for the same OrderItem.
+    order_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("order_items.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
     )
     # Client feedback (Laboratory Report printing "Order No. : -" for a
     # walk-in order): a doctor-referred lab order reads its printed order
@@ -158,6 +179,7 @@ class LaboratoryOrder(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Tena
     )
 
     order: Mapped["Order | None"] = relationship()
+    order_item: Mapped["OrderItem | None"] = relationship()
     visit: Mapped["Visit"] = relationship()
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["Doctor"] = relationship()

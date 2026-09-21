@@ -106,34 +106,59 @@ function toConsultation(raw: any): Consultation {
   };
 }
 
+/** SoapNoteInput key -> API field. Order is irrelevant; every SOAP field the app writes is here. */
+const SOAP_FIELD_MAP: [keyof SoapNoteInput, string][] = [
+  ["chiefComplaint", "chief_complaint"],
+  ["historyOfPresentIllness", "history_of_present_illness"],
+  ["pastMedicalHistory", "past_medical_history"],
+  ["familyHistory", "family_history"],
+  ["socialHistory", "social_history"],
+  ["reviewOfSystems", "review_of_systems"],
+  ["subjectiveNotes", "subjective_notes"],
+  ["bloodPressure", "blood_pressure"],
+  ["pulseRate", "pulse_rate"],
+  ["respiratoryRate", "respiratory_rate"],
+  ["temperature", "temperature"],
+  ["heightCm", "height_cm"],
+  ["weightKg", "weight_kg"],
+  ["oxygenSaturation", "oxygen_saturation"],
+  ["painScore", "pain_score"],
+  ["headCircumferenceCm", "head_circumference_cm"],
+  ["physicalExamination", "physical_examination"],
+  ["clinicalFindings", "clinical_findings"],
+  ["clinicalImpression", "clinical_impression"],
+  ["differentialDiagnosis", "differential_diagnosis"],
+  ["assessmentNotes", "assessment_notes"],
+  ["treatmentPlan", "treatment_plan"],
+  ["patientInstructions", "patient_instructions"],
+  ["followupRecommendation", "followup_recommendation"],
+  ["referralNotes", "referral_notes"],
+];
+
+/** The only fields the Receptionist/Nurse `subjective-objective` endpoint accepts (Task #6);
+ * anything else would be a 422 there. Physical examination / clinical findings and every
+ * Assessment/Plan field are Doctor-only. */
+export const SUBJECTIVE_OBJECTIVE_KEYS: (keyof SoapNoteInput)[] = [
+  "chiefComplaint", "historyOfPresentIllness", "pastMedicalHistory", "familyHistory", "socialHistory",
+  "reviewOfSystems", "subjectiveNotes", "bloodPressure", "pulseRate", "respiratoryRate", "temperature",
+  "heightCm", "weightKg", "oxygenSaturation", "painScore", "headCircumferenceCm",
+];
+
+/**
+ * Task #6: builds the request body from ONLY the keys the caller actually supplied.
+ * The backend merges exactly the keys present in the body, so a key that is `undefined`
+ * here must be OMITTED (not sent as `null`) - sending `null` for every field the caller
+ * doesn't manage used to wipe stored values (e.g. a save that touched only the chief
+ * complaint also nulled the Doctor's HPI / pain score). An explicit `null` is kept: it
+ * means "clear this field".
+ */
 function fromSoapNoteInput(input: Partial<SoapNoteInput>) {
-  return {
-    chief_complaint: input.chiefComplaint ?? null,
-    history_of_present_illness: input.historyOfPresentIllness ?? null,
-    past_medical_history: input.pastMedicalHistory ?? null,
-    family_history: input.familyHistory ?? null,
-    social_history: input.socialHistory ?? null,
-    review_of_systems: input.reviewOfSystems ?? null,
-    subjective_notes: input.subjectiveNotes ?? null,
-    blood_pressure: input.bloodPressure ?? null,
-    pulse_rate: input.pulseRate ?? null,
-    respiratory_rate: input.respiratoryRate ?? null,
-    temperature: input.temperature ?? null,
-    height_cm: input.heightCm ?? null,
-    weight_kg: input.weightKg ?? null,
-    oxygen_saturation: input.oxygenSaturation ?? null,
-    pain_score: input.painScore ?? null,
-    head_circumference_cm: input.headCircumferenceCm ?? null,
-    physical_examination: input.physicalExamination ?? null,
-    clinical_findings: input.clinicalFindings ?? null,
-    clinical_impression: input.clinicalImpression ?? null,
-    differential_diagnosis: input.differentialDiagnosis ?? null,
-    assessment_notes: input.assessmentNotes ?? null,
-    treatment_plan: input.treatmentPlan ?? null,
-    patient_instructions: input.patientInstructions ?? null,
-    followup_recommendation: input.followupRecommendation ?? null,
-    referral_notes: input.referralNotes ?? null,
-  };
+  const body: Record<string, unknown> = {};
+  for (const [key, apiKey] of SOAP_FIELD_MAP) {
+    const value = input[key];
+    if (value !== undefined) body[apiKey] = value;
+  }
+  return body;
 }
 
 export const consultationApi = {
@@ -152,6 +177,13 @@ export const consultationApi = {
   saveSoap: async (consultationId: string, payload: Partial<SoapNoteInput>): Promise<Consultation> => {
     const raw = await apiClient.put<any>(`/consultations/${consultationId}/soap`, fromSoapNoteInput(payload));
     return toConsultation(raw);
+  },
+  /** Task #2: the clinic's own learned suggestions for one SOAP/diagnosis field (text only). */
+  getSoapSuggestions: async (field: string): Promise<string[]> => {
+    const raw = await apiClient.get<{ field: string; suggestions: { text: string }[] }>(
+      `/consultations/soap-suggestions?field=${encodeURIComponent(field)}&limit=20`
+    );
+    return raw.suggestions.map((x) => x.text);
   },
   addDiagnosis: async (
     consultationId: string,
@@ -211,19 +243,13 @@ export const consultationApi = {
     return raw ? toSoapNote(raw) : null;
   },
   saveSubjectiveObjective: async (consultationId: string, payload: Partial<SoapNoteInput>): Promise<Consultation> => {
-    const body = fromSoapNoteInput(payload);
-    // Only Subjective/Objective keys are meaningful to this endpoint - the
-    // backend schema (`SoapNoteSubjectiveObjectiveUpsert`) has no
-    // Assessment/Plan fields at all, so sending them would be silently
-    // dropped anyway, but we omit them here too for clarity.
-    const {
-      clinical_impression, differential_diagnosis, assessment_notes,
-      treatment_plan, patient_instructions, followup_recommendation, referral_notes,
-      ...subjectiveObjective
-    } = body;
-    void clinical_impression; void differential_diagnosis; void assessment_notes;
-    void treatment_plan; void patient_instructions; void followup_recommendation; void referral_notes;
-    const raw = await apiClient.put<any>(`/consultations/${consultationId}/soap/subjective-objective`, subjectiveObjective);
+    // Task #6: only the approved Subjective/Objective keys are ever sent (the backend rejects any
+    // other key with a 422), and only the keys the caller supplied (see `fromSoapNoteInput`).
+    const allowed: Partial<SoapNoteInput> = {};
+    for (const key of SUBJECTIVE_OBJECTIVE_KEYS) {
+      if (payload[key] !== undefined) (allowed as Record<string, unknown>)[key] = payload[key];
+    }
+    const raw = await apiClient.put<any>(`/consultations/${consultationId}/soap/subjective-objective`, fromSoapNoteInput(allowed));
     return toConsultation(raw);
   },
 };

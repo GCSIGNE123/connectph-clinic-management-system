@@ -134,22 +134,24 @@ class InvoiceRepository:
                     select(Payment.invoice_id).where(Payment.received_by == params.cashier_id)
                 )
             )
-        query = select(Invoice).where(and_(*filters))
+        # Visit is always joined (one visit per invoice, so no row
+        # duplication) - the list is ordered by when the visit was COMPLETED
+        # (`Visit.check_out_time`), see `search`.
+        query = select(Invoice).outerjoin(Visit, Visit.id == Invoice.visit_id).where(and_(*filters))
         if params.q:
             like = f"%{params.q.lower()}%"
             query = (
                 query.outerjoin(Patient, Patient.id == Invoice.patient_id)
-                .outerjoin(Visit, Visit.id == Invoice.visit_id)
-                .outerjoin(Payment, Payment.invoice_id == Invoice.id)
                 .where(
                     (func.lower(Invoice.invoice_number).like(like))
                     | (func.lower(Patient.first_name).like(like))
                     | (func.lower(Patient.last_name).like(like))
                     | (func.lower(Patient.patient_number).like(like))
                     | (func.lower(Visit.visit_number).like(like))
-                    | (func.lower(Payment.reference_number).like(like))
+                    | Invoice.id.in_(
+                        select(Payment.invoice_id).where(func.lower(Payment.reference_number).like(like))
+                    )
                 )
-                .distinct()
             )
         return query
 
@@ -162,11 +164,12 @@ class InvoiceRepository:
             base_query.options(
                 selectinload(Invoice.patient), selectinload(Invoice.doctor), selectinload(Invoice.visit)
             )
-            # Sort on the same field the date filter above applies to
-            # (invoice_date) - previously sorted on created_at, which could
-            # disagree with a `date_from`/`date_to` filter on invoice_date.
-            # created_at/id are stable tie-breaks for same-day invoices.
-            .order_by(Invoice.invoice_date.desc(), Invoice.created_at.desc(), Invoice.id.desc())
+            # Task #9 (clinic decision): most recently COMPLETED patient
+            # first. Falls back to the invoice's own creation time when the
+            # visit isn't completed yet (e.g. a walk-in lab pay-first
+            # invoice), so every invoice still has a sort key. id is the
+            # stable tie-break.
+            .order_by(func.coalesce(Visit.check_out_time, Invoice.created_at).desc(), Invoice.id.desc())
             .offset(params.offset)
             .limit(params.limit)
         )

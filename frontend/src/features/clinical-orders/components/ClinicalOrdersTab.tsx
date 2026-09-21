@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SkeletonList } from "@/components/layout/LoadingSkeletons";
 import { apiClient } from "@/lib/api-client";
+import { useLaboratoryTemplates } from "@/features/laboratory/hooks/use-laboratory";
 import {
   useCreateOrder, useCreateProcedure, useCreateReferral,
   useOrdersForConsultation, useProceduresForConsultation, useReferralsForConsultation,
@@ -96,10 +98,54 @@ export function ClinicalOrdersTab({
   const [procedureForm, setProcedureForm] = useState({ name: "", date: "", notes: "" });
   const [referralForm, setReferralForm] = useState({ referredTo: "", reason: "", notes: "" });
 
+  // Task #3: Laboratory items are picked from the clinic's own configured
+  // Laboratory Templates (not typed free-text, not the Services catalog -
+  // see the module note below for why), one at a time via the
+  // search-select, collected into this list, and submitted together as ONE
+  // Order with N OrderItems. Radiology/Vaccination/Custom are untouched -
+  // still the single free-text field they always were. The picker itself
+  // is deliberately kept uncontrolled (`value=""` always) - it's a
+  // "search, pick, add to the list below" control, not a bound single
+  // value, so it clears itself after every pick, ready for the next one.
+  const [selectedLabItems, setSelectedLabItems] = useState<string[]>([]);
+  // Laboratory Templates, not the Services catalog: `LaboratoryService.
+  // create_from_order` (Task #1) resolves each OrderItem's billing/worklist
+  // template by exact-matching its `item_name` against LaboratoryTemplate.
+  // test_name (`_resolve_template_id`) - it never looks at ClinicService at
+  // all. Sourcing this picker's options from `test_name` directly
+  // guarantees every selection is a tier-1 exact match (real template,
+  // real price, real worklist entry); sourcing from the Services catalog
+  // instead would risk exactly the name-drift silent-mismatch failure
+  // `_resolve_template_id`'s own docstring describes as the production bug
+  // it was built to avoid (a Service named differently from its Template
+  // never auto-links, and `_sync_billing` then silently skips billing for
+  // that item since `template_id` stays null).
+  const templatesQuery = useLaboratoryTemplates(true);
+  const labTemplateOptions = (templatesQuery.data ?? [])
+    .filter((t) => !selectedLabItems.includes(t.testName))
+    .map((t) => ({ value: t.testName, label: t.testName }));
+
   const isLoading = ordersQuery.isLoading || proceduresQuery.isLoading || referralsQuery.isLoading;
   if (isLoading) return <SkeletonList rows={4} />;
 
+  const addLabItem = (testName: string) => {
+    setSelectedLabItems((names) => (names.includes(testName) ? names : [...names, testName]));
+  };
+  const removeLabItem = (testName: string) => setSelectedLabItems((names) => names.filter((n) => n !== testName));
+
   const submitOrder = () => {
+    if (orderForm.category === "Laboratory") {
+      if (selectedLabItems.length === 0) return;
+      createOrder.mutate(
+        {
+          orderCategory: "Laboratory", priority: orderForm.priority,
+          scheduledDate: orderForm.scheduledDate || null, clinicalNotes: orderForm.notes || null,
+          items: selectedLabItems.map((itemName): OrderItemInput => ({ itemName })),
+        },
+        { onSuccess: () => { setSelectedLabItems([]); setOrderForm((f) => ({ ...f, notes: "" })); } }
+      );
+      return;
+    }
     if (!orderForm.itemName.trim()) return;
     const item: OrderItemInput = { itemName: orderForm.itemName };
     if (orderForm.category === "Radiology") {
@@ -116,6 +162,9 @@ export function ClinicalOrdersTab({
       { onSuccess: () => setOrderForm((f) => ({ ...f, itemName: "", examType: "", bodyPart: "", indication: "", notes: "" })) }
     );
   };
+
+  const createDisabled =
+    createOrder.isPending || (orderForm.category === "Laboratory" ? selectedLabItems.length === 0 : !orderForm.itemName.trim());
 
   return (
     <div className="space-y-6">
@@ -172,7 +221,17 @@ export function ClinicalOrdersTab({
               <div className="grid gap-3 sm:grid-cols-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Category</label>
-                  <Select value={orderForm.category} onChange={(e) => setOrderForm((f) => ({ ...f, category: e.target.value as OrderCategory }))}>
+                  <Select
+                    value={orderForm.category}
+                    onChange={(e) => {
+                      const category = e.target.value as OrderCategory;
+                      setOrderForm((f) => ({ ...f, category }));
+                      // Switching away from Laboratory drops any in-progress
+                      // multi-select so a stale pending selection can't leak
+                      // into a different category's single-item submit.
+                      if (category !== "Laboratory") setSelectedLabItems([]);
+                    }}
+                  >
                     {availableCategories.map((c) => <option key={c} value={c}>{c}</option>)}
                   </Select>
                 </div>
@@ -188,10 +247,38 @@ export function ClinicalOrdersTab({
                   <Input type="date" value={orderForm.scheduledDate} onChange={(e) => setOrderForm((f) => ({ ...f, scheduledDate: e.target.value }))} />
                 </div>
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Item / test name</label>
-                <Input value={orderForm.itemName} onChange={(e) => setOrderForm((f) => ({ ...f, itemName: e.target.value }))} placeholder="e.g. CBC, Chest X-Ray" />
-              </div>
+              {orderForm.category === "Laboratory" ? (
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-muted-foreground">Laboratory requests</label>
+                  <SearchableSelect
+                    options={labTemplateOptions}
+                    value=""
+                    onChange={addLabItem}
+                    placeholder={templatesQuery.isLoading ? "Loading test catalog…" : "Search laboratory test…"}
+                    emptyLabel={templatesQuery.data?.length ? "No matching tests." : "No laboratory tests configured for this clinic yet."}
+                    disabled={templatesQuery.isLoading}
+                  />
+                  {selectedLabItems.length > 0 ? (
+                    <ul className="space-y-1">
+                      {selectedLabItems.map((name) => (
+                        <li key={name} className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-1.5 text-sm">
+                          <span>{name}</span>
+                          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => removeLabItem(name)}>
+                            Remove
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Select one or more tests - all selected tests submit together as one Order.</p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Item / test name</label>
+                  <Input value={orderForm.itemName} onChange={(e) => setOrderForm((f) => ({ ...f, itemName: e.target.value }))} placeholder="e.g. Chest X-Ray" />
+                </div>
+              )}
               {orderForm.category === "Radiology" ? (
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div>
@@ -212,7 +299,7 @@ export function ClinicalOrdersTab({
                 <label className="text-xs font-medium text-muted-foreground">Clinical notes (optional)</label>
                 <Textarea rows={2} value={orderForm.notes} onChange={(e) => setOrderForm((f) => ({ ...f, notes: e.target.value }))} />
               </div>
-              <Button type="button" onClick={submitOrder} disabled={createOrder.isPending || !orderForm.itemName.trim()}>
+              <Button type="button" onClick={submitOrder} disabled={createDisabled}>
                 Create Order
               </Button>
             </div>
