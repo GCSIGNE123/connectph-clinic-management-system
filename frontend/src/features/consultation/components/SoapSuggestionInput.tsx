@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { SuggestionInput } from "@/features/clinical-orders/components/SuggestionInput";
+import { PersonalSoapSuggestionInput } from "@/features/consultation/components/PersonalSoapSuggestionInput";
 import { useSoapSuggestions } from "@/features/consultation/hooks/use-soap-suggestions";
 import {
   STATIC_SOAP_SUGGESTIONS,
@@ -15,7 +16,7 @@ import {
  * allowed (see `SuggestionInput`). Read-only viewers get a plain disabled
  * field and no suggestion request is made.
  */
-export function SoapSuggestionInput({
+function ClassicSoapSuggestionInput({
   field,
   value,
   onChange,
@@ -49,4 +50,36 @@ export function SoapSuggestionInput({
       className={multiline ? "mt-1" : undefined}
     />
   );
+}
+
+/**
+ * Task #2 enhancement: `personal` (Doctor consultation page only) switches the field to the
+ * Doctor's My Phrases / Recently used view (`PersonalSoapSuggestionInput`). Without it - and
+ * always for Receptionist/Nurse intake and read-only viewers - the classic clinic + starter
+ * list above is used unchanged.
+ */
+export function SoapSuggestionInput(props: {
+  field: SuggestionFieldKey;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  multiline?: boolean;
+  rows?: number;
+  personal?: boolean;
+  "aria-label"?: string;
+}) {
+  const { personal, ...rest } = props;
+  if (personal && !rest.disabled) {
+    return (
+      <PersonalSoapSuggestionInput
+        field={rest.field}
+        value={rest.value}
+        onChange={rest.onChange}
+        multiline={rest.multiline}
+        rows={rest.rows}
+        aria-label={rest["aria-label"]}
+      />
+    );
+  }
+  return <ClassicSoapSuggestionInput {...rest} />;
 }

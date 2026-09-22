@@ -185,6 +185,23 @@ export const consultationApi = {
     );
     return raw.suggestions.map((x) => x.text);
   },
+  /** Task #2 enhancement (Doctor only): the signed-in Doctor's own My Phrases + Recently used for one field (text only). */
+  getPersonalSuggestions: async (field: string): Promise<{ favorites: string[]; recent: string[] }> => {
+    const raw = await apiClient.get<{ field: string; favorites: { text: string }[]; recent: { text: string }[] }>(
+      `/consultations/soap-suggestions/personal?field=${encodeURIComponent(field)}&limit=20`
+    );
+    return { favorites: raw.favorites.map((x) => x.text), recent: raw.recent.map((x) => x.text) };
+  },
+  /** Save a phrase to the Doctor's My Phrases for one field (idempotent). Rejects with the server's reason on 422/409. */
+  addFavoritePhrase: async (field: string, text: string): Promise<string> => {
+    const raw = await apiClient.post<{ field: string; text: string }>("/consultations/soap-suggestions/favorites", { field, text });
+    return raw.text;
+  },
+  removeFavoritePhrase: async (field: string, text: string): Promise<void> => {
+    await apiClient.delete(
+      `/consultations/soap-suggestions/favorites?field=${encodeURIComponent(field)}&text=${encodeURIComponent(text)}`
+    );
+  },
   addDiagnosis: async (
     consultationId: string,
     payload: { diagnosisType: string; status: string; notes?: string | null; icd10Code?: string | null; icd10Description?: string | null }

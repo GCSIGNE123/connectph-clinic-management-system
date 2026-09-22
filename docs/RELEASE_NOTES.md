@@ -4,6 +4,11 @@ Human-readable, per-version summary of what shipped. For full detail see [`FEATU
 
 ---
 
+## Post-RC1 — Personal SOAP Phrase Suggestions (Task #2 enhancement; DEV only, separate from the Tasks #1-#9 commit)
+
+**As of 2026-09-22.** A follow-up to Task #2, driven by the Doctor's actual ask ("I've typed this before, let me pick it instead of retyping it"): a Doctor-specific **My Phrases** (explicitly saved, with a one-click "Save this line" action) and **Recently Used** (the Doctor's own recent values, no 2-patient threshold) layered ahead of the existing clinic-learned suggestions and static starters. Doctor-specific and field-specific throughout; Receptionist/Nurse access (Task #6) is unaffected. Migration `0046_soap_phrase_favorites` (one new additive table). DEV-accepted via live acceptance on the Demo Clinic Doctor account; **not committed, not pushed, not deployed** - kept as a separate change from the Tasks #1-#9 commit (`3a1604c`) already pushed to `origin/main`. See [`FEATURES.md`](FEATURES.md) for the full acceptance table and [`TESTING.md`](TESTING.md) for test evidence.
+
+---
 ## Post-RC1 — Tasks #1-#9: Canora clinic requests (release candidate change set; DEV-accepted, NOT yet deployed to production)
 
 **As of 2026-09-21.** Nine clinic requests, each accepted on the DEV environment; nothing here has been deployed. Version stays `1.7.0-rc1` (no bump has accompanied any Post-RC1 change set). Detail and live acceptance tables are in [`FEATURES.md`](FEATURES.md); test evidence in [`TESTING.md`](TESTING.md).

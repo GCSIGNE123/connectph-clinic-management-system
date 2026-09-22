@@ -1269,6 +1269,15 @@ Role gating unchanged: classification is set/edited under the same `QUEUE_MANAGE
 
 ---
 
+### Personal SOAP phrase suggestions (Task #2 enhancement; DEV only, not part of the Tasks #1-#9 commit)
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/consultations/soap-suggestions/personal` | The authenticated Doctor's own suggestions for one field. Query: `field` (same allowlist as the clinic endpoint), `q` (optional, max 80 chars), `limit` (1-20, default 10 - bounds `recent` only; `favorites` is unbounded up to the 30-per-field cap). Response `{"field": "...", "favorites": [{"text": "..."}], "recent": [{"text": "..."}]}` - text only, never a patient/consultation/visit/doctor id. `favorites`: explicitly saved by this Doctor, newest first. `recent`: derived read-only from this Doctor's own prior SOAP/diagnosis values (any consultation status), newest first, no 2-patient threshold, filtered for privacy/junk and (for `recent` only) phrases containing the note's own patient's name. **Roles**: Doctor only, and only with a linked `doctor_id` - every other role, and a Doctor login with no linked Doctor record, get `403`. An unsupported `field` is `422`. |
+| `POST` | `/consultations/soap-suggestions/favorites` | Body `{"field": "...", "text": "..."}`. Saves a phrase to the caller's My Phrases for that field. `201` when newly saved, `200` (same body) when it was already saved (case/whitespace-insensitive, idempotent - no duplicate row). `422` if the phrase is empty, multi-line, over 80 characters, or fails the same privacy/junk filter as clinic suggestions. `409` if the Doctor already has 30 saved phrases for that field. Same role gate as above. |
+| `DELETE` | `/consultations/soap-suggestions/favorites` | Query `field`, `text` (case/whitespace-insensitive match). `204` on removal (hard delete), `404` if not found. Same role gate as above; a Doctor can only remove their own phrases. |
+
+Migration `0046_soap_phrase_favorites` (new `soap_phrase_favorites` table) backs these endpoints; no other table or existing endpoint response shape changed.
 ### Post-RC1 - Tasks #1-#9 (DEV-accepted release candidate change set)
 
 Documented from the actual routers and schemas. Not yet deployed to production.

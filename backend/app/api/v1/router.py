@@ -39,6 +39,7 @@ from app.api.v1 import (
     users,
     vaccinations,
     visits,
+    soap_personal_phrases,
     soap_suggestions,
     ws_queues,
     yakap_billing_report,
@@ -87,6 +88,7 @@ api_router.include_router(doctor_workspace.router)
 # Phase 8: Clinical Consultation / SOAP
 # Task #2: literal /consultations/soap-suggestions must be registered before the /consultations/{id} routes.
 api_router.include_router(soap_suggestions.router)
+api_router.include_router(soap_personal_phrases.router)
 api_router.include_router(consultations.router)
 
 # Phase 9: Clinical Orders & Prescriptions

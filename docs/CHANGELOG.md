@@ -4,6 +4,11 @@ Chronological version history, Phase 1 (Foundation) through v1.0.0 (Commercial R
 
 ---
 
+## Post-RC1 — Personal SOAP Phrase Suggestions (Task #2 enhancement, 2026-09-22; DEV only, uncommitted)
+
+Doctor-specific My Phrases and Recently Used layered ahead of Task #2's clinic-learned suggestions, with a one-click "Save this line to My Phrases" action, field isolation and the same privacy filtering. Migration `0046_soap_phrase_favorites`. DEV-accepted; kept separate from, and not yet part of, the pushed Tasks #1-#9 commit. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+---
 ## Post-RC1 — Tasks #1-#9 (release candidate change set, 2026-09-21; not yet deployed)
 
 Nine Canora clinic requests, DEV-accepted: multiple lab tests per order billed correctly (migration `0044`), Doctor SOAP autosuggest, lab multi-select, YAKAP Billing Report, YAKAP/Regular patient filter, Receptionist/Nurse SOAP pre-entry (with the BUG-043 null-padding fix), patient address in the consultation view, prescription dropdowns (migration `0045`), and billing for every completed patient. Version remains `1.7.0-rc1`. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the operational notes, including that the Task #9 historical backfill must not run on production without clinic approval. Other Post-RC1 work is tracked only in `RELEASE_NOTES.md`; this file's older entries stop at v1.0.0.

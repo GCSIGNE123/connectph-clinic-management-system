@@ -100,6 +100,7 @@ from app.models.role import Role, RoleName
 from app.models.role_permission import RolePermission
 from app.models.shift import Shift, ShiftStatus
 from app.models.soap_note import SoapNote
+from app.models.soap_phrase_favorite import SoapPhraseFavorite
 from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
 from app.models.sync_job import SyncJob, SyncJobOperation, SyncJobStatus
 from app.models.synced_record import SyncedRecord
@@ -233,6 +234,7 @@ __all__ = [
     "Shift",
     "ShiftStatus",
     "SoapNote",
+    "SoapPhraseFavorite",
     "Subscription",
     "SubscriptionPlan",
     "SubscriptionStatus",

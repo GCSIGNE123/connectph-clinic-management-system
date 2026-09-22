@@ -2093,6 +2093,28 @@ npx eslint src/features/consultation src/features/queue src/features/clinical-or
 
 **Live DEV acceptance**: see the table in FEATURES.md (A-H/J passed; Receptionist, Nurse, Doctor handoff, pre-queue, security, autosave payload, 375px, console). Manual two-session race reproduction was not practical; dedicated autosave tests cover the race scenario.
 
+## Personal SOAP phrase suggestions (Task #2 enhancement), 2026-09-22
+
+See `docs/FEATURES.md`. Not part of the pushed Tasks #1-#9 commit (`3a1604c`) - a separate, still-uncommitted DEV change.
+
+```bash
+cd backend   # DATABASE_URL must name connectph_clinic_test
+pytest app/tests/test_soap_personal_phrases.py app/tests/test_soap_suggestions.py app/tests/test_reception_soap.py app/tests/test_consultations.py -q   # 159 tests: 157 passed, 2 failed (BUG-042, pre-existing)
+cd ../frontend
+npx vitest run src/features/consultation src/features/queue "src/app/(dashboard)/visits" src/features/clinical-orders   # 33 files, 287 tests passed
+npx tsc --noEmit && npx eslint src/features/consultation src/features/clinical-orders "src/app/(dashboard)/visits"   # clean
+```
+
+**Actual final results (2026-09-22):**
+- Backend, the four files above (159 tests: `test_soap_personal_phrases.py` 25 new, plus the existing `test_soap_suggestions.py`, `test_reception_soap.py`, `test_consultations.py`): **157 passed, 2 failed** - the same two BUG-042 tests (`test_complete_consultation_reflects_onto_visit_status`, `test_sign_consultation`), pre-existing and unrelated; unchanged.
+- Frontend: **33 test files, 287 tests, all passed** (includes the 4 new test files: `PersonalSoapSuggestionInput.test.tsx`, `suggestion-sections.test.ts`, `use-soap-personal-phrases.test.tsx`, `consultation-api.personal-phrases.test.ts`, plus the full existing consultation/queue/clinical-orders/visits regression, unaffected).
+- `tsc --noEmit` and ESLint (scoped to the touched directories): clean.
+- Migration `0046_soap_phrase_favorites`: applied and downgraded/re-applied cleanly on DEV during implementation; verified present as the DEV head afterward with the expected table, unique constraint and indexes, 0 rows after the live-acceptance cleanup below.
+
+**What the tests cover**: favorites CRUD, case/whitespace-insensitive idempotent duplicate saves, the 30-per-field cap (and that it's per FIELD, not per doctor), newest-first listing, privacy/junk validation (422) reusing `is_suggestible`, doctor scoping (one Doctor cannot read or remove another's favorites, even in the same clinic), clinic isolation, field isolation, Recently Used sourced only from the authenticated Doctor's own consultations regardless of status, no-threshold behaviour (contrasted against the clinic list's 2-patient rule, which still returns `[]` for the same single-patient data), newest-first + case-insensitive dedupe ordering, a bounded/paginated `limit`, multiline segment extraction (blank/over-long/junk lines dropped, a duplicate line kept once), the patient-name filter (a phrase containing this consultation's own patient's name is dropped from Recent, but the same phrase from a DIFFERENT patient's note is not), dedupe between favorites/recent so a phrase never appears twice, responses carrying text only (no patient/consultation/visit/doctor id - asserted directly against the raw response body), Receptionist/Nurse/Owner/Administrator/other roles and a Doctor login with no linked `doctor_id` all rejected with 403, and that the existing clinic-suggestions endpoint's exact response shape and Task #6 role behaviour are unchanged.
+
+**Live DEV acceptance**: see the table in FEATURES.md. Manual two-session race reproduction was not attempted for this enhancement (it reuses the same changed-fields-only autosave the Task #6 tests already cover); no new autosave/race code was added.
+
 ## Running everything before opening a PR
 
 ```bash

@@ -469,6 +469,7 @@ export default function ConsultationPage() {
                     <SoapSuggestionInput
                       field="icd10_code"
                       multiline={false}
+                      personal
                       value={diagnosisForm.icd10Code}
                       onChange={(v) => setDiagnosisForm((f) => ({ ...f, icd10Code: v }))}
                       aria-label="ICD-10 code"
@@ -479,6 +480,7 @@ export default function ConsultationPage() {
                     <SoapSuggestionInput
                       field="icd10_description"
                       multiline={false}
+                      personal
                       value={diagnosisForm.icd10Description}
                       onChange={(v) => setDiagnosisForm((f) => ({ ...f, icd10Description: v }))}
                       aria-label="ICD-10 description"
@@ -642,7 +644,7 @@ function Field({
     <div className={className}>
       <label className="text-xs font-medium text-muted-foreground">{label}</label>
       {suggestField ? (
-        <SoapSuggestionInput field={suggestField} value={value ?? ""} onChange={onChange} disabled={disabled} rows={3} aria-label={label} />
+        <SoapSuggestionInput field={suggestField} value={value ?? ""} onChange={onChange} disabled={disabled} rows={3} personal aria-label={label} />
       ) : (
         <Textarea value={value ?? ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} rows={3} className="mt-1" />
       )}
