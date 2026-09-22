@@ -266,25 +266,38 @@ same `get_deploy_info()`.
 
 ## Migration behavior
 
+> **PRODUCTION INCIDENT (2026-09-22), FIXED — read before relying on the rest of this section for anything deployed before this fix.**
+> The deploy of commit `b72ab58` reported `Migration: applied successfully`, but production stayed on Alembic revision `0043` — missing `laboratory_orders.order_item_id`, `prescription_items.dosage_form` and the whole `soap_phrase_favorites` table. Root cause: the migration step ran `docker exec connectph-backend python -m alembic upgrade head` against the **currently running** backend container. `deploy.cmd` builds the new backend image (which contains the new migration files) *before* this step, but building an image never touches a running container — only `docker compose up -d --no-deps backend`, which runs *after* the migration step, actually swaps the live container onto the new image. So the migration ran inside the **old** container, which only ever knew migrations through `0043` — it was already at its own head, `alembic upgrade head` was a trivial no-op that exited `0`, and the script's success check (exit code only, no revision comparison) reported success. See `docs/RELEASE_NOTES.md` and `docs/CHANGELOG.md` for the incident writeup, and `docs/TESTING.md` for the DEV reproduction.
+>
+> **Fixed**: migrations now run in a throwaway (`--rm`) one-off container started from the **image `deploy.cmd` just built** — `docker compose run --rm --no-deps -T backend python -m alembic upgrade head` — never via `docker exec` into the live container. The script also no longer trusts that command's exit code by itself: it separately reads this deploy's actual Alembic head from the same new image (`alembic heads`) and, after the upgrade command returns, independently re-reads the database's own revision (`alembic current`, again against the new image) and requires the two to match before it will print success. A mismatch — or any failure reading either revision — stops the deployment exactly like an upgrade failure: containers are not restarted, and the database is never stamped or downgraded automatically.
+
 - Detected the same way as the NSSM architecture: whether any file under
   `backend/alembic/versions` changed between the old and new commit.
 - **A verified backup is always taken first**, via `docker exec
   connectph-postgres pg_dump` (see "Backup" below) — never skipped, never
   optional.
 - If the backup fails, the migration is **not attempted at all**.
-- `docker exec connectph-backend python -m alembic upgrade head` then runs
-  **inside the backend container** (not host Python — this machine has no
-  `backend\.venv` and the container already has the app's dependencies).
-  Note `docker/Dockerfile.backend`'s own image `CMD` would normally run
-  this same command automatically before `uvicorn` starts — the
-  production compose override (`docker-compose.prod.yml`'s
-  `backend.command:`) deliberately skips that so migrations stay a
-  separate, deliberate, backed-up step, never an implicit side effect of a
-  container restart.
-- A migration failure stops the script immediately — containers are
-  **not** restarted, so the previously-running image keeps serving traffic
-  rather than running against an unknown/partially-migrated schema.
-- No automatic downgrade is ever attempted.
+- `docker compose run --rm --no-deps -T backend python -m alembic upgrade
+  head` then runs **against the image `deploy.cmd` just built in the
+  previous step**, in a disposable one-off container — never via `docker
+  exec` into whatever `connectph-backend` container happens to be running
+  at that moment, which may still be the OLD image (see the incident note
+  above). `--no-deps` stops Compose from also starting postgres/redis,
+  which are already running and untouched; `-T` disables TTY allocation so
+  the script's captured output is deterministic.
+- **The post-migration database revision is independently verified**: the
+  script reads this deploy's real Alembic head from the new image
+  (`alembic heads`, never hardcoded) and, after the upgrade command
+  returns, re-reads the database's actual `alembic_version` (`alembic
+  current`, also against the new image) — it must equal the expected head
+  or the deployment fails. The upgrade command's exit code is never
+  trusted by itself; this is exactly the check the incident above shows
+  was missing.
+- A migration failure, or a revision mismatch, stops the script
+  immediately — containers are **not** restarted, so the previously-
+  running image keeps serving traffic rather than running against an
+  unknown/partially-migrated schema.
+- No automatic downgrade or stamping is ever attempted.
 
 ## Backup (Docker-native)
 

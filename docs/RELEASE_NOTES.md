@@ -4,6 +4,15 @@ Human-readable, per-version summary of what shipped. For full detail see [`FEATU
 
 ---
 
+## Post-RC1 — Deployment migration-ordering hotfix (`deploy.cmd`), 2026-09-22
+
+**Production incident**: the deploy of commit `b72ab58` reported "Migration applied successfully", but production's Alembic revision remained at `0043` — `laboratory_orders.order_item_id`, `prescription_items.dosage_form` and `soap_phrase_favorites` were all missing. **Cause**: `deploy.cmd`'s migration step ran `docker exec connectph-backend python -m alembic upgrade head` against the *currently running* backend container, which — at that point in the script — was still the OLD image; the NEW image (already built one step earlier) is only ever put into service by a later step. The old container's own migration files stopped at `0043`, so the command was a no-op that exited `0`, and the script trusted that exit code alone.
+
+**Fix (infrastructure only — no application/feature code changed)**: migrations now run via `docker compose run --rm --no-deps -T backend python -m alembic upgrade head`, a disposable container built from the image `deploy.cmd` just built, never the live container. The script also independently verifies the database's post-migration revision (`alembic current`) against this deploy's real Alembic head (`alembic heads`, discovered dynamically, never hardcoded) before it will report success. The mandatory pre-migration backup, fail-fast behaviour, and the prohibition on automatic downgrade/stamping are all unchanged.
+
+DEV-reproduced (see `docs/TESTING.md`) using `git worktree` to stand in for "old image" vs "new image" against a disposable database — production was not touched by this fix or its verification. Not yet committed/pushed/deployed as of this writing.
+
+---
 ## Post-RC1 — Personal SOAP Phrase Suggestions (Task #2 enhancement; DEV only, separate from the Tasks #1-#9 commit)
 
 **As of 2026-09-22.** A follow-up to Task #2, driven by the Doctor's actual ask ("I've typed this before, let me pick it instead of retyping it"): a Doctor-specific **My Phrases** (explicitly saved, with a one-click "Save this line" action) and **Recently Used** (the Doctor's own recent values, no 2-patient threshold) layered ahead of the existing clinic-learned suggestions and static starters. Doctor-specific and field-specific throughout; Receptionist/Nurse access (Task #6) is unaffected. Migration `0046_soap_phrase_favorites` (one new additive table). DEV-accepted via live acceptance on the Demo Clinic Doctor account; **not committed, not pushed, not deployed** - kept as a separate change from the Tasks #1-#9 commit (`3a1604c`) already pushed to `origin/main`. See [`FEATURES.md`](FEATURES.md) for the full acceptance table and [`TESTING.md`](TESTING.md) for test evidence.

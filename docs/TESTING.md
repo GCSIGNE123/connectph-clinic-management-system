@@ -2115,6 +2115,30 @@ npx tsc --noEmit && npx eslint src/features/consultation src/features/clinical-o
 
 **Live DEV acceptance**: see the table in FEATURES.md. Manual two-session race reproduction was not attempted for this enhancement (it reuses the same changed-fields-only autosave the Task #6 tests already cover); no new autosave/race code was added.
 
+## Deployment migration-ordering hotfix (`deploy.cmd`), 2026-09-22
+
+Infrastructure-only fix, no application feature code changed. See `docs/DOCKER_UPDATE_PROCEDURE.md`'s "Migration behavior" section for the incident writeup and the fixed mechanism.
+
+**Root cause, proven by reading `deploy.cmd` itself**: step [10/16] ran `docker exec connectph-backend python -m alembic upgrade head` — `docker exec` attaches to the container currently running under that name. Step [9/16] (build) runs before it and *had* already built the new image, but building an image never recreates the running container; only step [11/16] (`docker compose up -d --no-deps backend`, which runs *after* migrations) does that. So the migration always ran against whatever backend image was live *before* this deploy, and the script judged success purely by that command's exit code — never comparing the database's actual revision to anything.
+
+**Fix**: the migration now runs via `docker compose run --rm --no-deps -T backend python -m alembic upgrade head`, a disposable container built from the image step [9/16] just produced, never the live container. Immediately before the upgrade, the script reads this deploy's real Alembic head from that same new image (`alembic heads`, computed dynamically — never hardcoded to `0046` or any other revision). Immediately after, it independently re-reads the database's actual revision (`alembic current`, also against the new image) and requires it to equal the expected head; any mismatch, or any failure reading either revision, fails the deployment exactly like an upgrade error — containers are not restarted, nothing is stamped or downgraded.
+
+**DEV reproduction (no Docker required; Docker is not installed on the Dev PC, so the bug/fix was reproduced with `git worktree` standing in for "old image" vs "new image", against a disposable throwaway database — never the shared DEV or test database):**
+```bash
+git worktree add <tmp> ef17bdf          # the last commit before migrations 0044-0046 existed
+createdb connectph_migration_repro       # throwaway, dropped afterward
+cd <tmp>/backend && DATABASE_URL=...connectph_migration_repro alembic upgrade head   # -> 0043 (head), simulating the old container's own schema state
+alembic upgrade head                     # re-run with the SAME old files -> only "Context impl / Will assume transactional DDL", no "Running upgrade" line, exit 0, DB stays at 0043
+cd backend  # the real (new) repo checkout, containing 0044-0046
+DATABASE_URL=...connectph_migration_repro alembic heads     # -> 0046_soap_phrase_favorites (the expected head, read dynamically)
+alembic upgrade head                     # against the SAME still-at-0043 DB -> 0043->0044->0045->0046 (real upgrade this time)
+alembic current                          # -> 0046_soap_phrase_favorites, matches the expected head computed above
+alembic upgrade head                     # idempotency: re-run against the now-migrated DB -> no-op, still 0046
+```
+**Actual result**: the old-worktree re-run reproduced the exact incident signature (`Context impl PostgresqlImpl.` / `Will assume transactional DDL.`, no `Running upgrade` line, exit 0, database unchanged at `0043`) — matching what the production deploy log showed. Switching to the new worktree's files against that same un-migrated database then genuinely ran `0043 -> 0044 -> 0045 -> 0046`, and a direct read-only check confirmed all three missing schema objects now exist (`laboratory_orders.order_item_id`, `prescription_items.dosage_form`, `soap_phrase_favorites`). A second `alembic upgrade head` against the now-migrated database was a clean no-op (idempotent). The throwaway database and git worktree were dropped/removed afterward; nothing in the shared DEV database, the test database, or production was touched.
+
+**Application tests re-run to confirm no feature regression** (migration ordering is deployment-infrastructure only; no application code changed): `test_laboratory.py`, `test_clinical_orders.py` (Task #1/BUG-040 coverage), `test_soap_personal_phrases.py`, `test_reception_soap.py` (Task #6) — see the actual pass/fail counts in the live acceptance report for this change. `backend/alembic/versions` itself is unchanged (migration `0046` was not modified), and `git diff --check` on `deploy.cmd` is clean.
+
 ## Running everything before opening a PR
 
 ```bash

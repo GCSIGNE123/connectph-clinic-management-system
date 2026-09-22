@@ -43,10 +43,21 @@ REM   10.  Rebuilds ONLY the backend and/or frontend images whose inputs
 REM        actually changed (or that step 7 determined are already stale).
 REM   11.  If any file under `backend/alembic/versions` changed: takes a
 REM        Docker-native backup FIRST (`docker exec connectph-postgres
-REM        pg_dump ...`, verified), then runs
-REM        `docker exec connectph-backend python -m alembic upgrade head`.
-REM        A migration failure stops the script immediately - containers
-REM        are NOT restarted against a half-migrated or unknown schema.
+REM        pg_dump ...`, verified), then runs the migration in a throwaway
+REM        container started FROM THE IMAGE JUST BUILT in step 10
+REM        (`docker compose run --rm ... backend python -m alembic upgrade
+REM        head`) - NEVER via `docker exec` into the still-running old
+REM        container, which would only ever see whatever migration files
+REM        were baked into it before this deploy (see the "Production
+REM        incident" note near the migration step below). The database's
+REM        actual post-migration revision (`alembic current`, also run
+REM        against the new image) is then independently compared against
+REM        this deploy's real Alembic head (`alembic heads`) - the exit
+REM        code of the upgrade command alone is never trusted. A migration
+REM        failure, or a revision mismatch, stops the script immediately -
+REM        containers are NOT restarted against a half-migrated,
+REM        unmigrated, or unknown schema, and the database is never
+REM        stamped or downgraded automatically.
 REM   12.  Restarts/recreates ONLY backend/frontend, ONLY if their image
 REM        was actually rebuilt or a migration just ran - `--no-deps` so
 REM        Postgres/Redis are never touched for an ordinary app update.
@@ -356,7 +367,8 @@ if "!FRONTEND_CHANGED!"=="1" (
 )
 echo.
 
-REM --- [10/16] Migrations (mandatory Docker-native backup first) ----------------
+REM --- [10/16] Migrations (mandatory Docker-native backup first; runs against ---
+REM     the NEWLY BUILT image, never the old running container) --------------
 echo [10/16] Database migrations...
 if "!MIGRATION_REQUIRED!"=="1" (
     echo   [MIGRATION REQUIRED] New Alembic migration^(s^) detected under backend\alembic\versions.
@@ -373,10 +385,55 @@ if "!MIGRATION_REQUIRED!"=="1" (
         exit /b 1
     )
     echo.
-    echo   Running: docker exec connectph-backend python -m alembic upgrade head ...
-    call docker exec connectph-backend python -m alembic upgrade head >>"%DETAIL_LOG%" 2>&1
+    REM PRODUCTION INCIDENT, FIXED - a real deploy of commit b72ab58 built the
+    REM new backend image (step 9 above already contains migrations
+    REM 0044-0046), then ran `docker exec connectph-backend python -m
+    REM alembic upgrade head`. `docker exec` attaches to the CURRENTLY
+    REM RUNNING container by name - which, at this point in the script, is
+    REM still the OLD image (nothing recreates it until step 11, AFTER this
+    REM block). The old container was already at its own head (0043), so the
+    REM command exited 0 and this script printed "Migration applied
+    REM successfully" while the database was never touched; step 11 then
+    REM swapped the live app onto the new image, which now expected schema
+    REM objects (laboratory_orders.order_item_id, prescription_items.dosage_
+    REM form, soap_phrase_favorites) that did not exist. Fix: migrations now
+    REM run in a throwaway (`--rm`) one-off container started FROM THE IMAGE
+    REM JUST BUILT via `docker compose run`, never via `docker exec` into the
+    REM live container - and the exit code is no longer trusted by itself:
+    REM the database's actual post-migration revision is independently
+    REM re-read and compared against this deploy's real Alembic head.
+    REM `--no-deps` stops Compose from also (re)starting postgres/redis,
+    REM which are already running and untouched here; `-T` disables TTY
+    REM allocation so captured output is deterministic in a non-interactive
+    REM run.
+    echo   Discovering this deploy's actual Alembic head from the newly built image...
+    set "HEAD_FILE=%TEMP%\cms_docker_alembic_head_%RANDOM%.txt"
+    call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic heads > "!HEAD_FILE!" 2>>"%DETAIL_LOG%"
     if errorlevel 1 (
-        echo   [FAIL] alembic upgrade head FAILED inside connectph-backend.
+        echo   [FAIL] Could not determine the Alembic head from the new image ^(docker compose run failed^).
+        echo   Containers were NOT restarted. See %DETAIL_LOG%.
+        set "MIGRATION_RESULT=FAILED - could not read alembic heads, see %DETAIL_LOG%"
+        set "FAIL_REASON=docker compose run ... alembic heads failed before any migration was attempted - see %DETAIL_LOG%."
+        del "!HEAD_FILE!" >nul 2>&1
+        call :fail
+        exit /b 1
+    )
+    set "EXPECTED_HEAD="
+    for /f "usebackq tokens=1" %%H in ("!HEAD_FILE!") do if not defined EXPECTED_HEAD set "EXPECTED_HEAD=%%H"
+    del "!HEAD_FILE!" >nul 2>&1
+    if not defined EXPECTED_HEAD (
+        echo   [FAIL] `alembic heads` produced no output - cannot verify the target revision.
+        echo   Containers were NOT restarted. See %DETAIL_LOG%.
+        set "MIGRATION_RESULT=FAILED - alembic heads produced no output, see %DETAIL_LOG%"
+        set "FAIL_REASON=alembic heads produced no output from the new image - see %DETAIL_LOG%."
+        call :fail
+        exit /b 1
+    )
+    echo   This deploy's Alembic head: !EXPECTED_HEAD!
+    echo   Running: docker compose run --rm backend python -m alembic upgrade head ^(new image, not the live container^) ...
+    call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic upgrade head >>"%DETAIL_LOG%" 2>&1
+    if errorlevel 1 (
+        echo   [FAIL] alembic upgrade head FAILED in the new-image migration container.
         echo.
         echo   ================================================================
         echo   DATABASE MIGRATION FAILED - THIS REQUIRES HUMAN INTERVENTION.
@@ -390,12 +447,48 @@ if "!MIGRATION_REQUIRED!"=="1" (
         echo   safety net^).
         echo   ================================================================
         set "MIGRATION_RESULT=FAILED - see %DETAIL_LOG%"
-        set "FAIL_REASON=alembic upgrade head failed inside connectph-backend - see %DETAIL_LOG%."
+        set "FAIL_REASON=alembic upgrade head failed in the new-image migration container - see %DETAIL_LOG%."
         call :fail
         exit /b 1
     )
-    echo   [ OK ] Migration applied successfully.
-    set "MIGRATION_RESULT=applied successfully"
+    REM Do NOT trust the exit code alone - that is exactly how the original
+    REM incident went unnoticed. Independently re-read the database's own
+    REM alembic_version via `alembic current` in the same new image and
+    REM require it to equal the expected head computed above.
+    echo   Verifying the database actually reached that revision...
+    set "CURRENT_FILE=%TEMP%\cms_docker_alembic_current_%RANDOM%.txt"
+    call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic current > "!CURRENT_FILE!" 2>>"%DETAIL_LOG%"
+    if errorlevel 1 (
+        echo   [FAIL] Could not read the post-migration database revision ^(alembic current failed^).
+        echo   Containers were NOT restarted. See %DETAIL_LOG%.
+        set "MIGRATION_RESULT=FAILED - could not verify post-migration revision, see %DETAIL_LOG%"
+        set "FAIL_REASON=docker compose run ... alembic current failed after upgrade - see %DETAIL_LOG%."
+        del "!CURRENT_FILE!" >nul 2>&1
+        call :fail
+        exit /b 1
+    )
+    set "ACTUAL_HEAD="
+    for /f "usebackq tokens=1" %%C in ("!CURRENT_FILE!") do if not defined ACTUAL_HEAD set "ACTUAL_HEAD=%%C"
+    del "!CURRENT_FILE!" >nul 2>&1
+    if /i not "!ACTUAL_HEAD!"=="!EXPECTED_HEAD!" (
+        echo   [FAIL] Database revision after migration is "!ACTUAL_HEAD!",
+        echo   expected "!EXPECTED_HEAD!". The migration command exited 0 but
+        echo   the database did NOT actually reach this deploy's Alembic head -
+        echo   do not trust exit-code-only success. Containers were NOT
+        echo   restarted and the database was NOT stamped or downgraded.
+        echo   ================================================================
+        echo   DATABASE MIGRATION FAILED - THIS REQUIRES HUMAN INTERVENTION.
+        echo   See %DETAIL_LOG% and docs\DOCKER_UPDATE_PROCEDURE.md's "After a
+        echo   failed update" section ^(the backup taken above is the safety
+        echo   net^).
+        echo   ================================================================
+        set "MIGRATION_RESULT=FAILED - DB at !ACTUAL_HEAD!, expected !EXPECTED_HEAD!, see %DETAIL_LOG%"
+        set "FAIL_REASON=Post-migration revision check failed: DB at !ACTUAL_HEAD!, expected !EXPECTED_HEAD! - see %DETAIL_LOG%."
+        call :fail
+        exit /b 1
+    )
+    echo   [ OK ] Migration applied and verified - database is at !ACTUAL_HEAD!.
+    set "MIGRATION_RESULT=applied and verified at !ACTUAL_HEAD!"
     set "BACKEND_CHANGED=1"
 ) else (
     echo   No new migrations - skipped.

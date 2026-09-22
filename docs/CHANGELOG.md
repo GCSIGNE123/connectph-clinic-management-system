@@ -4,6 +4,11 @@ Chronological version history, Phase 1 (Foundation) through v1.0.0 (Commercial R
 
 ---
 
+## Post-RC1 — Deployment migration-ordering hotfix (2026-09-22; DEV only, uncommitted)
+
+Fixed a `deploy.cmd` bug where the migration step ran against the OLD (still-running) backend container instead of the newly built image, so a production deploy could report "Migration applied successfully" while the database never actually moved. Migrations now run in a one-off container from the new image, with the post-migration database revision independently verified against the repository's real Alembic head. Infrastructure-only; no application feature code changed. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) and [`DOCKER_UPDATE_PROCEDURE.md`](DOCKER_UPDATE_PROCEDURE.md).
+
+---
 ## Post-RC1 — Personal SOAP Phrase Suggestions (Task #2 enhancement, 2026-09-22; DEV only, uncommitted)
 
 Doctor-specific My Phrases and Recently Used layered ahead of Task #2's clinic-learned suggestions, with a one-click "Save this line to My Phrases" action, field isolation and the same privacy filtering. Migration `0046_soap_phrase_favorites`. DEV-accepted; kept separate from, and not yet part of, the pushed Tasks #1-#9 commit. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
