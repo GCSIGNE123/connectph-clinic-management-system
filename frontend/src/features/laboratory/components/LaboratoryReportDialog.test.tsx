@@ -448,3 +448,20 @@ describe("LaboratoryReportDialog print redesign (Short Bond / Letter portrait, f
     });
   });
 });
+
+describe("LaboratoryReportDialog one-page print wiring", () => {
+  it("scales the print copy on beforeprint and resets it on afterprint", async () => {
+    useLaboratoryOrder.mockReturnValue({ data: labOrder() });
+    renderWithClient(<LaboratoryReportDialog orderId="lab-1" open onOpenChange={() => {}} />);
+    await waitFor(() => expect(document.getElementById("laboratory-report-print-root")).not.toBeNull());
+    const root = document.getElementById("laboratory-report-print-root") as HTMLElement;
+    const body = root.querySelector("#laboratory-report-body") as HTMLElement;
+    body.getBoundingClientRect = () => ({ height: 3000 }) as DOMRect;
+
+    window.dispatchEvent(new Event("beforeprint"));
+    expect(Number(body.style.getPropertyValue("zoom"))).toBeLessThan(1);
+
+    window.dispatchEvent(new Event("afterprint"));
+    expect(body.style.getPropertyValue("zoom")).toBe("");
+  });
+});

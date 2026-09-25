@@ -105,7 +105,7 @@ describe("LaboratoryWorklistTable", () => {
 
       await user.click(withinRow("Juana Dela Cruz").getByRole("button", { name: "Print Results" }));
       await waitFor(() => expect(getOrder).toHaveBeenCalledWith("lab-1"));
-      expect(await screen.findByText("Test Clinic")).toBeInTheDocument();
+      expect((await screen.findAllByText("Test Clinic")).length).toBeGreaterThan(0);
     });
 
     it("6: multiple Released rows each print their own order - clicking row #2 prints row #2, not row #1", async () => {
@@ -125,7 +125,7 @@ describe("LaboratoryWorklistTable", () => {
       await user.click(withinRow("Patient Row Two").getByRole("button", { name: "Print Results" }));
       await waitFor(() => expect(getOrder).toHaveBeenCalledWith("lab-2"));
       expect(getOrder).not.toHaveBeenCalledWith("lab-1");
-      expect(await screen.findByText("Clinic For Row Two")).toBeInTheDocument();
+      expect((await screen.findAllByText("Clinic For Row Two")).length).toBeGreaterThan(0);
       expect(screen.queryByText("Clinic For Row One")).not.toBeInTheDocument();
     });
 

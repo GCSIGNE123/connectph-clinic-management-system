@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { PrintableDocumentDialog } from "@/features/clinical-orders/components/PrintableDocumentDialog";
 import { LaboratoryReportView } from "@/features/laboratory/components/LaboratoryReportView";
 import { useLaboratoryOrder } from "@/features/laboratory/hooks/use-laboratory";
 import { buildLaboratoryReportFilename } from "@/features/laboratory/lib/report-filename";
+import { currentPaperSize, fitReportToOnePage, resetReportFit } from "@/features/laboratory/lib/print-fit";
 import type { LaboratoryOrder } from "@/features/laboratory/types";
 
 /** Bug fix (duplicate 2-page print/PDF output): a print-only copy of the
@@ -55,6 +57,31 @@ import type { LaboratoryOrder } from "@/features/laboratory/types";
  * `visibility: visible !important` rule for `#laboratory-report-print-root`
  * in the stylesheet below, which overrides that inherited hidden state. */
 function LaboratoryReportPrintPortal({ order }: { order: LaboratoryOrder }) {
+  // One-page printing: right before the browser lays the page out for print,
+  // scale the report down if (and only if) it is taller than one printable
+  // page of the selected paper - see `lib/print-fit.ts`. Covers both the
+  // Print button and a browser Ctrl+P; undone after printing.
+  useEffect(() => {
+    const fit = () => {
+      const root = document.getElementById("laboratory-report-print-root");
+      if (root) fitReportToOnePage(root, currentPaperSize("laboratory-report-printable"));
+    };
+    const reset = () => {
+      const root = document.getElementById("laboratory-report-print-root");
+      if (root) resetReportFit(root);
+    };
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("print") : null;
+    const onMedia = (event: MediaQueryListEvent) => (event.matches ? fit() : reset());
+    window.addEventListener("beforeprint", fit);
+    window.addEventListener("afterprint", reset);
+    media?.addEventListener?.("change", onMedia);
+    return () => {
+      window.removeEventListener("beforeprint", fit);
+      window.removeEventListener("afterprint", reset);
+      media?.removeEventListener?.("change", onMedia);
+    };
+  }, [order.id]);
+
   if (typeof document === "undefined") return null;
   return createPortal(
     <div id="laboratory-report-print-root">

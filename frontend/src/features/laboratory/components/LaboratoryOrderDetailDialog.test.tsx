@@ -63,6 +63,6 @@ describe("LaboratoryOrderDetailDialog: Phase 4G Print Report entry point", () =>
 
     await userEvent.click(screen.getByRole("button", { name: /print report/i }));
     await waitFor(() => expect(getOrder).toHaveBeenCalledWith("lab-1"));
-    expect(await screen.findByText("Test Clinic")).toBeInTheDocument();
+    expect((await screen.findAllByText("Test Clinic")).length).toBeGreaterThan(0);
   });
 });

@@ -138,6 +138,7 @@ export function PrintableDocumentDialog({
         <div className="flex justify-center overflow-auto rounded-md bg-muted/40 p-4">
           <div
             id={printableId}
+            data-paper-size={paperSize}
             className="space-y-3 overflow-auto border border-border bg-background p-4 text-sm shadow-sm"
             style={{ width: previewDims.width, minHeight: previewDims.minHeight }}
           >
