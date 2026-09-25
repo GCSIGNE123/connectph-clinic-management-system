@@ -313,7 +313,19 @@ if /i not "%RUNNING_SHA_BEFORE%"=="%NEW_SHA%" (
 )
 echo   Backend rebuild needed:   !BACKEND_CHANGED!
 echo   Frontend rebuild needed:  !FRONTEND_CHANGED!
-echo   Migration required:       !MIGRATION_REQUIRED!
+REM PRODUCTION INCIDENT #2 - a deploy of commit 3a85cf9 had already
+REM fast-forwarded the repository to its target commit on an earlier,
+REM interrupted attempt. The NEXT run therefore found OLD_SHA==NEW_SHA, so
+REM the git-diff check above never inspected backend/alembic/versions and
+REM this flag stayed 0 - the script printed "No new migrations - skipped"
+REM and finished successfully while the database was still 3 migrations
+REM behind (0043, not 0046). Git commit drift is not the same thing as
+REM database drift: the repository can already be exactly at the target
+REM commit while the database is not. This flag is now ONLY an early,
+REM informational hint from the git diff - it no longer gates anything.
+REM The actual, authoritative decision is made in step [10/16] from the
+REM database's own real Alembic revision (see the note there).
+echo   Migration files changed in this update ^(git diff, informational^): !MIGRATION_REQUIRED!
 echo.
 
 REM --- [7/16] Validate the production Compose configuration --------------------
@@ -370,8 +382,68 @@ echo.
 REM --- [10/16] Migrations (mandatory Docker-native backup first; runs against ---
 REM     the NEWLY BUILT image, never the old running container) --------------
 echo [10/16] Database migrations...
-if "!MIGRATION_REQUIRED!"=="1" (
-    echo   [MIGRATION REQUIRED] New Alembic migration^(s^) detected under backend\alembic\versions.
+REM SECOND HOTFIX - the decision to migrate is made from the DATABASE, not
+REM from git. A deploy whose checkout already contains new migration files
+REM (OLD_SHA==NEW_SHA after a manual `git pull`, an earlier failed deploy, or
+REM a fetch that ran ahead) makes the git diff empty, which used to skip this
+REM step while the new image expected newer schema. Now: read the new image's
+REM Alembic head AND the database's current revision, and migrate whenever
+REM they differ. The git diff is informational only.
+echo   Discovering this deploy's actual Alembic head from the newly built image...
+set "HEAD_FILE=%TEMP%\cms_docker_alembic_head_%RANDOM%.txt"
+call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic heads > "!HEAD_FILE!" 2>>"%DETAIL_LOG%"
+if errorlevel 1 (
+    echo   [FAIL] Could not determine the Alembic head from the new image ^(docker compose run failed^).
+    echo   Containers were NOT restarted. See %DETAIL_LOG%.
+    set "MIGRATION_RESULT=FAILED - could not read alembic heads, see %DETAIL_LOG%"
+    set "FAIL_REASON=docker compose run ... alembic heads failed before any migration was attempted - see %DETAIL_LOG%."
+    del "!HEAD_FILE!" >nul 2>&1
+    call :fail
+    exit /b 1
+)
+set "EXPECTED_HEAD="
+for /f "usebackq tokens=1" %%H in ("!HEAD_FILE!") do if not defined EXPECTED_HEAD set "EXPECTED_HEAD=%%H"
+del "!HEAD_FILE!" >nul 2>&1
+if not defined EXPECTED_HEAD (
+    echo   [FAIL] `alembic heads` produced no output - cannot verify the target revision.
+    echo   Containers were NOT restarted. See %DETAIL_LOG%.
+    set "MIGRATION_RESULT=FAILED - alembic heads produced no output, see %DETAIL_LOG%"
+    set "FAIL_REASON=alembic heads produced no output from the new image - see %DETAIL_LOG%."
+    call :fail
+    exit /b 1
+)
+echo   This deploy's Alembic head: !EXPECTED_HEAD!
+set "HEAD_COUNT=0"
+call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic heads > "%TEMP%\cms_heads_count.txt" 2>>"%DETAIL_LOG%"
+for /f "usebackq tokens=1" %%H in ("%TEMP%\cms_heads_count.txt") do set /a HEAD_COUNT+=1
+del "%TEMP%\cms_heads_count.txt" >nul 2>&1
+if !HEAD_COUNT! GTR 1 (
+    echo   [FAIL] Multiple Alembic heads detected ^(!HEAD_COUNT!^) - refusing to migrate.
+    set "MIGRATION_RESULT=FAILED - multiple alembic heads"
+    set "FAIL_REASON=Multiple Alembic heads in the new image - resolve the branch before deploying."
+    call :fail
+    exit /b 1
+)
+echo   Reading the database current revision...
+set "CURRENT_FILE=%TEMP%\cms_docker_alembic_pre_%RANDOM%.txt"
+call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic current > "!CURRENT_FILE!" 2>>"%DETAIL_LOG%"
+if errorlevel 1 (
+    echo   [FAIL] Could not read the database revision ^(alembic current failed^). Nothing was migrated.
+    set "MIGRATION_RESULT=FAILED - could not read current revision, see %DETAIL_LOG%"
+    set "FAIL_REASON=alembic current failed before migration - see %DETAIL_LOG%."
+    del "!CURRENT_FILE!" >nul 2>&1
+    call :fail
+    exit /b 1
+)
+set "PRE_REV="
+for /f "usebackq tokens=1" %%C in ("!CURRENT_FILE!") do if not defined PRE_REV set "PRE_REV=%%C"
+del "!CURRENT_FILE!" >nul 2>&1
+echo   Database revision: !PRE_REV!   ^|   image head: !EXPECTED_HEAD!
+set "MIGRATE_NEEDED=0"
+if /i not "!PRE_REV!"=="!EXPECTED_HEAD!" set "MIGRATE_NEEDED=1"
+if "!MIGRATE_NEEDED!"=="1" (
+    echo   [MIGRATION REQUIRED] Database is not at this deploy's Alembic head.
+    if "!MIGRATION_REQUIRED!"=="0" echo   ^(git diff showed no migration change - database was behind anyway.^)
     echo.
     echo   [BACKUP REQUIRED] Creating pre-migration Docker-native backup...
     call :docker_backup
@@ -406,30 +478,6 @@ if "!MIGRATION_REQUIRED!"=="1" (
     REM which are already running and untouched here; `-T` disables TTY
     REM allocation so captured output is deterministic in a non-interactive
     REM run.
-    echo   Discovering this deploy's actual Alembic head from the newly built image...
-    set "HEAD_FILE=%TEMP%\cms_docker_alembic_head_%RANDOM%.txt"
-    call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic heads > "!HEAD_FILE!" 2>>"%DETAIL_LOG%"
-    if errorlevel 1 (
-        echo   [FAIL] Could not determine the Alembic head from the new image ^(docker compose run failed^).
-        echo   Containers were NOT restarted. See %DETAIL_LOG%.
-        set "MIGRATION_RESULT=FAILED - could not read alembic heads, see %DETAIL_LOG%"
-        set "FAIL_REASON=docker compose run ... alembic heads failed before any migration was attempted - see %DETAIL_LOG%."
-        del "!HEAD_FILE!" >nul 2>&1
-        call :fail
-        exit /b 1
-    )
-    set "EXPECTED_HEAD="
-    for /f "usebackq tokens=1" %%H in ("!HEAD_FILE!") do if not defined EXPECTED_HEAD set "EXPECTED_HEAD=%%H"
-    del "!HEAD_FILE!" >nul 2>&1
-    if not defined EXPECTED_HEAD (
-        echo   [FAIL] `alembic heads` produced no output - cannot verify the target revision.
-        echo   Containers were NOT restarted. See %DETAIL_LOG%.
-        set "MIGRATION_RESULT=FAILED - alembic heads produced no output, see %DETAIL_LOG%"
-        set "FAIL_REASON=alembic heads produced no output from the new image - see %DETAIL_LOG%."
-        call :fail
-        exit /b 1
-    )
-    echo   This deploy's Alembic head: !EXPECTED_HEAD!
     echo   Running: docker compose run --rm backend python -m alembic upgrade head ^(new image, not the live container^) ...
     call docker compose %ENV_FILE% %COMPOSE_FILES% run --rm --no-deps -T backend python -m alembic upgrade head >>"%DETAIL_LOG%" 2>&1
     if errorlevel 1 (
@@ -491,7 +539,7 @@ if "!MIGRATION_REQUIRED!"=="1" (
     set "MIGRATION_RESULT=applied and verified at !ACTUAL_HEAD!"
     set "BACKEND_CHANGED=1"
 ) else (
-    echo   No new migrations - skipped.
+    echo   Database already at this deploy's Alembic head ^(!PRE_REV!^) - migration skipped.
 )
 echo.
 

@@ -148,6 +148,18 @@ working directory a given invocation happens to have.
 Both checks print the expected volume name before making any changes, and
 both refuse to proceed on any mismatch.
 
+### Second deploy.cmd hotfix: migration decided from the database, not git
+
+`deploy.cmd` step [10/16] used to migrate only when `git diff` showed changed
+files under `backend/alembic/versions`. If the checkout already contained the
+new migrations (OLD_SHA == NEW_SHA, a manual `git pull`, or an earlier failed
+deploy) the diff was empty, the step was skipped, and the new image ran
+against an older database. Now it always reads the new image's Alembic head
+(refusing to continue if there is more than one head) and the database's
+`alembic current`, and migrates (backup first, `upgrade head` from the new
+image, then re-verify) whenever they differ. If they match it skips. The git
+diff is shown for information only.
+
 ## Running an update
 
 ```
